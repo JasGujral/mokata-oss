@@ -343,10 +343,10 @@ mutant "D01 ★★★ an internal print-diagnostic appears and the register does
 
 mutant "D02 ★★★ an internal module starts importing logging and the guard sleeps through it" "$ST" \
   'import json
-import os' \
+import sqlite3' \
   'import json
 import logging
-import os' "$T"
+import sqlite3' "$T"
 
 # ==== F01-F05 · what the INDEPENDENT REVIEW found, and what had nothing watching ===============
 #

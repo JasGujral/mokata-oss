@@ -31,6 +31,42 @@ from .atomicfile import atomic_write_text
 from .oslock import file_lock
 
 
+ABSENT, UNREADABLE, OK = "absent", "unreadable", "ok"
+
+
+class StrictRead:
+    """One read's honest answer: `state` in (ABSENT, UNREADABLE, OK), the `value` when OK, the
+    `reason` when UNREADABLE, and the `path` it was asked of."""
+
+    __slots__ = ("state", "value", "reason", "path")
+
+    def __init__(self, state: str, value: Any = None, reason: str = "", path: str = "") -> None:
+        self.state, self.value, self.reason, self.path = state, value, reason, path
+
+    @property
+    def ok(self) -> bool:
+        return self.state == OK
+
+    def __repr__(self) -> str:  # pragma: no cover — debugging aid
+        return f"StrictRead({self.state!r}, reason={self.reason!r}, path={self.path!r})"
+
+
+def read_json_strict(path: str) -> StrictRead:
+    """`path` as JSON, told three ways (ABSENT / UNREADABLE / OK). Never raises, never writes."""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            text = fh.read()
+    except FileNotFoundError:
+        return StrictRead(ABSENT, path=path)
+    except OSError as exc:
+        return StrictRead(UNREADABLE, reason=f"could not be read ({type(exc).__name__})",
+                          path=path)
+    try:
+        return StrictRead(OK, json.loads(text), path=path)
+    except ValueError:
+        return StrictRead(UNREADABLE, reason="is not valid JSON (torn or damaged)", path=path)
+
+
 class StateStore:
     def __init__(self, root: str) -> None:
         # root is the directory state files live in (e.g. <repo>/.mokata/state).
@@ -96,6 +132,13 @@ class StateStore:
         (degrade-clean, P11). Only file-content/IO problems are swallowed; the gate
         layers above re-create state from a clean point."""
         return self._read_path(self.path(name))
+
+    def read_strict(self, name: str) -> "StrictRead":
+        """0.0.27 P14 — the THREE-state read `read` collapses (doc 85 §7g): `ABSENT` (no file),
+        `UNREADABLE` (a file is there and could not be opened or parsed — its reason kept), or `OK`
+        with the parsed value. Read-only: no lock, no write, no temp file. `read` is unchanged; this
+        is for a caller that must never answer "nothing here" for "could not look"."""
+        return read_json_strict(self.path(name))
 
     @staticmethod
     def _read_path(path: str) -> Optional[Dict[str, Any]]:

@@ -144,7 +144,7 @@ class TestMcpRefusesUnran(unittest.TestCase):
             self.assertIn("REFUSED", res["reason"])
             self.assertIn("prior-art", res["reason"].lower())
             self.assertNotIn("proposal_id", res, "a refusal must not stage a proposal")
-            self.assertFalse(check_spec_persisted(repo.surface.state).passed,
+            self.assertFalse(check_spec_persisted(repo.surface.state, run_id="test-run").passed,
                              "a refused emit must persist no spec")
 
 
@@ -163,7 +163,7 @@ class TestCliRefusesUnran(unittest.TestCase):
             self.assertEqual(rc, 1, f"CLI emit must refuse (exit 1); stdout was:\n{out}")
             self.assertIn("prior-art", out.lower())
             self.assertIn("REFUSED", out)
-            self.assertFalse(check_spec_persisted(repo.surface.state).passed)
+            self.assertFalse(check_spec_persisted(repo.surface.state, run_id="test-run").passed)
 
 
 # ======================================================================================
@@ -180,13 +180,13 @@ class TestRegression(unittest.TestCase):
             _persist(repo, prior_art_ran=False)
             mcp = mcp_commit(TW.spec_emit, **_args(repo.path))
             self.assertFalse(mcp["committed"])
-            self.assertFalse(check_spec_persisted(repo.surface.state).passed,
+            self.assertFalse(check_spec_persisted(repo.surface.state, run_id="test-run").passed,
                              "the un-researched approach must NOT reach a persisted spec (the bug)")
         with _Repo() as repo:
             _persist(repo, prior_art_ran=False)
             rc, _out = _cli_emit(repo)
             self.assertEqual(rc, 1)
-            self.assertFalse(check_spec_persisted(repo.surface.state).passed)
+            self.assertFalse(check_spec_persisted(repo.surface.state, run_id="test-run").passed)
 
 
 # ======================================================================================
@@ -243,7 +243,7 @@ class TestStepRanIsByteIdentical(unittest.TestCase):
             self.assertTrue(res["committed"], f"a researched approach must emit: {res}")
             self.assertNotIn("prior-art", json.dumps(res),
                              "the passing gate must add NOTHING to the emit output (byte-identical)")
-            self.assertTrue(check_spec_persisted(repo.surface.state).passed)
+            self.assertTrue(check_spec_persisted(repo.surface.state, run_id="test-run").passed)
 
     def test_gr_pa_wire_step_ran_cli_emit_is_unchanged(self):
         with _Repo() as repo:
@@ -264,7 +264,7 @@ class TestStandaloneSpecUntouched(unittest.TestCase):
             res = mcp_commit(TW.spec_emit, **_args(repo.path))
             self.assertTrue(res["committed"], f"a standalone spec must emit: {res}")
             self.assertNotIn("prior-art", json.dumps(res))
-            self.assertTrue(check_spec_persisted(repo.surface.state).passed)
+            self.assertTrue(check_spec_persisted(repo.surface.state, run_id="test-run").passed)
 
 
 # ======================================================================================

@@ -38,9 +38,11 @@ from __future__ import annotations
 
 from ..repo_identity import temp_local_dir as _shared_temp_local  # P31: one shared state
 import json
+import sqlite3
 import os
+import time
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from .. import MOKATA_DIR, TEMP_LOCAL_DIRNAME
 from .schema import (
@@ -78,6 +80,7 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS events_session ON events (session_id, seq);
 CREATE INDEX IF NOT EXISTS events_type    ON events (type, seq);
+CREATE INDEX IF NOT EXISTS events_run     ON events (run_id, seq);
 """
 
 
@@ -160,6 +163,28 @@ class StoredEvent:
         """Whether this event's integrity rests on the ledger's hash chain. The distinction the
         module docstring makes, as a property a consumer can branch on."""
         return self.ledger_seq is not None
+
+
+#: 0.0.27 P14 — SQLite VM steps one strict read may take before it says `truncated` (≈ a second
+#: on a laptop). Not a cap on an answer: hitting it makes the answer UNKNOWN, out loud.
+READ_STEP_BUDGET = 50_000_000
+#: The bracketed read's attempts, as the pause before each. A store that moves under every one of
+#: them answers `fault` (unknown). Three, not the ruled two: measured 0.0.27 P14 round 2 — the IDE's
+#: own start-up appends (hook bus, session index) moved the store under BOTH of two back-to-back
+#: attempts, and a card then sat on "unknown" until the next push.
+READ_ATTEMPT_PAUSES = (0.0, 0.02, 0.1)
+_STEP_GRAIN = 10_000
+
+
+@dataclass(frozen=True)
+class RunRead:
+    """`read_run_readonly`'s answer: the rows, or WHY there are none (§7g — absent, truncated and
+    unreadable are three different facts, and none of them is "no such event")."""
+    rows: List["StoredEvent"]
+    absent: bool = False
+    truncated: bool = False
+    fault: str = ""
+    note: str = ""
 
 
 class EventStore:
@@ -287,6 +312,195 @@ class EventStore:
         except Exception:  # noqa: BLE001 — a read-only surface never raises into a caller
             return []
         return [self._row_to_event(r) for r in reversed(rows)]
+
+    def window(self, *, session_ids: Iterable[str] = (), run_id: str = "",
+               before_seq: Optional[int] = None, limit: int = DEFAULT_LIMIT,
+               types: Optional[Iterable[str]] = None) -> List["StoredEvent"]:
+        """ONE PAGE of a conversation's events, NEWEST FIRST: the rows whose `session_id` is one of
+        `session_ids` (a resumed chain, 0.0.26 O10) OR whose `run_id` is `run_id`, strictly older
+        than `before_seq` (a keyset cursor — the last row's `seq` is the next page's cursor), at
+        most `limit` rows. Never raises; an absent store is empty.
+
+        0.0.27 P12 — the activity timeline pages on THIS, not on `query`'s `limit`: a session with
+        tens of thousands of events is walked page by page from the newest, and nothing is capped —
+        the page size bounds one answer, the cursor reaches every row. Keyed on `seq` for the same
+        reason `after_seq` is (`ts` is second-resolution text).
+
+        ⚠ COST IS PER PAGE, NOT PER HISTORY (P12 verification F1). `WHERE session_id IN (…) OR
+        run_id = ?` plans as a multi-index OR plus a temp B-tree sort of EVERY matching row below
+        the cursor, so a walk was quadratic (200k events: 593 ms a page, 53 s a walk). Each side
+        is now its own index-ordered `LIMIT` subquery — one per session id on `events_session`,
+        one on `events_run` — and the merge sorts at most (k+1)·limit rows. `UNION` (not ALL)
+        folds a row that matches both sides."""
+        sids = list(dict.fromkeys(s for s in session_ids if isinstance(s, str) and s))
+        if not sids and not run_id:
+            return []
+        try:
+            if not os.path.exists(self.path):
+                return []
+            tl = [t for t in (types or ()) if t in EVENT_TYPES]
+            extra, extra_args = "", []
+            if tl:
+                extra += " AND type IN (%s)" % ",".join("?" * len(tl))
+                extra_args.extend(tl)
+            if before_seq is not None:
+                extra += " AND seq < ?"
+                extra_args.append(int(before_seq))
+            n = max(1, int(limit))
+            cols = ("seq, event_id, ts, schema_version, type, session_id, run_id, actor, "
+                    "duration_ms, ledger_seq, data")
+            parts: List[str] = []
+            args: List[Any] = []
+            for sid in sids:
+                parts.append(f"SELECT {cols} FROM events WHERE session_id = ?{extra} "
+                             "ORDER BY seq DESC LIMIT ?")
+                args += [sid, *extra_args, n]
+            if run_id:
+                parts.append(f"SELECT {cols} FROM events WHERE run_id = ?{extra} "
+                             "ORDER BY seq DESC LIMIT ?")
+                args += [run_id, *extra_args, n]
+            sql = ("SELECT * FROM (" + " UNION ".join(f"SELECT * FROM ({p})" for p in parts)
+                   + ") ORDER BY seq DESC LIMIT ?")
+            args.append(n)
+            conn = self._read_connect()
+            try:
+                rows = conn.execute(sql, args).fetchall()
+            finally:
+                conn.close()
+        except Exception:  # noqa: BLE001 — a read-only surface never raises into a caller
+            return []
+        return [self._row_to_event(r) for r in rows]
+
+    def count_for(self, *, session_ids: Iterable[str] = (), run_id: str = "") -> int:
+        """How many rows `window` would walk for this conversation (the timeline's total). Each
+        side counts on its own index; the run side excludes the sessions already counted."""
+        sids = list(dict.fromkeys(s for s in session_ids if isinstance(s, str) and s))
+        if not sids and not run_id:
+            return 0
+        try:
+            if not os.path.exists(self.path):
+                return 0
+            conn = self._read_connect()
+            try:
+                total = 0
+                for sid in sids:
+                    total += int(conn.execute("SELECT COUNT(*) FROM events WHERE session_id = ?",
+                                              (sid,)).fetchone()[0])
+                if run_id:
+                    sql = "SELECT COUNT(*) FROM events WHERE run_id = ?"
+                    args: List[Any] = [run_id]
+                    if sids:
+                        sql += " AND session_id NOT IN (%s)" % ",".join("?" * len(sids))
+                        args += sids
+                    total += int(conn.execute(sql, args).fetchone()[0])
+                return total
+            finally:
+                conn.close()
+        except Exception:  # noqa: BLE001 — see `query`
+            return 0
+
+    # ------------------------------------------------------------- 0.0.27 P14: the strict reader
+
+    def _signature(self) -> Tuple[Any, ...]:
+        """What would change if anything wrote the store: the main file's (dev, ino, size,
+        mtime_ns) and whether each SQLite side file exists. Raises OSError when the main file is
+        unreadable (the caller turns that into UNREADABLE)."""
+        st = os.stat(self.path)
+        return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns,
+                os.path.exists(self.path + "-wal"), os.path.exists(self.path + "-shm"))
+
+    def read_run_readonly(self, *, run_id: str = "", session_ids: Iterable[str] = (),
+                          types: Iterable[str] = (), limit: int = DEFAULT_LIMIT,
+                          _between: Optional[Callable[[], None]] = None) -> "RunRead":
+        """The newest `limit` rows of `types` for a run (`run_id`) or its sessions, newest first,
+        read so that NOTHING on disk changes and an answer that cannot be trusted is never given.
+
+        ⛔ WRITES NOTHING. `query`/`window` open through `connect_sqlite`, which applies
+        `journal_mode=WAL` — and a `mode=ro` open of a WAL database whose side files are absent
+        CREATES `-wal`/`-shm` (measured, kept as a test). So: side files absent → an `immutable=1`
+        open (creates nothing, takes no lock); present → plain `mode=ro` (creates nothing).
+
+        ⛔ BRACKETED. An immutable reader cannot see a writer start, so the store's signature is
+        taken before and after the query; any difference — or a side file that appeared — DISCARDS
+        the rows, and the read is tried once more under the same rule. A second difference, or any
+        error, is `fault` (the caller says "unknown"), never rows. A writer that starts AND finishes
+        after the second signature is not a torn read: the answer was true when it was taken.
+
+        `truncated` is True when more than `limit` rows matched (the caller must not read "no such
+        row" past the limit), or when the scan ran past `READ_STEP_BUDGET` SQLite steps (a run with
+        millions of other events) — that is said, never an empty answer. An ABSENT store is
+        `absent=True` with no rows: nothing was ever recorded."""
+        sids = list(dict.fromkeys(s for s in session_ids if isinstance(s, str) and s))
+        tl = [t for t in (types or ()) if t in EVENT_TYPES]
+        if not os.path.exists(self.path):
+            return RunRead(rows=[], absent=True)
+        if not (sids or run_id) or not tl:
+            return RunRead(rows=[])
+        n = max(1, int(limit))
+        cols = ("seq, event_id, ts, schema_version, type, session_id, run_id, actor, "
+                "duration_ms, ledger_seq, data")
+        typ = " AND type IN (%s)" % ",".join("?" * len(tl))
+        parts: List[str] = []
+        args: List[Any] = []
+        for sid in sids:
+            parts.append(f"SELECT {cols} FROM events WHERE session_id = ?{typ} "
+                         "ORDER BY seq DESC LIMIT ?")
+            args += [sid, *tl, n + 1]
+        if run_id:
+            parts.append(f"SELECT {cols} FROM events WHERE run_id = ?{typ} "
+                         "ORDER BY seq DESC LIMIT ?")
+            args += [run_id, *tl, n + 1]
+        sql = ("SELECT * FROM (" + " UNION ".join(f"SELECT * FROM ({p})" for p in parts)
+               + ") ORDER BY seq DESC LIMIT ?")
+        args.append(n + 1)
+        why = ""
+        for pause in READ_ATTEMPT_PAUSES:
+            if pause:
+                time.sleep(pause)                         # let a burst of appends settle
+            try:
+                pre = self._signature()
+            except OSError as exc:
+                return RunRead(rows=[], fault=f"the event store could not be read "
+                                              f"({type(exc).__name__})")
+            immutable = not pre[4] and not pre[5]
+            budget_hit = [False]
+            try:
+                from ..memory._sqlite import connect_sqlite_readonly
+                conn = connect_sqlite_readonly(self.path, immutable=immutable)
+                try:
+                    steps = [0]
+
+                    def _tick() -> int:
+                        steps[0] += 1
+                        if steps[0] * _STEP_GRAIN > READ_STEP_BUDGET:
+                            budget_hit[0] = True
+                            return 1                      # interrupt: said as `truncated`
+                        return 0
+                    conn.set_progress_handler(_tick, _STEP_GRAIN)
+                    if _between is not None:
+                        _between()
+                    try:
+                        rows = conn.execute(sql, args).fetchall()
+                    except sqlite3.OperationalError:
+                        if not budget_hit[0]:
+                            raise
+                        rows = []
+                finally:
+                    conn.close()
+                post = self._signature()
+            except (sqlite3.Error, OSError, ValueError) as exc:
+                return RunRead(rows=[], fault=f"the event store could not be read "
+                                              f"({type(exc).__name__})")
+            if pre != post or (immutable and (post[4] or post[5])):
+                why = "the event store changed during the read"
+                continue                                  # discard; try again
+            if budget_hit[0]:
+                return RunRead(rows=[], truncated=True,
+                               note=f"the scan passed {READ_STEP_BUDGET:,} SQLite steps")
+            out = [self._row_to_event(r) for r in rows]
+            return RunRead(rows=out[:n], truncated=len(out) > n,
+                           note=f"more than {n} matching rows" if len(out) > n else "")
+        return RunRead(rows=[], fault=why)
 
     @staticmethod
     def _row_to_event(r: Any) -> "StoredEvent":

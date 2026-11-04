@@ -463,6 +463,11 @@ relative path) and its **scope** (what that session is working on, if recorded).
 mokata window is live on the same repo, `windows` also surfaces a one-time, human-gated **worktree
 offer** — a suggestion to isolate your working tree; it never creates anything.
 
+The **session-worktree policy** is `settings.sessions.worktree`, `always` or `off`, and the
+default is **`always`**: a session's first write to the repo is refused until the session is in its
+own linked worktree (outside a git repo the policy is off). Turn it off with
+`mokata config set settings.sessions.worktree off --yes`.
+
 ### `mokata worktree create [<topic>] [--yes]`
 Create a **git worktree** to isolate this session's working tree, so two Claude Code windows on one
 repo stop colliding on the files themselves. mokata asks what this session is working on (the
@@ -471,6 +476,18 @@ sessions' phases/scopes), and **confirms explicitly** before running `git worktr
 durable action here (fail-closed: a non-interactive session declines unless `--yes`). Refuses
 politely outside a git repo. Two worktrees of one repo keep **one** team project identity, so team
 memory/journal/audit never fork across them.
+
+### `mokata worktree merge [<worktree>] [--proposal <id>] [--recover <merge-id>]`
+Land a worktree's branch (the `<worktree>` path or branch is optional with `--proposal`/`--recover`) through the **gated merge**: with no flag it prints the plan and the
+evidence and, when nothing blocks, proposes the merge; `--proposal` runs the one you approved;
+`--recover` decides from git what an interrupted merge left, and finishes or reports it.
+
+**Recover after a hard crash.** While a merge finishes the main checkout, mokata holds git's
+`.git/index.lock`. If the machine dies mid-commit, that lock holds index bytes and mokata will not
+touch it. If you delete it by hand, the branch is already at the merged commit but the index still
+reads the old one, so a plain `git commit` would **revert the merge**. Do not commit. Run
+`mokata worktree merge --recover <merge-id>`: it reads git and finishes the index and the files
+from the merged commit.
 
 ### `mokata resume [<id>]`
 Preview where a run continues: the phase to resume at (the first phase after the last passed
@@ -482,13 +499,18 @@ A **mid-brainstorm** checkpoint is also resumable: an in-progress `/mokata:brain
 questions + the approaches being weighed) can be left at any step and resumed later — the
 HARD-GATE still holds (no spec until an approach is explicitly approved).
 
-### `mokata watch [--once] [--open] [--run <id>]`
-Write a **self-contained** clickable local HTML dashboard of the active run (parallel lanes +
-7-phase pipeline + a bounded gate/decision feed) under gitignored `.mokata/temp_local/watch.html`.
-`--once` writes one snapshot; otherwise it live-refreshes every 2s; `--open` opens it in a
-browser. **Read-only** (never writes durable state / never gates). Respects
-`settings.ux.progress` — with the default `terminal` it writes no HTML. Set the tier with
-`mokata config set settings.ux.progress {terminal|dashboard|both}`.
+### `mokata watch [--open] [--no-browser] [--run <id>]`
+Watch the run. On the default `terminal` tier it prints the run's parallel-aware **terminal
+lanes** (the `mokata progress --lanes` view). `--open` opens the `mokata ide` window on its
+**Sessions** screen for the run (its session focused) — re-using the window already serving this
+repository, never starting a second server. `--no-browser` prints the link instead of launching a
+browser; with no display (headless POSIX, no `BROWSER`) the link is printed too, and the command
+never waits on a browser. `settings.ux.progress` picks what plain `mokata watch` does: `terminal`
+(lanes) | `ide` (the Sessions screen) | `both` — set it with
+`mokata config set settings.ux.progress {terminal|ide|both}` (any other value is refused). A
+manifest holding a value outside that set — e.g. the removed `dashboard` — makes `mokata watch`
+refuse with exit 2 and the command that fixes it. **Read-only** (never writes durable state /
+never gates).
 
 ## Composability (Part L)
 
@@ -510,10 +532,20 @@ Works with no init (grounding degrades cleanly).
 ### `mokata chain <skill> [<skill> …]`
 Plan a manual chain of skills; each step keeps its own gate (gates are never bypassed).
 
-### `mokata suggest [flags] ["<intent>"]`
-Suggest a relevant command for the context. It **only suggests and never runs anything**. Flags (all
-boolean): `--fresh`, `--spec`, `--failing-test`, `--implementation`, `--diff`, `--bug`,
-`--stacktrace`, `--perf`.
+### `mokata suggest [--run <id>] [flags] ["<intent>"]`
+Suggest a relevant command. It **only suggests and never runs anything**.
+
+**With no flags and no intent**, it tells you the run's next step, worked out from what mokata
+recorded: the approved approach, the spec, the test record, gate decisions, the review verdict and
+whether the run finished. Each hint names the recorded fact it came from, and the command it offers
+asks for its own consent when you run it. If a store cannot be read, the answer says **unknown** and
+names that store. It never says "nothing to do" in that case. "Nothing owed" appears only for a run
+recorded as finished. `--run` picks the run; by default it is resolved the same way as
+`mokata progress`. Bare `mokata`, the MCP `suggest` tool (called with no arguments) and the next-step
+line on each IDE Activity card give the same answer.
+
+**With flags** you describe the context yourself. The flags are all boolean: `--fresh`, `--spec`,
+`--failing-test`, `--implementation`, `--diff`, `--bug`, `--stacktrace`, `--perf`.
 
 You can also describe what you want in plain words, for example
 `mokata suggest "flaky bug"` → `/debug`. The match is a fixed keyword table, not a model call, so
@@ -540,7 +572,10 @@ page offers the same walk as **Calculate the full blast radius**.
 
 ### `mokata index`
 Build/refresh the per-file freshness index (incremental); report added/changed/removed and
-current stale files.
+current stale files. The index covers **Python files only**: the output names the languages
+indexed and how many source files in other languages were skipped as unsupported
+(`index: languages indexed: python; 40 file(s) skipped as unsupported (3 go, 37 javascript). Skipped files are counted only for javascript, go, rust, java; ...`). Files in languages outside that set (C, Ruby, Kotlin, ...) are neither indexed nor counted, and the line says so.
+The MCP `index_status` tool reports the same counts.
 
 ### `mokata lat-check`
 Scan `@lat` anchors and flag concept drift. Exit 1 on drift (gate-usable), exit 0 when
@@ -572,19 +607,45 @@ explicitly accepts the degraded evidence for the session — TTY-reconfirmed, le
 result stays marked degraded — with `--reason <why>` recording why. (MCP: `spec_check`,
 propose-only — `blocked` without `confirm`.)
 
-### `mokata ci-check [--files <a,b>] [--base <ref>] [--symbols <s,…>] [--comment-file <p>] [--no-fail] [--ascii]`
+### `mokata ci-check [--files <a,b>] [--base <ref>] [--symbols <s,…>] [--comment-file <p>] [--evidence-file <p>] [--link-base <url>] [--link-sha <sha>] [--no-fail] [--ascii]`
 **mokata as a CI / PR check (Stage 58).** Runs two gates over a pull request's **changed files**
 and reports PASS/BLOCK (exit non-zero on a real block): the **completeness gate** (does the saved
 spec still map every acceptance criterion to a test?) and the **spec-awareness** regression guard
 (does the change touch a previously saved spec/decision?). Changed files come from `--files`
 (comma-separated) or `--base <ref>` (via `git diff`); `--symbols` default to the symbols defined in
 those files. `--comment-file` writes the **PR review-comment body** (markdown); `--no-fail` makes
-it report-only (always exit 0). **READ-ONLY** — it *surfaces* blocks and *produces* the comment; it
+it report-only (exits 0 unless the check could not run, which exits 2 — an unresolvable `--base` is a refusal that names the ref and the fix, never a pass). **READ-ONLY** — it *surfaces* blocks and *produces* the comment; it
 never posts to GitHub (the workflow's own `GITHUB_TOKEN` does). **DEGRADE-CLEAN — it never
 false-blocks:** an uninitialized repo, no saved spec, no spec corpus, or a repo that doesn't tag
-tests with AC ids all PASS. A third leg, **spec-drift**, checks the **committed specs**
+tests with AC ids exits 0 — and each such leg is **absent** (`NOT CHECKED`), never a pass. A third leg, **spec-drift**, checks the **committed specs**
 (`.mokata/specs/`, opt-in `settings.specs.commit`) against the code. With none committed it prints
-"no committed specs — spec drift not checked" (exit 0, never silent). Used by the reusable [`mokata-check` GitHub Action](../how-to/mokata-as-a-pr-check.md). (MCP: `ci_check`, read-only.)
+"no committed specs — spec drift not checked" (absent: exit 0, never counted as a pass). The MCP
+result carries `checked`, `absent` and `exit_code` beside each leg's `pass` / `block` / `absent` status. Used by the reusable [`mokata-check` GitHub Action](../how-to/mokata-as-a-pr-check.md). (MCP: `ci_check`, read-only.)
+
+**Evidence (G3-EVIDENCE).** Under the verdicts the comment renders the gate **evidence**: this
+check's own (the AC → test checks it ran, with each test file linked) and any **run record the PR
+committed** (`.mokata/runs/<run>/`, written by `mokata evidence commit`). A committed record is the
+PR author's claim: every line of it is marked `[committed, unverified]` and it never changes the
+verdict or the exit code. Its state is always stated — *not opted in*, *none in this PR*, *not
+attributable* (no changed-file list), or per record *unreadable* / *inconsistent* (which marks the
+check DEGRADED). Untrusted text is rendered inert (code spans, a static `<summary>`), secrets are
+redacted, a URL is never an active link, and a path is linked only when it is a safe repo-relative
+path present in the checkout (`--link-base`, else `GITHUB_SERVER_URL` + `GITHUB_REPOSITORY`, https
+only, at `--link-sha` / `GITHUB_SHA`). **Size:** the comment stays under GitHub's 65,536-character
+limit and `--evidence-file` (for the job's step summary) under its 1 MiB limit; sections are ordered
+failing-first and kept or left out **whole**, the verdict section is never dropped (it falls back to
+counts), and what was left out is disclosed by counts with a pointer to where it is.
+
+### `mokata evidence commit [--run <id>] [--yes]`
+**Commit a run's ledger + gate evidence for the PR check (G3-EVIDENCE).** A CI checkout has no
+`.mokata/temp_local/`, so the ledger and the evidence log never reach it; this writes the run's
+record to the tracked `.mokata/runs/<run>/` (`ledger.jsonl`, `evidence.jsonl`, `meta.json`). Only
+the run's rows of the gate/approval/write/enforcement kinds are exported, each **projected onto a
+per-kind field allowlist** (no prompts, no free-text reasons, no test output), **redacted**, with
+home paths folded to `~`; rows that carry no run id are only counted. It prints **every byte** it
+would write, then asks (**human-gated**, through the WriteGate); a secret **blocks** and names the
+row, the field and the way out. `--run` names the run (default: the resolved run). In-harness
+equivalent: the `evidence_commit` MCP write tool (propose → `mokata approve <id>` → commit).
 
 ## Memory (Part C)
 
@@ -1101,7 +1162,7 @@ the diff, and writes ONLY on approval** through the universal write gate (`--yes
 non-interactively); a decline writes nothing — there is no silent-write path, and it reconciles the
 **doc** to match the code, never the reverse. Backs `/mokata:docsync`.
 
-### `mokata ide [--session ID] [--demo] [--no-browser] [--foreground] [--port N]`
+### `mokata ide [path[:line[:col]]] [--session ID] [--demo] [--no-browser] [--foreground] [--port N] [--trust | --untrust]`
 Open the **review window** — a read-only page on `127.0.0.1` that shows the code difference at any
 point in time:
 
@@ -1114,6 +1175,8 @@ point in time:
 - **Compare branches** (`base...head`) and **pull requests** by GitHub URL, fetched with *your* git
   login (mokata stores no token).
 
+A `path`, `path:line` or `path:line:col` argument (`mokata ide src/a.py:42:7`) opens the window at that file, line and column; a path outside the workspace, or that is not a file, is refused (exit 2) and nothing is started. Windows drive letters (`C:\x\y.py:3:1`) parse as part of the path.
+
 If a window is already open for the repo, `mokata ide` **re-focuses** it instead of starting a
 second one. Inside a Claude Code session, type **`/mokata:review-window`**: mokata's prompt hook opens the
 window, or points the open one at *that* session — its run, its worktree, its timeline. `--demo`
@@ -1123,6 +1186,35 @@ pairing link that becomes an HttpOnly cookie, Host and Origin checks, nothing ou
 read. Started from a session it exits after 30 idle minutes; `--foreground` serves until Ctrl-C.
 Needs the `[ide]` extra (`pip install "mokata[ide]"`) — normally already present with mokata's MCP
 SDK. Requires Claude Code 2.1.198+ for the per-session features (`mokata doctor` checks).
+
+**Code intelligence (read-only LSP).** Hover, go-to-definition, references, document symbols and
+diagnostics come from the **project's own language servers** (`pyright`/`basedpyright`/`pylsp`,
+`typescript-language-server`, `gopls`, `rust-analyzer`, plus your own `~/.mokata/lsp.json` for
+others — a repo never chooses a server you configured, its arguments or `node`; it may supply its
+own copy of a built-in server, which the trust prompt shows), found in the project's venv, its
+`node_modules/<pkg>/package.json` `bin` (run as `node <script>`; `node_modules` must resolve inside
+the repo and the script inside `node_modules`), or on your PATH (absolute entries only — never the current directory, and never a
+copy inside the repo for a server you configured or for `node`) — never installed by mokata, and
+never through a shell (a `.cmd`/`.bat` file is never run or read). The trust prompt lists the exact command lines trusting allows. The bridge sends only read methods; a rename, code action, formatting or
+command is refused before it reaches the server. A language server **executes project code**
+(`build.rs`, Go modules, tsconfig plugins), so none starts until you mark the workspace **trusted**:
+`mokata ide --trust` (a human at a TTY, never inside a Claude Code session; `--untrust` revokes and
+stops the servers), or the *Trust* button in the window, which — like Approve — needs the one-time
+code printed to the terminal running `mokata ide --foreground`. The decision is a `workspace_trust`
+row on the audit ledger; the record lives in your profile (`~/.mokata/ide-repos/…/trust.json`),
+never in the repo. Untrusted, the window navigates from the code graph and says so.
+
+### `mokata explain [session <id> | run <id> | range <base> <head> | live]`
+Print the Claude Code command that explains a change set as a **cited review page** — flow,
+flowchart, architecture, blast radius, edge cases, discrepancies with the codebase's own patterns,
+and tests. It **never runs it**: mokata calls no model and needs no API key. Paste the printed line
+into Claude Code's terminal (it runs on your own Claude login), or type **`/mokata:explain`** inside a
+session. With no target it explains `live` (the working tree against HEAD). A pull-request target is
+refused with a plain sentence until PR review lands. Claude reads mokata's fact bundle, writes the
+explanation, and mokata keeps only the claims that cite a fact or a line range; the page is saved
+under the gitignored `.mokata/temp_local/reviews/` and shown in the IDE's **Review** tab
+(`mokata ide`). Committing a page into the repository is a separate, human-approved write
+(`explain_commit`). An explainer never blocks a merge or a ship. Exit 2 on a refused target.
 
 ### `mokata doctor [--wiring] [--matrix]`
 Diagnose the manifest/config: missing providers, broken adapters, role conflicts, bad
@@ -1325,6 +1417,5 @@ the **always-on rules & guardrails** (with line-budget usage), **memory grouped 
 and provenance), the **read/write ratio + memory-health nudge**, and any **pending self-healing
 proposals**. Each item surfaces its gated manage command (`mokata memory edit "<subject>"`) —
 the dashboard never performs a write. `--open` opens it in your browser. `--live` auto-refreshes
-(re-writes on a 2s interval + a self meta-refresh, honouring `settings.ux.progress` — the
-dashboard tier; Ctrl-C to stop); `--once` forces a single static snapshot. Degrades clean (no
+(re-writes on a 2s interval + a self meta-refresh; Ctrl-C to stop); `--once` forces a single static snapshot. Degrades clean (no
 memory → a friendly empty state; first session → "no prior snapshot to compare yet").

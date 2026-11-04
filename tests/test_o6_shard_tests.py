@@ -11,7 +11,9 @@ What must be true (for every contributor waiting on the PR gate, and the owner c
   * ci.yml's matrix lists every shard 1..N, the unit step asks for the same N, and the once-per-
     leg steps run on shard 1 only (the balancer preloads shard 1 with their measured time);
   * the job ceiling is DERIVED from the measured record (worst shard x the runner's scale), and
-    the tag gate's ceiling is re-assembled from the ubuntu shards (`ci_ceiling --from-shards`);
+    the tag gate — sharded the same way since 0.0.27 R3 — has its per-shard ceiling graded by the
+    slowest ubuntu shard (`ci_ceiling --from-shards`; the tag gate itself is graded in
+    `tests/test_r3_tag_gate_sharded.py`);
   * the invocation-parity check reads the shard call as the `discover` it partitions.
 
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
@@ -315,11 +317,10 @@ class CiYmlRunsEveryShard(unittest.TestCase):
 
     def test_the_job_ceiling_is_derived_from_the_measured_worst_shard(self):
         record = ST.load_record()
-        _s, predicted = ST.plan(ST.list_modules(TESTS), record, self.n)
-        scale = record["ci_scale"]
-        imbalance = float(scale.get("provisional_imbalance", 1.0))
-        worst = (max(predicted) * imbalance * max(scale["per_os"].values())
-                 + scale["leg_overhead_seconds"])
+        imbalance = float(record["ci_scale"].get("provisional_imbalance", 1.0))
+        oses = {ST.runner_os(o) for o in self.matrix["os"]}
+        oses |= {ST.runner_os(e["os"]) for e in self.matrix.get("include") or [] if "os" in e}
+        worst = ST.worst_shard_ci_seconds(ST.list_modules(TESTS), record, self.n, sorted(oses))
         ceiling = CC.job_ceiling(_read(CI_YML), "test")
         if imbalance > 1.0:
             # An allowance for an UNMEASURED imbalance must say it is provisional, and how it ends.
@@ -364,12 +365,24 @@ class TheParityCheckReadsTheShardCall(unittest.TestCase):
                       [i.selection for i in invs if "sharded" in i.where])
 
 
-class TheTagCeilingIsReassembledNotGuessed(unittest.TestCase):
+class TheTagCeilingIsGradedPerShard(unittest.TestCase):
+    """0.0.27 R3: the tag gate bounds ONE shard, so the PR gate grades it with the slowest ubuntu
+    shard it measured — never with a re-assembled whole suite, never with a partial set."""
+
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="ci-clock-")
         self.addCleanup(shutil.rmtree, self.dir, True)
+        self.wf = os.path.join(self.dir, "release.yml")
+        self._workflow(26, of=2)
 
-    def _shard(self, group, k, of, job, unit):
+    def _workflow(self, minutes, of):
+        with open(self.wf, "w", encoding="utf-8") as fh:
+            fh.write("jobs:\n  test:\n    timeout-minutes: %d\n    steps:\n"
+                     "      # shard_tests.py run --of 9  <- a comment, not the step\n"
+                     "      - run: python scripts/shard_tests.py run --shard ${{ matrix.shard }}"
+                     " --of %d -s tests -t tests\n" % (minutes, of))
+
+    def _shard(self, group, k, of, job, unit=100.0):
         d = os.path.join(self.dir, "ci-clock-%s-%d" % (group, k))
         os.makedirs(d)
         with open(os.path.join(d, "job.json"), "w", encoding="utf-8") as fh:
@@ -377,45 +390,57 @@ class TheTagCeilingIsReassembledNotGuessed(unittest.TestCase):
         with open(os.path.join(d, "unit.json"), "w", encoding="utf-8") as fh:
             json.dump({"shard": k, "of": of, "unit_seconds": unit}, fh)
 
-    def test_per_leg_steps_once_plus_every_shards_unit_time(self):
-        self._shard("u-present", 1, 2, 500.0, 300.0)      # 200 s of per-leg steps on shard 1
-        self._shard("u-present", 2, 2, 380.0, 320.0)
-        self._shard("u-absent", 1, 2, 400.0, 300.0)
-        self._shard("u-absent", 2, 2, 350.0, 300.0)
-        seconds, detail = CC.unsharded_seconds(self.dir)
-        self.assertEqual(200.0 + 300.0 + 320.0, seconds)
-        self.assertIn("u-present", detail)
+    def _grade(self):
+        return _quiet(CC.main, ["--from-shards", self.dir, "--workflow", self.wf, "--job", "test"])
+
+    def test_the_slowest_shard_of_any_leg_is_the_verdict(self):
+        self._shard("u-present", 1, 2, 500.0)
+        self._shard("u-present", 2, 2, 380.0)
+        self._shard("u-absent", 1, 2, 400.0)
+        self._shard("u-absent", 2, 2, 610.0)
+        seconds, detail = CC.worst_shard_seconds(self.dir, 2)
+        self.assertEqual(610.0, seconds)
+        self.assertIn("u-absent shard 2/2", detail)
+
+    def test_the_job_the_shards_grade_must_shard_the_same_way(self):
+        self.assertEqual(2, CC.job_shard_count(_read(self.wf), "test"))
+        self.assertIsNone(CC.job_shard_count("jobs:\n  test:\n    timeout-minutes: 9\n", "test"))
+        self.assertEqual(4, CC.job_shard_count(_read(CI_YML), "test"))
 
     def test_a_missing_shard_cannot_answer_and_never_clears(self):
-        self._shard("u-present", 1, 3, 500.0, 300.0)
-        self._shard("u-present", 3, 3, 400.0, 320.0)
-        seconds, why = CC.unsharded_seconds(self.dir)
-        self.assertIsNone(seconds)
-        self.assertIn("not a complete", why)
-        fd, wf = tempfile.mkstemp(suffix=".yml", dir=self.dir)
-        os.close(fd)
-        with open(wf, "w", encoding="utf-8") as fh:
-            fh.write("jobs:\n  test:\n    timeout-minutes: 30\n")
-        code, out, err = _quiet(CC.main, ["--from-shards", self.dir, "--workflow", wf,
-                                          "--job", "test"])
+        self._shard("u-present", 1, 2, 500.0)
+        code, out, err = self._grade()
         self.assertEqual(CC.CANNOT_ANSWER, code)
         self.assertNotIn("CLEARS", out)
+        self.assertIn("not a complete", err)
 
-    def test_the_command_verdicts_the_reassembled_time(self):
-        self._shard("u", 1, 2, 900.0, 500.0)
-        self._shard("u", 2, 2, 700.0, 600.0)                # 400 + 1100 = 1500 s
-        wf = os.path.join(self.dir, "release.yml")
-        with open(wf, "w", encoding="utf-8") as fh:
-            fh.write("jobs:\n  test:\n    timeout-minutes: 32\n")
-        code, out, _e = _quiet(CC.main, ["--from-shards", self.dir, "--workflow", wf,
-                                         "--job", "test"])
-        self.assertEqual(CC.CLEARS, code, out)               # 1920 s >= 1.2 x 1500
-        with open(wf, "w", encoding="utf-8") as fh:
-            fh.write("jobs:\n  test:\n    timeout-minutes: 29\n")
-        code, out, _e = _quiet(CC.main, ["--from-shards", self.dir, "--workflow", wf,
-                                         "--job", "test"])
+    def test_shards_of_another_split_cannot_grade_this_ceiling(self):
+        for k in (1, 2, 3):
+            self._shard("u-present", k, 3, 100.0)
+        code, out, err = self._grade()
+        self.assertEqual(CC.CANNOT_ANSWER, code)
+        self.assertNotIn("CLEARS", out)
+        self.assertIn("different split", err)
+
+    def test_an_unsharded_job_cannot_be_graded_per_shard(self):
+        self._shard("u", 1, 1, 100.0)
+        with open(self.wf, "w", encoding="utf-8") as fh:
+            fh.write("jobs:\n  test:\n    timeout-minutes: 30\n    steps:\n"
+                     "      - run: python -m unittest discover -s tests -t tests\n")
+        code, out, err = self._grade()
+        self.assertEqual(CC.CANNOT_ANSWER, code)
+        self.assertIn("no single `shard_tests.py run --of N`", err)
+
+    def test_the_command_verdicts_the_slowest_shard(self):
+        self._shard("u", 1, 2, 900.0)
+        self._shard("u", 2, 2, 1300.0)
+        self._workflow(26, of=2)                                  # 1560 s >= 1.2 x 1300
+        code, out, _e = self._grade()
+        self.assertEqual(CC.CLEARS, code, out)
+        self._workflow(25, of=2)                                  # 1500 s <  1.2 x 1300
+        code, out, _e = self._grade()
         self.assertEqual(CC.TOO_TIGHT, code)
-        self.assertIn("timeout-minutes: %d" % CC.derive_minutes(1500), out)
+        self.assertIn("timeout-minutes: %d" % CC.derive_minutes(1300), out)
 
     def test_record_writes_what_from_shards_reads(self):
         wf = os.path.join(self.dir, "ci.yml")

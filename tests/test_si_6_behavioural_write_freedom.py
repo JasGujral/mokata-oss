@@ -91,6 +91,7 @@ import _support  # noqa: F401  (puts src/ on the path)
 import _writegraph
 import test_si_6_writegate_side_doors as sweep
 
+from mokata.events.store import EventStore
 from mokata.harness_cert import StdioMcpClient
 from mokata.memory import _sqlite
 from mokata.memory.backends import SQLiteBackend
@@ -168,6 +169,12 @@ class _Fixture:
                         [("last_updated", "2026-10-21T10:00:00"), ("build_state", "complete")])
         crg.commit()
         crg.close()
+        # 0.0.27 P14 — an event store with one gate decision, for the hints' read-only
+        # `EventStore.read_run_readonly` (so the read has a real row to find).
+        from mokata.events.schema import GateDecision
+        self.events = EventStore(os.path.join(root, "events.db"))
+        self.events.emit(GateDecision(gate="tdd", decision="blocked", subject="a.py"),
+                         session_id="S-p14", run_id="R-p14")
 
     def connect(self):
         """A connection through the ONE factory, for the two subjects that take a `conn`."""
@@ -316,6 +323,15 @@ def _bindings():
             evidence=lambda fx, r: fx.source.id in r,
             neuter=(SQLiteBackend, "usage_stats")),
 
+        # ---- events/store.py (0.0.27 P14) — the hints' per-run read: `mode=ro` (+ `immutable=1`
+        #      when no side file exists). Bound so "nothing in it writes" is MEASURED.
+        Binding(
+            ("events/store.py", "EventStore.read_run_readonly"),
+            run=lambda fx: fx.events.read_run_readonly(run_id="R-p14", types=["gate_decision"]),
+            evidence=lambda fx, r: (not r.fault and len(r.rows) == 1
+                                    and r.rows[0].data.get("decision") == "blocked"),
+            neuter=(EventStore, "read_run_readonly")),
+
         # ---- harness_cert.py (0.0.23 D12) — the cert client's stdout pump. Its only `.put` is an
         #      in-process queue; bound so that claim is MEASURED, not just written down.
         Binding(
@@ -403,6 +419,8 @@ _SHARED_DB_SUBSTRATE = "refused (a) — reads a shared Postgres/pgvector DB; its
                        "whatever it did. The SQLite twin of this read IS bound."
 
 REFUSED = {
+    ("explain/safedir.py", "SafeDir.write"): "writes — 0.0.27 P46: the explainer store's one writer (pages, sidecars, the fact-bundle cache, requests, job status under temp_local/reviews/) is a writer by purpose, so it cannot be bound as write-free",
+    ("explain/safedir.py", "SafeDir.unlink"): "writes — 0.0.27 P46: the explainer store's visible count-based prune removes generated files under temp_local/reviews/ by purpose, so it cannot be bound as write-free",
     ("briefing_cache.py", "store"): "writes — 0.0.26 O12b: the briefing's background-refreshed answers under temp_local/briefing/ are its whole purpose, so it cannot be bound as write-free",
     ("briefing_cache.py", "derived"): "writes — 0.0.26 O12b: caching the memory-derived briefing lines under temp_local/briefing/ is its purpose, so it cannot be bound as write-free",
     ("briefing_cache.py", "_acquire"): "writes — 0.0.26 O12b: the briefing refresher's lock file is its purpose, so it cannot be bound as write-free",
@@ -421,8 +439,14 @@ REFUSED = {
         "writes — 0.0.26 L2: it stages the updater script and its job file under ~/.mokata/update/ by purpose (the click/confirm is the consent); cannot be bound as write-free",
     ("update.py", "take_result"):
         "writes — 0.0.26 L2: the update result is reported ONCE, so reading it removes it; cannot be bound as write-free",
+    ("git_safe.py", "Git.close"):
+        "writes — 0.0.27 P21: removing the private, empty hooks directory it made under the OS temp dir is its whole purpose (outside the repo tree, so a tree snapshot would bind it vacuously)",
+    ("merge_lock.py", "IndexLock.release"):
+        "writes — 0.0.27 P21: unlinking the `.git/index.lock` this process created is its whole purpose, so it cannot be bound as write-free",
     ("ide/handoff.py", "_write"):
         "writes — 0.0.26 P37: the job handoff record (handed / cancelled / the worker's progress and outcome) is its whole purpose, so it cannot be bound as write-free",
+    ("ide/usages.py", "_unlink"):
+        "writes — 0.0.27 P4: removing this IDE's own Find Usages / Copy with Context spill files (replace, discard, Cancel, stop, a dead process's leftovers) is its whole purpose, so it cannot be bound as write-free",
     ("ide/handoff.py", "_prune"):
         "writes — 0.0.26 P37: removing handoff records past KEEP_RECORDS is its purpose, so it cannot be bound as write-free",
     ("ide/handoff.py", "_spawn"):
@@ -505,6 +529,13 @@ REFUSED = {
         "`after_seq`: a SELECT that opens the database still creates `-shm`/`-wal` on first "
         "touch, so it cannot be bound as write-free however read-only the statement is. Named as "
         "its own site because the register's unit is the site.",
+    ("events/store.py", "EventStore.window"):
+        "writes — 0.0.27 P12's timeline page read, and the same WAL-sidecar answer as `query`: "
+        "a SELECT (one subquery per session id plus the run, merged by UNION) that opens the "
+        "database still creates `-shm`/`-wal` on first touch. Named as its own site because the "
+        "register's unit is the site.",
+    ("events/store.py", "EventStore.count_for"):
+        "writes — 0.0.27 P12's timeline total, the same WAL-sidecar answer as `count`",
     ("govern/calibration.py", "save_cursor"):
         "writes — replaces the transcript read bookmark under temp_local/calibration/ (content: "
         "a session id and a byte offset, nothing an approval could review), so it cannot be "
@@ -583,8 +614,7 @@ REFUSED = {
     ("atomicfile.py", "_replace"): "writes — the primitive's own rename (Windows retry), no target "
                                    "of its own",
     ("cli_commands/knowledge.py", "cmd_ci_check"): "writes — the CI PR-comment body at --comment-file",
-    ("dashboard.py", "write_dashboard"): "writes — derived HTML under temp_local/",
-    ("dashboard.py", "write_governance_dashboard"): "writes — derived HTML under temp_local/",
+    ("governance_view.py", "write_governance_dashboard"): "writes — derived HTML under temp_local/",
     ("extras_install.py", "record_extra_decline"): "writes — the user's standing decline in ~/.mokata",
     ("flush_liveness.py", "clear_state"): "writes — flush backoff/liveness state under temp_local/",
     ("flush_liveness.py", "store_state"): "writes — flush backoff/liveness state under temp_local/",

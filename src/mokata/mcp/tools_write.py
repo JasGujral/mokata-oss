@@ -46,7 +46,7 @@ from .tools_session import session_name, session_pull, session_push
 from .tools_share import vault_push
 from .tools_spec import spec_amend, spec_check, spec_emit
 from .tools_team import audit_share, events_share
-from .tools_worktree import worktree_clean, worktree_remove
+from .tools_worktree import worktree_clean, worktree_merge, worktree_remove
 
 __all__ = [
     "remember", "import_stack", "reset", "apply_proposal", "memory_export",
@@ -57,6 +57,7 @@ __all__ = [
     "events_share",         # CM.S5 — appended, same discipline
     "worktree_clean",       # WT.S3 (0.0.23 E3) — appended, same discipline
     "worktree_remove",      # WT.S3 (0.0.23 E3) — appended, same discipline
+    "worktree_merge",       # 0.0.27 P21 — appended, same discipline
 ]
 
 # ---- registration: registry-driven, in the EXACT historical order (parity with the pre-split
@@ -94,3 +95,12 @@ _tool("events_share", "write")(events_share)    # publish the typed stream (huma
 # WT.S3 (0.0.23 E3) — the gated, destructive half of the worktree surface. APPENDED (same rule).
 _tool("worktree_clean", "write")(worktree_clean)    # remove merged/vanished worktrees (gated)
 _tool("worktree_remove", "write")(worktree_remove)  # remove ONE worktree (gated)
+# 0.0.27 P46 — committing an explainer page INTO the repo (gated, P2). APPENDED (same rule).
+from .tools_explain import explain_commit  # noqa: E402
+_tool("explain_commit", "write")(explain_commit)    # a page into the repo (gated)
+# 0.0.27 P21 (ID-MERGE-GATED) — the gated merge. APPENDED (same rule).
+_tool("worktree_merge", "write")(worktree_merge)    # merge ONE worktree's branch (gated)
+# 0.0.27 G3-EVIDENCE — committing a run's ledger + gate evidence for the PR check (gated, P2).
+# APPENDED (same rule).
+from .tools_evidence import evidence_commit  # noqa: E402
+_tool("evidence_commit", "write")(evidence_commit)  # a run record into the repo (gated)

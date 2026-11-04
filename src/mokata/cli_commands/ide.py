@@ -10,6 +10,27 @@ import sys
 def cmd_ide(args: argparse.Namespace) -> int:
     from ..config import find_project_root
     root = os.path.realpath(find_project_root(args.path or os.getcwd()))
+    if getattr(args, "trust", False) or getattr(args, "untrust", False):
+        # 0.0.27 P24 — workspace trust (a language server runs the repo's code): the CLI twin of
+        # the window's gated Trust. TTY-only, never inside a Claude Code session, ledgered.
+        from ..ide.trust import cli_decide
+        return cli_decide(root, bool(getattr(args, "trust", False)))
+    target = None
+    if getattr(args, "target", None):
+        # 0.0.27 P11 — `mokata ide path[:line[:col]]`: a file inside the workspace, read from the
+        # directory the command ran in. Refused loudly otherwise (nothing is started for it).
+        from ..ide.locator import resolve
+        from ..ide.nav import PathRefused
+        if args.demo or args.foreground:
+            print("mokata ide: a path:line:col opens in the normal window — drop "
+                  f"{'--demo' if args.demo else '--foreground'}", file=sys.stderr)
+            return 2
+        try:
+            loc = resolve(root, args.target, os.getcwd())
+        except PathRefused as exc:
+            print(f"mokata ide: {exc}", file=sys.stderr)
+            return 2
+        target = (loc.path, loc.line, loc.col)
     if args.foreground:
         from ..ide.server import serve
         print("mokata ide: serving in the foreground (Ctrl-C to stop) — the pairing link follows",
@@ -36,7 +57,7 @@ def cmd_ide(args: argparse.Namespace) -> int:
     try:
         from ..ide.launch import open_or_focus
         launched = open_or_focus(root, args.session, demo=args.demo, browser=not args.no_browser,
-                                 terminal=_terminal_wanted(args))
+                                 terminal=_terminal_wanted(args), target=target)
     except ImportError:
         from ..ide.server import INSTALL_LINE
         print(INSTALL_LINE, file=sys.stderr)
@@ -93,6 +114,9 @@ def register(sub, common):
         help="open the read-only review window (live diff, any point in time, per session, PRs); "
              "if it is already open, re-focus it",
     )
+    p.add_argument("target", nargs="?", default=None, metavar="path[:line[:col]]",
+                   help="open the window at this file (and line, column) inside the workspace, e.g. "
+                        "src/mokata/cli.py:42:7")
     p.add_argument("--session", default=None,
                    help="focus this Claude Code session (its run, files and timeline)")
     p.add_argument("--demo", action="store_true",
@@ -105,6 +129,11 @@ def register(sub, common):
     p.add_argument("--terminal", action="store_true",
                    help="offer the embedded terminal in the window (off by default; human TTY only, "
                         "never inside a Claude Code session)")
+    p.add_argument("--trust", action="store_true",
+                   help="mark this workspace TRUSTED so the window may run its language servers "
+                        "(they execute project code); a human at a TTY, ledgered")
+    p.add_argument("--untrust", action="store_true",
+                   help="revoke workspace trust (language servers stop; ledgered)")
     p.set_defaults(func=cmd_ide)
 
 

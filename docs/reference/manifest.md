@@ -135,7 +135,7 @@ elsewhere; that's the user's explicit choice, overriding the default location.)
 | Key | Shape | Default | Feature |
 |---|---|---|---|
 | `memory` | `{persistent: bool, decision: bool, episodic: bool}` | all on | per-type memory toggles (C9) |
-| `ux.progress` | `"terminal"`/`"dashboard"`/`"both"` | `terminal` | run-observability tier (Stage 40) |
+| `ux.progress` | `"terminal"`/`"ide"`/`"both"` | `terminal` | where `mokata watch` shows the run: terminal lanes, the IDE's Sessions screen, or both. Any other value is refused (`config set` rejects it; a stored one makes `mokata watch` refuse with the fix) |
 | `ux.statusline` | bool | `true` | the always-on pipeline-stage badge (Stage 54b) — opt-out |
 | `ux.badge_verbosity` | `"full"`/`"minimal"` | `full` | badge detail: `full` (everything on) or `minimal` (just the current stage) — opt-DOWN; any other value reads as `full` |
 | `ux.notify` | bool | `true` | notify you when it is YOUR move (a gated write or a CLI prompt) — opt-out. **The desktop notification itself is macOS and Linux only**: mokata raises it with `osascript` (macOS) or `notify-send` (Linux). **Windows ships no visual arm** — a toast would require handing PowerShell a script string, which mokata's notifier forbids, or a third-party dependency. On Windows this setting still gates the *sound* below |

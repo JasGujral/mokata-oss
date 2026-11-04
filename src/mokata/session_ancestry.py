@@ -40,7 +40,23 @@ WHY IT CANNOT NAME A FOREIGN SESSION (the three guards — any failure answers N
 FAIL-CLOSED, unchanged: no map, no matching ancestor, any guard tripping, any error -> None, and the
 caller resolves exactly as it did before this module existed.
 
-Bounded and never raises. Linux reads `/proc` directly; macOS/BSD pay ONE `ps` call per snapshot
+DEEP LAUNCH CHAINS (0.0.27 R8, MCP-RESTART-DEEP-CHAIN)
+-----------------------------------------------------
+Windows puts more launchers between Claude and its hooks / MCP server than POSIX does: Git Bash's
+`bin\bash.exe` stub re-spawns `usr\bin\bash.exe`, an MSYS `exec` leaves its stub process standing,
+a uv venv's `python.exe` is a trampoline that spawns the base interpreter, `uvx.exe` spawns `uv.exe`,
+`py.exe` spawns `python.exe`, a pyenv-win shim is a `.bat` (cmd.exe, older ones via cscript). The
+walk is therefore bounded by the chain itself — it runs to init / the root, never to a hop count —
+and the Claude is identified by NAME on both sides, not by how many hops away it sits:
+  * every process between a hook (or the MCP server) and its Claude must be a NAMED launcher
+    (`LAUNCHER_NAMES`), however many there are;
+  * within `HOOK_LAUNCH_DEPTH` the first non-launcher is the Claude (unchanged since O18); deeper,
+    it must ALSO be positively a Claude (`CLAUDE_NAMES`), else nothing is flagged and the strict
+    guards apply as before;
+  * both sides meet on the same pid AND the same start token (guard 1), so a reused pid never
+    matches; a nested Claude is never a launcher, so a walk never passes through one.
+
+Never raises. Linux reads `/proc` directly; macOS/BSD pay ONE `ps` call per snapshot
 (1s timeout, `LC_ALL=C`); Windows uses a Toolhelp snapshot via ctypes. Anything else -> no chain.
 
 Stdlib-only. Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
@@ -58,14 +74,13 @@ from typing import Callable, Dict, List, Optional, Tuple
 #: becomes a run candidate).
 MAP_KEY = "session_ancestry"
 
-#: How far up either side walks (hook -> sh -> wrapper -> claude -> shell -> terminal ...).
-MAX_DEPTH = 6
-
 #: The map never grows past this many pids (oldest writes dropped first).
 MAX_ENTRIES = 64
-#: How many processes a hook's own launch puts between it and the Claude process that spawned it:
-#: the hook interpreter, the `bash -c` Claude Code runs it under, and the plugin's sh shim when the
-#: shell does not exec it. An entry reached through MORE than this sits above some Claude.
+#: How many processes a POSIX hook's own launch puts between it and the Claude process that spawned
+#: it: the hook interpreter, the `bash -c` Claude Code runs it under, and the plugin's sh shim when
+#: the shell does not exec it. An UNFLAGGED entry reached through more than this sits above some
+#: Claude (guard 4). A deeper chain is accepted only through named launchers to a positively named
+#: Claude (`CLAUDE_NAMES`) — R8.
 HOOK_LAUNCH_DEPTH = 3
 #: A hook that would only re-stamp an unchanged mapping skips the write if the stamp is younger
 #: than this. The per-prompt hook must not write on every turn (the injection turn's byte-snapshot
@@ -90,9 +105,20 @@ ProcInfo = namedtuple("ProcInfo", "ppid token started name", defaults=(None,))
 #: the writer's Claude — identified positively, by name, never by age. Lower-case, no `.exe`.
 LAUNCHER_NAMES = frozenset({
     "sh", "bash", "zsh", "dash", "ksh", "fish", "tcsh", "csh", "cmd", "powershell", "pwsh",
-    "python", "python3", "py", "pythonw", "uv", "uvx", "env", "mokata-hook", "mokata",
+    "python", "python3", "py", "pyw", "pythonw", "uv", "uvx", "env", "mokata-hook", "mokata",
     "timeout", "gtimeout", "nice", "nohup", "stdbuf", "caffeinate",
+    # R8 — mokata's own shims (Linux `comm` truncates to 15 chars), pyenv's exec scripts, and the
+    # script hosts an older pyenv-win shim runs through. None of these is ever a Claude.
+    "mokata-hook-launch", "mokata-hook-lau", "mokata-launch", "pyenv", "pyenv-exec",
+    "cscript", "wscript",
 })
+
+#: R8 — names that POSITIVELY identify a Claude Code process: the native binary (`claude`,
+#: `claude.exe`) or the Node runtime the npm package runs under. Never a launcher: so `node`/`npx`
+#: are NOT walked through (an `npx`-launched hook or server is a chain this module refuses), because
+#: telling an npx `node` from Claude's own `node` would need command lines, which Windows only gives
+#: by reading another process's memory.
+CLAUDE_NAMES = frozenset({"claude", "node"})
 
 
 def _short_name(name) -> Optional[str]:
@@ -259,20 +285,24 @@ def system_lookup() -> Optional[ProcLookup]:
 # ======================================================================================
 
 def ancestors(lookup: Optional[ProcLookup], pid: Optional[int] = None,
-              depth: int = MAX_DEPTH) -> List[Tuple[int, ProcInfo]]:
+              depth: Optional[int] = None) -> List[Tuple[int, ProcInfo]]:
     """`[(pid, info), ...]` for the ancestors of `pid` (default: this process), NEAREST FIRST,
-    excluding `pid` itself. Stops at pid 0/1, at an unreadable process, at `depth`, and at a parent
-    that STARTED AFTER its child (a recycled parent pid — guard 1). Never raises."""
+    excluding `pid` itself. Bounded by the CHAIN, not a hop count (R8): it stops at pid 0/1 (init /
+    the root), at an unreadable process, at a pid it has already visited (a looping table), and at a
+    parent that STARTED AFTER its child (a recycled parent pid — guard 1). `depth` caps it only for
+    a caller that asks for a cap. Never raises."""
     chain: List[Tuple[int, ProcInfo]] = []
     if lookup is None:
         return chain
     try:
         cur = os.getpid() if pid is None else int(pid)
+        seen = {cur}
         info = lookup(cur)
-        while info is not None and len(chain) < depth:
+        while info is not None and (depth is None or len(chain) < depth):
             ppid = int(info.ppid)
-            if ppid <= 1 or ppid == cur:
+            if ppid <= 1 or ppid in seen:
                 break
+            seen.add(ppid)
             pinfo = lookup(ppid)
             if pinfo is None or not pinfo.token:
                 break
@@ -322,6 +352,13 @@ def record_session(root: str, session_id: Optional[str], *, lookup: Optional[Pro
         claude = _writers_claude(chain)
         if claude is not None:                      # O18: write up to the writer's Claude only
             chain = chain[:[p for p, _ in chain].index(claude) + 1]
+        else:
+            # R8 verification F1 — no Claude identified: every entry past HOOK_LAUNCH_DEPTH is
+            # refused by guard 4, so record only up to the FIRST such entry (it still stops a
+            # reader whose nearest match it is). The bound is the acceptance rule, not a count of
+            # hops: a deep chain never costs O(depth^2) `below` lists, and never evicts another
+            # window's entry through MAX_ENTRIES.
+            chain = chain[:HOOK_LAUNCH_DEPTH + 1]
         ts = time.time() if now is None else float(now)
         store = _store(root)
         try:
@@ -379,27 +416,36 @@ def record_session(root: str, session_id: Optional[str], *, lookup: Optional[Pro
         return False
 
 
-def _only_launchers(between) -> bool:
+def _is_claude_at(depth: int, name: Optional[str]) -> bool:
+    """The ONE rule both sides apply to the first non-launcher `depth` hops up: within
+    `HOOK_LAUNCH_DEPTH` any name is the Claude (O18, unchanged); deeper (R8) it must be positively
+    a Claude by name."""
+    return depth < HOOK_LAUNCH_DEPTH or name in CLAUDE_NAMES
+
+
+def _only_launchers(between, match: ProcInfo) -> bool:
     """O18 (reader side) — True when every process strictly between the reader and its match is a
-    NAMED launcher, within `HOOK_LAUNCH_DEPTH`: the match is then the reader's OWN Claude. Any
-    other name on the way (a nested print-mode Claude started from that Claude's Bash tool) or no name
-    at all means the match is above some other process, and guard 3 applies strictly."""
-    if len(between) >= HOOK_LAUNCH_DEPTH:
+    NAMED launcher and the match passes `_is_claude_at`: the match is then the reader's OWN Claude.
+    Any other name on the way (a nested print-mode Claude started from that Claude's Bash tool) or no
+    name at all means the match is above some other process, and guard 3 applies strictly."""
+    if not all(_short_name(getattr(i, "name", None)) in LAUNCHER_NAMES for i in between):
         return False
-    return all(_short_name(getattr(i, "name", None)) in LAUNCHER_NAMES for i in between)
+    return _is_claude_at(len(between), _short_name(getattr(match, "name", None)))
 
 
 def _writers_claude(chain) -> Optional[int]:
-    """O18 — the pid of the Claude process that ran this hook: the first ancestor whose name is NOT
-    a launcher, reached through ancestors that ALL are, within `HOOK_LAUNCH_DEPTH`. Positive
-    identification by name: any unnamed process on the way (a lookup without names, a fake) means
-    no answer, and with no answer guard 3 stays as strict as before O18."""
+    """O18 / R8 — the pid of the Claude process that ran this hook: the first ancestor whose name is
+    NOT a launcher, reached through ancestors that ALL are (any number of them), and accepted by
+    `_is_claude_at`. Positive identification by name: any unnamed process on the way (a lookup
+    without names, a fake) or an unrecognised name past `HOOK_LAUNCH_DEPTH` means no answer, and
+    with no answer guards 3 and 4 stay as strict as before O18."""
     for depth, (pid, info) in enumerate(chain):
         name = _short_name(getattr(info, "name", None))
-        if name is None or depth >= HOOK_LAUNCH_DEPTH:
+        if name is None:
             return None
-        if name not in LAUNCHER_NAMES:
-            return pid
+        if name in LAUNCHER_NAMES:
+            continue
+        return pid if _is_claude_at(depth, name) else None
     return None
 
 
@@ -432,11 +478,15 @@ def session_for_process(root: str, *, lookup: Optional[ProcLookup] = None,
             sid = entry.get("session_id")
             if not isinstance(sid, str) or not sid:
                 return None
+            # The match is OUR Claude when the writer flagged it as ITS Claude (by name, R8: through
+            # launchers only) and we reached it through launchers only, accepted by the same rule.
+            own_claude = entry.get("claude") is True and _only_launchers(own_branch[1:], info)
             # guard 4 (0.0.23 verification M1) — the writer's hook reached this pid through more
             # than a hook's own launcher (python, its shell, the shim): the pid is ABOVE the
             # writer's Claude — a shared tmux / terminal / IDE host — not a Claude itself. Such an
-            # entry names whichever session wrote last under that host, never this one.
-            if len(entry.get("below") or []) > HOOK_LAUNCH_DEPTH:
+            # entry names whichever session wrote last under that host, never this one. R8: an
+            # entry both sides identify as the Claude by name is not a host, however deep.
+            if len(entry.get("below") or []) > HOOK_LAUNCH_DEPTH and not own_claude:
                 return None
             # guard 2 — a live process on the WRITER's branch that is not on ours means this pid is
             # also an ancestor of somebody else's Claude.
@@ -455,7 +505,7 @@ def session_for_process(root: str, *, lookup: Optional[ProcLookup] = None,
             # by age. Above a Claude — a pane shell or IDE host a previous, now-dead Claude's hook
             # reached — no entry is flagged and the guard still applies.
             ts = float(entry.get("ts") or 0)
-            if not (entry.get("claude") is True and _only_launchers(own_branch[1:])) and any(
+            if not own_claude and any(
                     ts + _START_SLACK_SECS < b.started for b in own_branch):
                 return None
             return sid
@@ -464,5 +514,5 @@ def session_for_process(root: str, *, lookup: Optional[ProcLookup] = None,
         return None
 
 
-__all__ = ["MAP_KEY", "MAX_DEPTH", "MAX_ENTRIES", "ProcInfo", "ancestors", "system_lookup",
+__all__ = ["MAP_KEY", "MAX_ENTRIES", "CLAUDE_NAMES", "LAUNCHER_NAMES", "ProcInfo", "ancestors", "system_lookup",
            "record_session", "session_for_process"]

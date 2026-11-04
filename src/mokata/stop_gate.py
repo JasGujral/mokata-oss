@@ -209,7 +209,8 @@ def missing_evidence(root: str, run_id: str, facts: Optional[LogFacts] = None) -
 
 def record_hint() -> str:
     return ("Record the evidence as it happens: `mokata progress test-run --passed|--failed "
-            "--command \"<the command you ran>\" --test <test id> --ac <AC>=<test id>`")
+            "--command \"<the command you ran>\" --test tests/test_x.py::TestX::test_y --ac <AC>=tests/test_x.py::TestX::test_y` "
+            "(each test by its FULL id path::Class::test)")
 
 
 # ------------------------------------------------------------------------------------ the counter

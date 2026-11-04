@@ -857,6 +857,12 @@ class SpecDrift:
     # when there is none, so CI never reads silence as a clean drift check).
     committed: str = ""
     committed_present: bool = False
+    ungraded: int = 0        # ACs whose test could not be attributed (id shared by several specs)
+
+
+def spec_tests_ungraded(spec: Any) -> bool:
+    """A committed spec whose file declares no AC -> test map: its tests cannot be graded."""
+    return bool(getattr(spec, "committed", False)) and getattr(spec, "tests", None) is None
 
 
 def audit_spec(spec: Any, root: str) -> List[Finding]:
@@ -868,7 +874,11 @@ def audit_spec(spec: Any, root: str) -> List[Finding]:
         the proof the spec was shipped with is gone.
 
     Neither is auto-reconcilable (``suggestion`` None): which side is right is a human call — amend
-    the spec (`mokata spec amend`) or restore the code/test."""
+    the spec (`mokata spec amend`) or restore the code/test.
+
+    A COMMITTED spec is judged by its OWN declared tests (``spec.tests``): another spec's test
+    tagged with the same AC id never satisfies it. A committed spec that declares none is not
+    judged on tests at all (``spec_tests_ungraded`` names it); re-emit it to record them."""
     from .engine.acmapper import scan_tests
     from .engine.spec_anchor import resolve as resolve_anchor
 
@@ -882,9 +892,13 @@ def audit_spec(spec: Any, root: str) -> List[Finding]:
                     f"{ac.id} anchor `{a.label()}` does not resolve ({why}) — the spec and the "
                     f"code drifted; amend the spec or restore the code"))
     ids = list(spec.ac_ids)
-    if ids:
-        covered = {aid for t in scan_tests(root, ids) for aid in t.ac_ids}
-        if covered:      # the repo uses AC-tagged tests; a repo that doesn't is not judged on them
+    if ids and not spec_tests_ungraded(spec):
+        scanned = scan_tests(root, ids)
+        if any(t.ac_ids for t in scanned):     # the repo uses AC-tagged tests; one that doesn't is
+            if getattr(spec, "committed", False):      # not judged on them
+                from .committed_specs import attributed_tests
+                scanned = attributed_tests(spec, scanned)
+            covered = {aid for t in scanned for aid in t.ac_ids}
             for ac in spec.criteria:
                 if ac.id not in covered:
                     out.append(Finding(
@@ -937,6 +951,7 @@ def spec_drift(root: Any = ".") -> SpecDrift:
         return SpecDrift(SPEC_SKIPPED, "no saved spec with acceptance criteria — nothing to check",
                          **tag)
     findings = list(unreadable)
+    ungraded = sum(len(sp.criteria) for sp in specs if spec_tests_ungraded(sp))
     for spec in specs:
         for f in audit_spec(spec, root):
             if len(specs) > 1:
@@ -945,7 +960,8 @@ def spec_drift(root: Any = ".") -> SpecDrift:
             findings.append(f)
     acs = sum(len(sp.criteria) for sp in specs)
     return SpecDrift(SPEC_CHECKED, f"{len(specs)} spec(s), {acs} acceptance criterion(a) checked",
-                     title=", ".join(sp.title for sp in specs), findings=findings, **tag)
+                     title=", ".join(sp.title for sp in specs), findings=findings,
+                     ungraded=ungraded, **tag)
 
 
 def render_spec_drift(sd: SpecDrift) -> str:
@@ -955,6 +971,10 @@ def render_spec_drift(sd: SpecDrift) -> str:
                                              and sd.status != SPEC_SKIPPED) else ""
     if sd.status == SPEC_SKIPPED:
         return f"docsync spec: skipped — {sd.note}."
+    if not sd.findings and sd.ungraded:
+        return (f"docsync spec: OK for anchors — \"{sd.title}\": {sd.note}; {sd.ungraded} AC "
+                f"test(s) NOT graded (the spec records no tests: re-emit it with "
+                f"`mokata spec emit`).{tail}")
     if not sd.findings:
         return (f"docsync spec: OK — \"{sd.title}\": {sd.note}; anchors and AC tests match the "
                 f"code.{tail}")

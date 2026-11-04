@@ -1,0 +1,62 @@
+/* mokata ide — Sessions › Timeline + the session header's card (0.0.27 P12, UX-SIMPLIFY). */
+#view-activity { padding: 10px 14px; gap: 8px; overflow: hidden; }
+.ap-edge { border: 1px solid var(--edge); border-radius: 999px; padding: 0 8px; }
+.ap-card { border: 1px solid var(--line2); border-radius: 6px; padding: 8px 10px; background: var(--panel); display: flex; flex-direction: column; gap: 5px; }
+.ap-card.ended, .ap-card.inactive { opacity: .8; }
+.ap-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.ap-prompt { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text2); }
+.ap-status { white-space: nowrap; }
+.ap-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--faint); flex: none; display: inline-block; }
+.ap-dot.working { background: var(--accent); box-shadow: 0 0 0 3px var(--sel); }
+.ap-dot.idle { background: var(--amber); }
+.ap-dot.ended { background: var(--faint); }
+.ap-phase { display: flex; align-items: center; gap: 3px; }
+.ap-seg { flex: 1; height: 5px; border-radius: 2px; background: var(--line2); }
+.ap-seg.done { background: var(--edge); }
+.ap-seg.current { background: var(--accent); }
+.ap-phase-word { margin-left: 6px; color: var(--muted); white-space: nowrap; }
+.ap-state.working { color: var(--accent-ink); }
+.ap-state.idle { color: var(--amber); }
+.ap-facts { color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.red { color: var(--del); } .green { color: var(--accent-ink); }
+.ap-cmd { display: block; font-family: var(--mono); font-size: 11px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; margin-top: 2px; user-select: all; }
+.ap-acts { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.ap-tlhead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.ap-tlhead h2 { margin: 0; font-size: 14px; }
+.ap-wait { color: var(--amber); }
+.ap-row:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.ap-chips { display: flex; gap: 4px; flex-wrap: wrap; margin-left: auto; }
+.ap-scroll { flex: 1; min-height: 160px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--panel2); position: relative; }
+.ap-inner { position: relative; width: 100%; }
+.ap-rows { position: absolute; top: 0; left: 0; right: 0; will-change: transform; }
+.ap-row { display: flex; align-items: center; gap: 8px; padding: 0 10px; border-bottom: 1px solid var(--line); font-size: 12px; cursor: pointer; box-sizing: border-box; white-space: nowrap; }
+.ap-row:hover, .ap-row.picked { background: var(--sel); }
+.ap-time { flex: none; width: 64px; }
+.ap-type { flex: none; font-family: var(--mono); font-size: 10px; border-radius: 3px; padding: 0 5px; border: 1px solid var(--line2); color: var(--muted); min-width: 52px; text-align: center; }
+.ap-type.t-edit, .ap-type.t-before { border-color: var(--edge); color: var(--add); }
+.ap-type.t-gate, .ap-type.t-review, .ap-type.t-approval { border-color: var(--amber-line); color: var(--amber); }
+.ap-type.t-test { border-color: var(--line2); }
+.ap-type.t-phase { color: var(--blue); }
+.ap-type.t-secret, .ap-type.v-blocked, .ap-type.v-red, .ap-type.v-failed, .ap-type.v-rejected { border-color: var(--del); color: var(--del); }
+.ap-type.v-green, .ap-type.v-passed, .ap-type.v-approved { border-color: var(--accent); color: var(--accent-ink); }
+.ap-title { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.ap-verdict { font-family: var(--mono); font-size: 10px; text-transform: uppercase; color: var(--muted); }
+.ap-verdict.v-red, .ap-verdict.v-blocked, .ap-verdict.v-failed, .ap-verdict.v-hit, .ap-verdict.v-rejected { color: var(--del); }
+.ap-verdict.v-green, .ap-verdict.v-passed, .ap-verdict.v-approved, .ap-verdict.v-ok { color: var(--accent-ink); }
+.ap-verdict.v-waiting { color: var(--amber); }
+.ap-empty { padding: 10px; }
+.ap-detail { min-height: 0; max-height: 22vh; overflow: auto; border-top: 1px solid var(--line); padding-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+.ap-dhead { display: flex; align-items: baseline; gap: 8px; }
+.ap-kv { display: grid; grid-template-columns: max-content 1fr; gap: 1px 12px; }
+.ap-kv span { overflow-wrap: anywhere; }
+/* the drawer's live half: one line per live session */
+.ap-bridge { margin: 0; color: var(--amber); border-left: 2px solid var(--amber-line); padding-left: 8px; }
+/* P14 — the derived next step on each card */
+.ap-next { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; border-left: 2px solid var(--accent); padding-left: 8px; }
+.ap-next.unknown { border-left-color: var(--amber); }
+.ap-next.rechecking { opacity: .55; }
+.ap-next .ap-cmd { display: inline-block; margin-top: 0; }
+.ap-next-why { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.ap-next-x { margin-left: auto; padding: 0 6px; }
+.ap-busdown { border: 1px solid var(--amber-line); border-radius: 4px; padding: 2px 8px; color: var(--amber); }
+.ap-next-asof.stale { color: var(--amber); }

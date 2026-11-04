@@ -55,6 +55,7 @@ Clean-room. Copyright 2026 MoStack. Licensed under the Apache License, Version 2
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Dict, List, Optional
 
@@ -159,7 +160,7 @@ def derive_scope(scope: Optional[SpecScope], decisions: Any) -> Optional[SpecSco
 # the durable write
 # ======================================================================================
 
-def preview_content(store: Any, spec: Spec) -> str:
+def preview_content(store: Any, spec: Spec, tests: Any = None) -> str:
     """The JSON a human PREVIEWS for a spec emit — with the scope DERIVED exactly as
     `spec_commit` will write it (AP-SD-FU). The derivation lives in the committer, so the raw
     payload preview understated the deferred items the approved approach's `decisions[].deferred`
@@ -180,7 +181,13 @@ def preview_content(store: Any, spec: Spec) -> str:
     # human approves the routing (which domain skills develop + review will load) with the plan.
     from ..domains import derive_spec_domains
     derive_spec_domains(shown, approved, root=_repo_root(store))
-    return json.dumps(shown.to_dict())
+    body = shown.to_dict()
+    # L9 r4 — a bare test name the emit resolved to a file is NAMED in what the human approves.
+    from ..committed_specs import resolution_lines
+    resolved = resolution_lines(tests or [])
+    if resolved:
+        body["test_resolutions"] = resolved
+    return json.dumps(body)
 
 
 def _repo_root(store: Any) -> str:
@@ -188,7 +195,13 @@ def _repo_root(store: Any) -> str:
     state dir — in which case no package manifest is read and no framework-gated domain fires."""
     from ..tdd_state import root_of_state_dir
     root = getattr(store, "root", "")
-    return (root_of_state_dir(root) or "") if isinstance(root, str) and root else ""
+    if not (isinstance(root, str) and root):
+        return ""
+    # L9 — `mokata spec emit` from inside the repo (the default `--path .`) hands over a RELATIVE
+    # state dir (`./.mokata/temp_local/state`), which `root_of_state_dir` (rightly) will not guess
+    # a repo for. The opt-in committed spec was announced and never written. Resolving against the
+    # cwd HERE, where "." is known to mean the repo being emitted into, closes it.
+    return root_of_state_dir(os.path.abspath(root)) or ""
 
 
 def _approved(store: Any) -> Any:
@@ -477,9 +490,15 @@ def note_supersede(ledger: Any, run_id: str, verdict: ReemitVerdict, title: str)
         note_persist_failure("ledger:spec_reemit", error=exc)
 
 
-def spec_commit(store: Any, spec: Spec, *, version: int = 0,
-                archive_key: str = "", run_id: str = "", tests: Any = None) -> int:
+def spec_commit(store: Any, spec: Spec, *, tree: str, version: int = 0,
+                archive_key: str = "", run_id: str = "", tests: Any = None,
+                map_tests: Any = None) -> int:
     """THE durable spec write. Returns the corpus size after it.
+
+    `tree` is the working tree the caller runs in (a surface's `root`): the opt-in committed spec
+    lands in IT — a linked worktree's own `.mokata/specs/` — never in the main checkout the shared
+    run state lives in (0.0.27 SEC-HARDEN). Required: a committer that guesses the tree is how the
+    spec was written onto another branch.
 
     Two keys, one commit: this run's `emitted_spec` (session-scoped — the key the SI.1 hook reads)
     and the shared `spec_corpus` (cross-run — the corpus `spec-check` reads). Called ONLY from
@@ -545,9 +564,17 @@ def spec_commit(store: Any, spec: Spec, *, version: int = 0,
     # default) writes nothing outside temp_local/.
     root = _repo_root(store)
     if root:
-        from ..committed_specs import commit_enabled, write_committed
+        from ..committed_specs import commit_enabled, tree_root, write_committed
+        root = tree_root(tree, root)
         if commit_enabled(root):
-            write_committed(root, _reemit_run(store, run_id), data)
+            # L9 r3 — the spec's OWN AC -> test map rides the same gated commit, so CI can grade
+            # this spec's criteria by the tests it declared and not by an id every spec shares.
+            declared = map_tests if map_tests is not None else tests
+            committed = dict(data)
+            if declared is not None:
+                committed["tests"] = [{"name": t.name, "ac_ids": list(t.ac_ids)}
+                                      for t in declared]
+            write_committed(root, _reemit_run(store, run_id), committed)
     if tests is not None and run_id:
         # R1 (0.0.26) — the AC→test map the completeness gate checked becomes the run's PLANNED map
         # once the spec has LANDED (never on a refused emit), so the Stop evidence gate reads it
@@ -557,12 +584,19 @@ def spec_commit(store: Any, spec: Spec, *, version: int = 0,
     return len(corpus)
 
 
-def spec_for_emit(payload: Dict[str, Any]) -> "tuple[Spec, List[TestRef]]":
+def spec_for_emit(payload: Dict[str, Any], root: str = "") -> "tuple[Spec, List[TestRef]]":
     """`spec_from_payload` + `require_plan`: what every EMIT surface (CLI emit/amend, MCP
     spec_emit/spec_amend) parses with, so a spec without a task plan is refused before any gate
     runs or any human is asked. Raises ValueError."""
     spec, tests = spec_from_payload(payload)
     require_plan(spec)
+    # L9 r4 — a repo that commits its specs records each spec's tests as FULL `file::test` names:
+    # a bare name is resolved to its one file (or the emit is refused, naming the candidates), and
+    # every path is normalised, so CI compares the same spelling the emit recorded.
+    if root:
+        from ..committed_specs import canonical_test_refs, commit_enabled
+        if commit_enabled(root):
+            tests = canonical_test_refs(root, tests)
     return spec, tests
 
 
@@ -604,7 +638,7 @@ def commit_spec(store: Any, spec: Spec, *, gate: WriteGate,
                 policy: Any = None,
                 human_approved: bool = False,
                 surface: str = CLI_SURFACE,
-                run_id: str = "", tests: Any = None) -> "tuple[bool, str, int]":
+                run_id: str = "", tests: Any = None, tree: str) -> "tuple[bool, str, int]":
     """Run `spec_commit` through the human WriteGate. `(committed, reason, corpus_size)`.
 
     The caller owns the gate (so the engine pipeline keeps its own, and the MCP path can hand in
@@ -617,9 +651,10 @@ def commit_spec(store: Any, spec: Spec, *, gate: WriteGate,
     require_plan(spec)
     box: Dict[str, int] = {}
     out = gate.submit(
-        WriteRequest(EMIT_KIND, EMIT_TARGET, content=preview_content(store, spec),
+        WriteRequest(EMIT_KIND, EMIT_TARGET, content=preview_content(store, spec, tests),
                      tool=EMIT_TOOL, surface=surface),
-        commit=lambda: box.update(size=spec_commit(store, spec, run_id=run_id, tests=tests)),
+        commit=lambda: box.update(size=spec_commit(store, spec, tree=tree, run_id=run_id,
+                                                   tests=tests)),
         assume_yes=assume_yes, confirm=confirm, human_approved=human_approved)
     return bool(out.committed), out.reason, box.get("size", 0)
 
@@ -742,7 +777,8 @@ def emit_spec(surface: Any, spec: Spec, tests: List[TestRef], *,
 
     committed, reason, size = commit_spec(
         store, spec, gate=WriteGate(ledger=ledger),
-        assume_yes=assume_yes, confirm=confirm, run_id=run_id, tests=tests)
+        assume_yes=assume_yes, confirm=confirm, run_id=run_id, tests=tests,
+        tree=str(getattr(surface, "root", "") or ""))
     if committed and run_id:
         mark_emitted(store, run_id, ledger=ledger)      # the two gates this emit just earned (P17)
     if committed:

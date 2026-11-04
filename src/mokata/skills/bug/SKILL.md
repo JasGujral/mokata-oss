@@ -14,7 +14,7 @@ when_to_use: Engage when the user supplies a concrete reproducer or bug report a
 
 # mokata · /bug
 
-Start from a reproducer. Write a failing test that captures the bug, then fix to green and leave the test as a regression guard. Root-cause from the REAL code — read the failing path and trace it with the structural queries before fixing; don't guess at code you haven't read. Labels progress reported -> reproduced -> fixing -> verified; the fix is gated behind a reproducer.
+Start from a reproducer. Write a failing test that captures the bug, then fix to green and leave the test as a regression guard. Root-cause from the REAL code — read the failing path and trace it with the structural queries before fixing; don't guess at code you haven't read. Labels progress reported -> reproduced -> fixing -> verified; the fix is gated behind a reproducer. Record every test run you make: `mokata progress test-run --passed|--failed --command "<the command>" --test tests/test_x.py::TestX::test_y --ac <AC>=tests/test_x.py::TestX::test_y` — each test by its FULL id, the node id pytest prints with `-rA` (or pass that output with `--runner-report <file>`); a bare name never proves.
 
 ## Gate (check)
 A bug fix requires a reproducer and a failing test before the fix.

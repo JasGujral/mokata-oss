@@ -25,6 +25,8 @@ import unittest
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
+
+from mokata.ide import plans as PL
 from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
                    planned, sealed, with_tasks)
 
@@ -94,7 +96,12 @@ def _plant(root, *, spec_versions=2, events=True, amend_open=False):
                              [AcceptanceCriterion("AC1", "parse('') returns []"),
                               AcceptanceCriterion("AC2", "fields are **stripped**")]),
                     version=2, archive_key=archive_key(RUN, 1), run_id=RUN)
-    tdd_state.record(st, RUN, red=["AC1", "AC2"], green=["AC1"])
+    # the record names TESTS and maps them to their ACs (P13 ruling 3 / verification F4: the
+    # badge reads the map, never the AC id): test_ac1 went red then green, test_ac2 is still red
+    from mokata import test_runs as TR
+    TR.record_test_run(root, RUN, passed=False, command="x", tests=["test_ac1", "test_ac2"],
+                       ac_map={"AC1": ["test_ac1"], "AC2": ["test_ac2"]}, at=1000.0)
+    TR.record_test_run(root, RUN, passed=True, command="x", tests=["test_ac1"], at=2000.0)
     if amend_open:
         from mokata.spec_scope import amend_key
         st.write(amend_key(RUN), {"run_id": RUN, "status": "open", "reason": "widen",
@@ -189,6 +196,74 @@ class PlanAndSpec(unittest.TestCase):
             st.write("approved_approach", evil)
             p = _client(d).get("/api/plan", params={"run": RUN}).json()
             self.assertEqual("<img src=x onerror=alert(1)>", p["approach"]["summary"])
+
+
+class TheACBadgeReadsTheACToTestMap(unittest.TestCase):
+    """0.0.27 P13 (coordinator ruling 3): the TDD record holds TEST ids, not AC ids. An AC whose
+    recorded test passed is `passing` even though the AC id itself is in no set; one whose test is
+    only RED is `failing`; one with a test recorded but never run is `mapped`; one with nothing is
+    `none`. Before the fix every one of these read `none` unless tests were named by their AC."""
+
+    def test_an_ac_is_judged_through_the_tests_recorded_for_it(self):
+        from mokata import tdd_state
+        from mokata import test_runs as TR
+        with tempfile.TemporaryDirectory() as d:
+            _plant(d, events=False)
+            st = _store(d, RUN)
+            from mokata.engine.spec import AcceptanceCriterion, Spec
+            from mokata.spec_scope import archive_key
+            commit_planned(st, Spec("parse handles empty input",
+                                 [AcceptanceCriterion("AC1", "parse('') returns []"),
+                                  AcceptanceCriterion("AC2", "fields are **stripped**"),
+                                  AcceptanceCriterion("AC3", "errors name the position"),
+                                  AcceptanceCriterion("AC4", "nothing yet")]),
+                        version=3, archive_key=archive_key(RUN, 2), run_id=RUN)
+            # the sets name TESTS; the map ties them to ACs (nothing in the sets is an AC id)
+            st.write(tdd_state.state_key(RUN), tdd_state.to_state(RUN, red=["test_empty", "test_strip"],
+                                                                 green=["test_empty"]))
+            TR.record_test_run(d, RUN, passed=False, tests=["test_strip"],
+                               ac_map={"AC1": ["test_empty"], "AC2": ["test_strip"]}, at=100.0)
+            TR.record_test_run(d, RUN, passed=True, tests=["test_empty"], at=200.0)
+            # AC3's test is PLANNED at emit (seeded), never run
+            TR.seed_ac_map(d, RUN, [type("T", (), {"name": "test_position", "ac_ids": ("AC3",)})()])
+            st.write(tdd_state.state_key(RUN), tdd_state.to_state(RUN, red=["test_empty", "test_strip"],
+                                                                 green=["test_empty"]))
+            c = _client(d)
+            sp = c.get("/api/plan", params={"run": RUN}).json()["spec"]
+            self.assertEqual({"AC1": "passing", "AC2": "failing", "AC3": "mapped", "AC4": "unmapped"},
+                             {c_["id"]: c_["test"] for c_ in sp["criteria"]})
+
+    def test_an_ac_id_equal_to_a_test_id_does_not_match_by_coincidence(self):
+        """Verification F4: a test literally named `AC-3`, red then green, must not turn an AC
+        with no recorded test into `passing`."""
+        rec = {"last_suite": None, "ac_tests": {}, "planned": {}, "tests": {}}
+        self.assertEqual("unmapped", PL.ac_test_state("AC-3", {"AC-3"}, {"AC-3"}, rec))
+        self.assertEqual("unmapped", PL.ac_test_state("AC-3", set(), set(), None))
+
+    def test_a_red_mapped_test_makes_the_ac_red_and_a_regression_shows_red(self):
+        """Verification F4: one mapped test green and another red → failing; a test green at
+        2000 then red at 4000 → failing (its LATEST outcome, not the union of the sets)."""
+        from mokata import test_runs as TR
+        with tempfile.TemporaryDirectory() as d:
+            _plant(d, events=False)
+            TR.record_test_run(d, RUN, passed=False, command="x", tests=["test_ac1_edge"],
+                               ac_map={"AC1": ["test_ac1_edge"]}, at=3000.0)
+            rec = TR.read_test_record(d, RUN)
+            self.assertEqual("failing", PL.ac_test_state("AC1", {"test_ac1", "test_ac1_edge",
+                                                                 "test_ac2"}, {"test_ac1"}, rec))
+            TR.record_test_run(d, RUN, passed=True, command="x", tests=["test_ac1_edge"], at=3500.0)
+            rec = TR.read_test_record(d, RUN)
+            self.assertEqual("passing", PL.ac_test_state("AC1", set(), set(), rec))
+            TR.record_test_run(d, RUN, passed=False, command="x", tests=["test_ac1"], at=4000.0)
+            rec = TR.read_test_record(d, RUN)
+            self.assertEqual("failing", PL.ac_test_state("AC1", set(), {"test_ac1"}, rec),
+                             "a regression (green at 2000, red at 4000) must read failing")
+
+    def test_the_page_has_a_label_for_every_badge_word(self):
+        with open(os.path.join(STATIC, "plan.js"), encoding="utf-8") as fh:
+            js = fh.read()
+        for word in ("passing:", "failing:", "mapped:", "unmapped:", "none:"):
+            self.assertIn(word, js)
 
 
 class Guards(unittest.TestCase):
@@ -453,14 +528,15 @@ class Page(unittest.TestCase):
             self.assertIn("flex: none", rule(fixed), fixed)
 
     def test_lifecycle_strip_sits_in_the_sessions_screen_header(self):
-        # P34 (PRD §5.2 S6): the strip moved from under the top bar into the S1 header.
+        # P34 (PRD §5.2 S6) + UX-SIMPLIFY: the strip sits in the Sessions screen header, above its
+        # sub-tabs (Timeline · Plan & spec · Worktree) — never under the top bar.
         html = self._read("index.html")
-        s1 = html[html.index('id="view-sessions"'):]
-        self.assertLess(s1.index('id="lifecycle"'), s1.index('id="sessions-scroll"'))
+        head = html[html.index('id="sessions-head"'):]
+        self.assertLess(head.index('id="lifecycle"'), head.index('id="subtabs"'))
         self.assertNotIn('id="lifecycle"', html[:html.index('class="shell"')])
-        self.assertIn('id="lc-detail"', html)
-        self.assertIn('data-screen="plan"', html)
         self.assertIn('id="view-plan"', html)
+        app = self._read("app.js")
+        self.assertIn('{ id: "plan", title: "Plan & spec", tab: "sessions"', app)
 
     def test_plan_renderer_builds_text_nodes_only(self):
         js = self._read("plan.js")

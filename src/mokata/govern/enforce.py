@@ -400,7 +400,7 @@ def decide_gate(gate: Any, check_passed: bool, *, reason: str = "", ledger: Any 
         ledger.record(GATE_ADVISORY_KIND, gate=gate_id, item_id=gate_id, subject=gate_id,
                       enforcement=ADVISORY, scope_level=GATE_SCOPE, would_block=would_block,
                       decision="would-block" if would_block else "pass", actor=actor,
-                      reason=reason)
+                      reason=reason, run=_current_run())
     if would_block:
         message = gate_verdict(gate_id, True,
                                f"advisory — would have blocked: {reason or 'check failed'}")
@@ -428,3 +428,10 @@ def decide_gate(gate: Any, check_passed: bool, *, reason: str = "", ledger: Any 
                    for a in (artifacts or ())],
         tested=tested_from(tested or ()))
     return decision
+
+
+def _current_run() -> str:
+    """G3-EVIDENCE — the run this ledger row belongs to (`session.current_run_id`), so a committed
+    run record can export it. Imported late: the session module must not load at import time here."""
+    from ..session import current_run_id
+    return current_run_id()

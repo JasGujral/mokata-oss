@@ -71,7 +71,9 @@ def _pending(state: Any, run: Optional[str], notes: List[str]) -> List[Dict[str,
 
 
 def routes(reg, ctx) -> None:
+    import hmac
     from .. import workspace as W
+    from ..server import LANDING_COOKIE
     from starlette.responses import JSONResponse
 
     state = ctx.state
@@ -83,8 +85,14 @@ def routes(reg, ctx) -> None:
         if state.focus is None and box["ws"].get("focus"):
             state.focus = box["ws"]["focus"]
 
-    def read(_request) -> Dict[str, Any]:
+    def read(request) -> Dict[str, Any]:
         ws = dict(box["ws"])
+        land = state.landing
+        if land and hmac.compare_digest(request.cookies.get(LANDING_COOKIE, "").encode(),
+                                        land[0].encode()):
+            # WATCH-FOLD — the page that followed a screen-naming pairing link (`mokata watch` →
+            # Sessions) restores to it, once. Any other tab's read has no nonce and is untouched.
+            ws["mode"], state.landing = land[1], None
         focus = state.focus
         notes: List[str] = []
         run = _run_of(state, focus, notes) or (ws.get("run") if ws.get("focus") == focus else None)

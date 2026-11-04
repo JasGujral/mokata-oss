@@ -88,7 +88,7 @@ class TestGateVerdict(unittest.TestCase):
         self.assertNotIn("to unblock", line)            # pass gets a one-liner too
 
     def test_consistent_over_spec_gate_result(self):
-        res = check_spec_persisted(store=None)          # no spec -> blocked
+        res = check_spec_persisted(store=None, run_id="test-run")          # no spec -> blocked
         line = legibility.verdict(res)
         self.assertTrue(line.startswith("✗ spec-persisted blocked — "))
 

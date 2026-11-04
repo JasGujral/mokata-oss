@@ -55,10 +55,10 @@ env:
   # Point it at the modules whose Windows behaviour you are trying to observe; everything else
   # in this file stays put. Keep it SHORT — the value of this workflow is its wall clock.
   #
-  # Currently (0.0.25 B-01): the Windows cmd-window fix, observed on a real desktop —
-  # `test_win_no_console_windows` (control-gated: it SKIPS, saying why, on a runner that cannot
-  # show a console window), plus the flag/shim/server-light modules it stands on.
-  PROBE_MODULES: "test_win_no_console_windows test_win_cmd_flash test_ide_server_light"
+  # Currently (0.0.27 WIN-LOCK-WAIT): the fair state lock on `msvcrt` — `test_win_lock_wait` (its
+  # Windows-only test is control-gated: it SKIPS, saying why, off Windows), the O14 stress test
+  # whose Windows-only 45 s allowance the probe run re-derives, and the lock/StateStore module.
+  PROBE_MODULES: "test_win_lock_wait test_o14_mcp_stability test_ms_s1_atomic_statestore"
 
 jobs:
   probe:

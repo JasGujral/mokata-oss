@@ -177,7 +177,8 @@ GATES: Dict[str, GateRef] = {
         "", backed=False),
     "finish-is-human-landed": GateRef(
         "finish-is-human-landed",
-        "verify done, then the human chooses how to land it — mokata never merges/PRs/deletes",
+        "verify done, then the human chooses how to land it — mokata never merges/PRs/deletes on "
+        "its own",
         "", backed=False),
     "typed-capture-human-gated": GateRef(
         "typed-capture-human-gated",

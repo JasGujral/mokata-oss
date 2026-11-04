@@ -404,8 +404,14 @@ def plan_extra_install(extra: str, *,
                        which: Callable[[str], Optional[str]] = shutil.which,
                        has_pip: Optional[bool] = None,
                        platform: Optional[str] = None,
-                       requires: Optional[Sequence[str]] = None) -> InstallPlan:
+                       requires: Optional[Sequence[str]] = None,
+                       only: Optional[Sequence[str]] = None) -> InstallPlan:
     """The ONE line that gives THIS environment `mokata[<extra>]`, by the installer that owns it.
+
+    `only` (0.0.27 UX-SIMPLIFY §6) names the package(s) a capability actually needs: on a pip / uv-pip
+    route the line installs just those of the extra's requirements, not the whole extra — a missing
+    `code-review-graph` is fixed by installing it, not model2vec, pywinpty and the rest of `[full]`.
+    (uv-tool and pipx install the extra as one spec; they keep it.)
 
     0.0.26 L1 (`FULL-INSTALLS-EVERYTHING-IN-ONE-GO`). DISPLAY ONLY — `argv` is always None:
     setup never rebuilds the environment it is running from (on Windows that env holds the locked
@@ -438,6 +444,9 @@ def plan_extra_install(extra: str, *,
             spec = me                                     # PyPI: never re-pin what pipx resolved
         return InstallPlan(PIPX, [me], None, _display(["pipx", "install", "--force", spec], platform))
     reqs = extra_requirements(extra, requires)
+    if only:
+        want = {_canon(n) for n in only}
+        reqs = [r for r in reqs if _canon(re.split(r"[<>=!~;\[\s]", r, 1)[0]) in want] or reqs
     if inst == UV_PIP and reqs:
         return InstallPlan(UV_PIP, [me], None, _display(
             ["uv", "pip", "install", "--python", executable, *reqs], platform))

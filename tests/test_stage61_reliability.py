@@ -185,7 +185,7 @@ class TestCompletenessGateFuzz(unittest.TestCase):
                 with open(store.path("emitted_spec"), "w", encoding="utf-8") as fh:
                     json.dump(bad, fh)
                 self.assertIsNone(load_emitted_spec(store))    # guarded -> None
-                res = check_spec_persisted(store)              # must not raise
+                res = check_spec_persisted(store, run_id="test-run")              # must not raise
                 self.assertFalse(res.passed)
 
 

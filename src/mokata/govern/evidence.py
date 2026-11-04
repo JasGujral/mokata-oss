@@ -198,11 +198,21 @@ def evidence_covers_acs(evidence: GateEvidence, ac_ids: Sequence[str]) -> Eviden
 
 # ----------------------------------------------------------------------------------- persistence
 def safe_run_dirname(run_id: str) -> str:
-    """A run id reduced to a portable directory name (never empty, never a traversal)."""
+    """A run id reduced to a portable directory name (never empty, never a traversal, never a
+    Windows device name, never ending in a dot). G3-EVIDENCE: this renames any existing local
+    `temp_local/evidence/<run>/` dir whose id hit a device name — pre-1.0, by design."""
+    from ..explain.ground import RESERVED_DEVICE_NAMES
     name = _SAFE.sub("_", run_id or "")
     if not name or set(name) <= {"."}:
         name = "_run"
-    return name[:120]
+    name = name[:120]
+    # Windows: a trailing dot is stripped by the OS (two run ids would share one dir), and a device
+    # name (`CON`, `nul.txt`, `COM1`) is not a directory at all.
+    if name.endswith("."):
+        name = name[:-1] + "_"
+    if name.split(".")[0].lower() in RESERVED_DEVICE_NAMES:
+        name = "_" + name
+    return name
 
 
 def evidence_root_for_state(store: Any) -> Optional[str]:

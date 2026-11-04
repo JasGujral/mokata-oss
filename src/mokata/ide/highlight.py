@@ -324,11 +324,8 @@ def _read_chunk(fh: Any, ix: _Index, k: int) -> List[str]:
     end = ix.offsets[k + 1] if k + 1 < len(ix.offsets) else ix.size
     fh.seek(start)
     data = fh.read(max(0, end - start))
-    text = data.decode("utf-8", errors="replace")
-    lines = text.split("\n")
-    if lines and lines[-1] == "":
-        lines.pop()
-    return [ln[:-1] if ln.endswith("\r") else ln for ln in lines]
+    from ..textlines import viewer_lines
+    return viewer_lines(data.decode("utf-8", errors="replace"))
 
 
 def window(root: str, path: str, start: int, end: int) -> Dict[str, Any]:
@@ -359,9 +356,8 @@ def window(root: str, path: str, start: int, end: int) -> Dict[str, Any]:
 
 def window_text(path: str, text: str, start: int, end: int, key: Any) -> Dict[str, Any]:
     """`window` over text already in memory (the SAMPLE source) — same answer shape."""
-    lines = text.split("\n")
-    if lines and lines[-1] == "":
-        lines.pop()
+    from ..textlines import viewer_lines
+    lines = viewer_lines(text)
     ix = _Index()
     ix.lines, ix.size, ix.head = len(lines), len(text.encode()), text[:4096]
     ix.offsets = list(range(0, len(lines), CHUNK)) or [0]

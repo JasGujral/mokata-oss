@@ -63,34 +63,34 @@ def _client(root: str, features=None):
     return c
 
 
+def _restore_env(key, value):
+    if value is None:
+        os.environ.pop(key, None)
+    else:
+        os.environ[key] = value
+
+
 class _Stranger(unittest.TestCase):
     """Each class: a fresh stranger repo AND a fresh user home (the user-level state lands there,
     never in the developer's real profile)."""
 
     @classmethod
     def setUpClass(cls):
+        from mokata.ide import nav
         cls._t = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls._t.cleanup)
         base = os.path.realpath(cls._t.name)
         cls.d, cls.home = os.path.join(base, "repo"), os.path.join(base, "home")
         os.makedirs(cls.d)
         os.makedirs(cls.home)
-        cls._env = {k: os.environ.get(k) for k in ("HOME", "USERPROFILE")}
+        # each undo is registered before the next step can fail: a half-built class never leaks HOME
+        for k in ("HOME", "USERPROFILE"):
+            cls.addClassCleanup(_restore_env, k, os.environ.get(k))
         os.environ["HOME"] = os.environ["USERPROFILE"] = cls.home
+        cls.addClassCleanup(nav.close_layers)
         stranger_repo(cls.d)
-        from mokata.ide import nav
         nav.close_layers()
         cls.c = _client(cls.d)
-
-    @classmethod
-    def tearDownClass(cls):
-        from mokata.ide import nav
-        nav.close_layers()
-        for k, v in cls._env.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
-        cls._t.cleanup()
 
     def assertNothingWrittenInRepo(self):
         self.assertFalse(os.path.exists(os.path.join(self.d, ".mokata")),

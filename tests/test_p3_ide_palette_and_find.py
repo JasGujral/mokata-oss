@@ -11,8 +11,9 @@ Business rules — what must be true for the person using the IDE:
   * One prefix grammar — none files, `@` this file's symbols, `#` workspace, `:` line, `>`
     commands, `/` mokata commands — and one ranking rule (prefix > substring > scattered), with a
     mokata command winning a tie against a skill.
-  * Every feature's keys register together with no conflict: ⌘K, ⌘⇧P, ⌘G, ⌘F, ⌘P each have one
-    owner, and the command list shows each command's shortcut (which-key).
+  * Every feature's keys register together with no conflict: ⌘K, ⌘F, ⌘P each have one owner,
+    and the command list shows each command's shortcut (which-key). ONE palette, two openers:
+    ⌘⇧P and ⌘G are gone (0.0.27 UX-SIMPLIFY #21) — `>` and `:` in ⌘K do what they did.
   * Find: literal by default (regex characters are literal), case-insensitive unless asked,
     regex on request, a bad pattern is refused (not silently empty), an empty-match pattern
     never loops.
@@ -163,7 +164,7 @@ out.parse = ["", "core", "@par", "#tot", ":42", ">git", "/mokata:sp", "/sp"].map
 out.order = [P.score("spec", "spec"), P.score("spec", "spec-lite"), P.score("spec", "my spec"),
              P.score("spec", "sapec"), P.score("spec", "nope")];
 const ide = [{ id: "find.open", title: "Find in this view…", keys: ["Mod+F"], feature: "find" },
-             { id: "palette.line", title: "Go to line…", keys: ["Mod+G"], feature: "palette" }];
+             { id: "palette.symbol", title: "Go to symbol in this file…", keys: [], feature: "palette" }];
 const slash = [{ name: "refine", slash: "/mokata:refine", description: "Tighten a spec", kind: "command" },
                { name: "spec", slash: "/mokata:spec", description: "Write the spec", kind: "skill" },
                { name: "spec", slash: "/mokata:spec", description: "Write the spec", kind: "command" },
@@ -173,7 +174,7 @@ out.spec = P.rankCommands("spec", ide, slash).map(label);
 out.find = P.rankCommands("find", ide, slash).map(label);
 out.all = P.rankCommands("", ide, slash).length;
 out.line = [P.lineTarget("42", 0), P.lineTarget("900", 120), P.lineTarget("0", 10), P.lineTarget("x", 10)];
-out.keys = [P.keyLabel("Mod+Shift+P", false), P.keyLabel("Mod+Shift+P", true), P.keyLabel("F3", false)];
+out.keys = [P.keyLabel("Mod+Shift+F", false), P.keyLabel("Mod+Shift+F", true), P.keyLabel("F3", false)];
 """
         o = _node(js)
         self.assertEqual(
@@ -188,7 +189,7 @@ out.keys = [P.keyLabel("Mod+Shift+P", false), P.keyLabel("Mod+Shift+P", true), P
         self.assertEqual(["ide:Find in this view…"], o["find"])
         self.assertEqual(6, o["all"], "an empty `>` lists everything")
         self.assertEqual([42, 120, 1, None], o["line"])
-        self.assertEqual(["Ctrl+Shift+P", "⌘⇧P", "F3"], o["keys"])
+        self.assertEqual(["Ctrl+Shift+F", "⌘⇧F", "F3"], o["keys"])
 
     def test_every_feature_registers_with_no_conflict_and_the_keys_have_one_owner(self):
         """Loads the registry and EVERY static/features/*.js in the page's order. A key two
@@ -197,10 +198,11 @@ out.keys = [P.keyLabel("Mod+Shift+P", false), P.keyLabel("Mod+Shift+P", true), P
 globalThis.window = globalThis;
 globalThis.document = { body: {}, addEventListener() {}, querySelector: () => null,
                         getElementById: () => null };
-""" + (STATIC / "registry.js").read_text(encoding="utf-8") + "\n"
-        # P34: app.js owns the core SCREENS (the page loads it before the features).
-        js += re.search(r"const SCREENS = \[.*?\];", (STATIC / "app.js").read_text(encoding="utf-8"),
-                        re.S).group(0) + "\nMK.SCREENS = SCREENS;\n"
+""" + (STATIC / "registry.js").read_text(encoding="utf-8") + "\n" + (STATIC / "theme.js").read_text(encoding="utf-8") + "\n"
+        # UX-SIMPLIFY: app.js owns the three TABS and the core VIEWS (loaded before the features).
+        app = (STATIC / "app.js").read_text(encoding="utf-8")
+        js += "\n".join(re.search(r"const %s = \[.*?\];" % n, app, re.S).group(0) for n in ("TABS", "VIEWS")) \
+            + "\nMK.TABS = TABS; MK.VIEWS = VIEWS;\n"
         for name in sorted(n for n in os.listdir(FEATURES) if n.endswith(".js")):
             js += (FEATURES / name).read_text(encoding="utf-8") + "\n"
         js += r"""
@@ -212,11 +214,16 @@ const out = { conflicts: mokataIDE.conflicts(), features: mokataIDE.features(),
         self.assertEqual([], o["conflicts"])
         for f in ("core", "palette", "find"):
             self.assertIn(f, o["features"])
-        want = {"Mod+P": "quickopen.open", "Mod+K": "palette.open", "Mod+Shift+P": "palette.commands",
-                "Mod+G": "palette.line", "Mod+F": "find.open", "F3": "find.next", "Shift+F3": "find.prev"}
+        want = {"Mod+P": "quickopen.open", "Mod+K": "palette.open", "Mod+F": "find.open",
+                "F3": "find.next", "Shift+F3": "find.prev"}
         for combo, cmd in want.items():
             self.assertEqual(cmd, o["keys"].get(combo), combo)
             self.assertIn(cmd, o["listed"], f"{cmd}'s shortcut is not shown in the command list")
+        # UX-SIMPLIFY #21: four openers for one palette became two — deleted, not unbound.
+        for gone in ("Mod+Shift+P", "Mod+G"):
+            self.assertNotIn(gone, o["keys"], gone)
+        self.assertNotIn("palette.commands", o["listed"])
+        self.assertNotIn("palette.line", o["listed"])
 
     def test_find_is_literal_by_default_and_regex_on_request(self):
         js = "globalThis.window = globalThis; globalThis.MK = {};\n" + \

@@ -17,8 +17,8 @@ This pins:
   * DEGRADE-CLEAN — a runner that goes unavailable on the sequential floor never raises; the rest
     of the batch is labeled simulated;
   * CONSUMER HONESTY — the lanes view labels a simulated batch, the stage-badge develop
-    sub-counter never counts a simulated lane as done, the dashboard activity label and the
-    why-timeline both say "simulated";
+    sub-counter never counts a simulated lane as done, and the why-timeline says "simulated"
+    (the HTML dashboard's activity label went with the dashboard, 0.0.27 WATCH-FOLD);
   * ADDITIVE ONLY — new field on new entries; the MS.S3 hash chain still verifies.
 
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
@@ -30,7 +30,6 @@ import unittest
 
 import _support  # noqa: F401  (puts src/ on the import path)
 
-from mokata import dashboard as D
 from mokata import progress as P
 from mokata.bootstrap import estimate_tokens
 from mokata.execmode import (
@@ -221,13 +220,6 @@ class TestConsumerHonesty(unittest.TestCase):
         fake = P.Lane(name="t2", state=P.L_DONE, simulated=True)
         rl = P.RunLanes(active=True, mode="parallel", lanes=[real, fake], tasks=2)
         self.assertEqual(P.develop_counter(rl), "1/2")          # not 2/2
-
-    def test_the_dashboard_activity_label_says_simulated(self):
-        lane = P.Lane(name="t1", state=P.L_DONE, simulated=True)
-        feed = [{"kind": "sequential", "task": "t1", "ok": True, "simulated": True}]
-        self.assertIn("simulated", D.lane_activity_label(lane, feed))
-        real = [{"kind": "sequential", "task": "t1", "ok": True, "simulated": False}]
-        self.assertEqual(D.lane_activity_label(P.Lane(name="t1", state=P.L_DONE), real), "done")
 
     def test_the_why_timeline_labels_simulated_rows(self):
         lines = why_timeline([

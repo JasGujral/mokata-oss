@@ -1,8 +1,10 @@
-"""progress / sessions / resume / watch / govern — read-only run views and local HTML dashboards."""
+"""progress / sessions / resume / watch / govern — read-only run views (watch opens the IDE)."""
 from __future__ import annotations
 
 import argparse
 import os
+import sys
+from typing import Optional, Tuple
 
 from ._common import (
     AuditLedger,
@@ -218,7 +220,8 @@ def cmd_progress_record_review(args: argparse.Namespace) -> int:
         event = record_review_verdict(surface, passed=passed, independent=args.independent,
                                       findings=args.findings,
                                       blocking=getattr(args, "blocking", None),
-                                      run_id=args.run if args.run else _CURRENT_RUN)
+                                      run_id=args.run if args.run else _CURRENT_RUN,
+                                      tree_root=args.path)
         kind = "independent" if args.independent else "inline"
         verdict = "passed" if passed else "failed"
         rid = event.get("run_id")
@@ -290,9 +293,17 @@ def cmd_progress_test_run(args: argparse.Namespace) -> int:
         if not res.run_id:
             print("mokata test-run: not recorded — " + unresolved_reason(res))
             return 1
+        reported: list = []
+        for rp in getattr(args, "runner_report", None) or ():
+            from ..test_ids import runner_ids
+            with open(rp, encoding="utf-8", errors="replace") as fh:
+                reported += runner_ids(fh.read())
         suite = record_test_run(surface.root, res.run_id, passed=args.passed,
                                 command=args.command or "", tests=args.test or (),
-                                ac_map=parse_ac_pairs(args.ac or ()))
+                                ac_map=parse_ac_pairs(args.ac or ()), reported=reported)
+    except OSError as exc:
+        print(f"mokata test-run: not recorded — cannot read the runner report: {exc}")
+        return 1
     except ValueError as exc:
         print(f"mokata test-run: not recorded — {exc}")
         return 1
@@ -517,6 +528,94 @@ def cmd_worktree_remove(args: argparse.Namespace) -> int:
     return 0 if (outcome.ok and (outcome.removed or outcome.pruned)) else 1
 
 
+def cmd_worktree_merge(args: argparse.Namespace) -> int:
+    # 0.0.27 P21 (ID-MERGE-GATED) — the gated merge, CLI face of `merge_gate` (the IDE and MCP call
+    # the same functions). No --proposal: print the plan + evidence; when nothing blocks, propose
+    # it (approve with `mokata approve <id>`). --proposal: run the approved merge. --recover: decide
+    # from git truth what an interrupted merge left, and finish or report it.
+    from .. import merge_gate as MG
+    root = os.path.abspath(args.path)
+    if args.recover:
+        out = MG.recover(root, args.recover, unlock_proposal=args.unlock_proposal or "")
+        print(f"mokata worktree merge --recover: {out.state} — {out.message}")
+        if out.facts.get("command"):
+            print(f"  approve: {out.facts['command']}  then: mokata worktree merge --recover "
+                  f"{args.recover} --unlock-proposal {out.facts['proposal_id']}")
+        return 0 if out.state in (MG.MERGED, MG.NOT_MERGED) else 1
+    if args.proposal:
+        ok, code, reason = MG.ready_to_run(root, args.proposal)
+        if not ok:
+            print(f"mokata worktree merge: refused ({code}) — {reason}")
+            return 1
+        out = MG.run_merge(root, args.proposal)
+        print(f"mokata worktree merge: {out.state} — {out.message}")
+        return 0 if out.merged else 1
+    if not args.target:
+        print("mokata worktree merge: name the worktree (path or branch), or --proposal / --recover")
+        return 2
+    message = None
+    if args.message_file:
+        with open(args.message_file, encoding="utf-8") as fh:
+            message = fh.read()
+    try:
+        plan = MG.plan_merge(root, args.target, args.strategy, message)
+    except MG.MergeGateError as exc:
+        print(f"mokata worktree merge: {exc}")
+        return 2
+    print(plan.render())
+    if not plan.ok:
+        print(f"mokata worktree merge: {plan.state} — nothing was proposed")
+        return 1
+    prop = MG.propose(root, plan)
+    print(f"\nproposed — approve it in your terminal: {prop['command']}\n"
+          f"then run it: mokata worktree merge --proposal {prop['proposal_id']}")
+    return 0
+
+
+def cmd_worktree_merge_override(args: argparse.Namespace) -> int:
+    # 0.0.27 P21 — a HUMAN's evidence override for one worktree at its current head (waives only
+    # "no mokata run is bound"). Asked on the terminal, fail-closed; there is no --yes: an agent
+    # cannot file it.
+    from .. import merge_gate as MG
+    from ..prompt import read_yes_no
+    from ..ide.review_context import ide_actor as os_user
+    root = os.path.abspath(args.path)
+    try:
+        a = MG.override_args(root, args.target, args.reason)
+    except MG.MergeGateError as exc:
+        print(f"mokata worktree merge-override: {exc}")
+        return 1
+    if not read_yes_no(f"mokata · allow merging {a['worktree']} at {a['head'][:12]} WITHOUT run "
+                       f"evidence (tests and review are not checked)? reason: {a['reason']}",
+                       "file the override?"):
+        print("mokata worktree merge-override: declined — nothing was recorded.")
+        return 1
+    try:
+        rec = MG.file_override(root, args.target, args.reason, actor=os_user())
+    except MG.MergeGateError as exc:
+        print(f"mokata worktree merge-override: {exc}")
+        return 1
+    print(f"mokata worktree merge-override: recorded {rec['id']} for {rec['head'][:12]} — it dies "
+          f"when the branch moves")
+    return 0
+
+
+def cmd_worktree_test(args: argparse.Namespace) -> int:
+    # 0.0.27 P21 — mokata's full-suite runner in a session worktree: the merge's test evidence.
+    from .. import merge_suite as MS
+    from ..merge_gate import MergeGateError
+    try:
+        res = MS.run_full_suite(os.path.abspath(args.path), args.target)
+    except (MS.SuiteError, MergeGateError) as exc:
+        print(f"mokata worktree test: {exc}")
+        return 1
+    t = res["tree"]
+    print(res["output"][-4000:])
+    print(f"mokata worktree test: {'PASSED' if res['passed'] else 'FAILED'} (exit {res['exit_code']}) "
+          f"`{res['command']}` at {str(t.get('head_after'))[:12]} — recorded for run {res['run']}")
+    return 0 if res["passed"] else 1
+
+
 def cmd_resume(args: argparse.Namespace) -> int:
     # Stage 50 — PREVIEW where a run resumes (read-only): the phase + the gate that still
     # applies. mokata never auto-runs the pipeline; the gates hold on resume.
@@ -548,50 +647,73 @@ def cmd_resume(args: argparse.Namespace) -> int:
 
 
 def cmd_watch(args: argparse.Namespace) -> int:
-    # Stage 40 — write the self-contained local HTML dashboard (read-only; never mutates a run).
-    # Respects settings.ux.progress: `terminal` writes NO HTML (the terminal tier is the floor).
-    from ..dashboard import dashboard_enabled, ux_progress_setting, write_dashboard
+    # 0.0.27 WATCH-FOLD (Jas, UX-REVIEW #46) — ONE browser window: watching a run in a browser IS
+    # the IDE's Sessions screen. settings.ux.progress picks where: `terminal` (default) prints the
+    # lanes, `ide` opens the IDE on Sessions, `both` does both; `--open` adds the IDE to any tier.
+    # The IDE already serving this repo is re-used (`open_or_focus`), never a second server.
+    from ..progress import UX_BOTH, UX_IDE, UX_TERMINAL, ux_progress
     surface = _load_surface(args.path)
-    if not dashboard_enabled(surface):
-        print(f"mokata watch: the dashboard is off (settings.ux.progress="
-              f"{ux_progress_setting(surface)}). Enable it with "
-              f"`mokata config set settings.ux.progress dashboard` (or `both`).")
+    tier, refused = ux_progress(surface)
+    if refused is not None:
+        # The manifest is the user's: a value that is not a tier is refused, never guessed at.
+        print(f"mokata watch: refused — settings.ux.progress={refused!r} in this repo's manifest "
+              f"is not a tier (terminal | ide | both); the HTML dashboard it may have named was "
+              f"folded into the IDE. Fix it with: mokata config set settings.ux.progress ide",
+              file=sys.stderr)
+        return 2
+    if tier in (UX_TERMINAL, UX_BOTH):
+        from ..progress import build_run_lanes, render_lanes
+        ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
+        rl = build_run_lanes(surface.state, ledger=ledger, run_id=args.run, root=surface.root)
+        print(render_lanes(rl))
+    if not (args.open or tier in (UX_IDE, UX_BOTH)):
         return 0
-    refresh = None if args.once else 2
-    path = write_dashboard(surface, run_id=args.run, refresh_secs=refresh)
-    print(f"mokata watch: wrote {path}")
-    if args.open:
-        import webbrowser
-        webbrowser.open("file://" + os.path.abspath(path))
-    if args.once:
-        return 0
-    # Live mode: rewrite the file on an interval; the page meta-refreshes itself. Read-only.
-    print("mokata watch: live — refreshing every 2s (Ctrl-C to stop).")
+    return _watch_in_ide(surface.root, args.run, browser=not args.no_browser)
+
+
+def _run_session(root: str, run: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    """`(run, session)` — the run being watched (`--run`, else the resolver's answer) and the most
+    recently active Claude session working on it, which the Sessions screen then focuses. Either is
+    None when there is no answer: the screen then opens on the session list, it never guesses."""
+    from ..ide.sessions import sessions
+    from ..run_resolver import resolve_run
+    rid = resolve_run(root, run_id=run).run_id
+    if not rid:
+        return None, None
+    rows = [r for r in sessions(root, transcripts=False) if r.run == rid]
+    return rid, (max(rows, key=lambda r: r.last).id if rows else None)
+
+
+def _watch_in_ide(root: str, run: Optional[str], browser: bool) -> int:
+    from ..ide.launch import open_or_focus
+    root = os.path.realpath(root)
+    rid, session = _run_session(root, run)
     try:
-        import time
-        while True:
-            time.sleep(2)
-            write_dashboard(surface, run_id=args.run, refresh_secs=refresh)
-    except KeyboardInterrupt:
-        print("\nmokata watch: stopped.")
+        launched = open_or_focus(root, session, browser=browser, screen="sessions")
+    except ImportError:
+        from ..ide.server import INSTALL_LINE
+        print(INSTALL_LINE, file=sys.stderr)
+        return 3
+    except RuntimeError as exc:
+        print(f"mokata watch: {exc}", file=sys.stderr)
+        return 1
+    what = (f"run {rid}" + (f", session {session[:8]}" if session else " (no session has "
+            "written for it yet)")) if rid else "every session (no run resolved)"
+    print(f"{launched.line()}  — Sessions, {what}")
+    if not launched.browser_opened:
+        print(f"mokata watch: no browser was opened — open this link: {launched.url}")
     return 0
 
 
 def cmd_govern(args: argparse.Namespace) -> int:
-    # Stage 48 — write the self-contained governance dashboard (rules + memory-by-kind +
+    # Stage 48 — write the self-contained governance view (rules + memory-by-kind +
     # read/write ratio + pending proposals + Stage 60 "since last session" diff). Read-only;
-    # never mutates state. The manage commands are surfaced, not run.
-    # Stage 60 — optional live self-meta-refresh (mirrors `mokata watch`), honouring
-    # settings.ux.progress: the live loop runs only on the dashboard tier; the static snapshot
-    # always works (the govern view is valuable even on the terminal tier).
-    from ..dashboard import dashboard_enabled, ux_progress_setting, write_governance_dashboard
+    # never mutates state. The manage commands are surfaced, not run. `--live` re-writes it on an
+    # interval with a self meta-refresh. (0.0.27 WATCH-FOLD: `--live` no longer waits on the
+    # deleted `dashboard` tier of settings.ux.progress — the flag is the person's own ask.)
+    from ..governance_view import write_governance_dashboard
     surface = _load_surface(args.path)
     live = getattr(args, "live", False) and not getattr(args, "once", False)
-    if live and not dashboard_enabled(surface):
-        print(f"mokata govern: live refresh needs the dashboard tier (settings.ux.progress="
-              f"{ux_progress_setting(surface)}). Writing a static snapshot. Enable live with "
-              f"`mokata config set settings.ux.progress dashboard` (or `both`).")
-        live = False
     refresh = 2 if live else None
     path = write_governance_dashboard(surface, refresh_secs=refresh)
     print(f"mokata govern: wrote {path}")
@@ -734,9 +856,14 @@ def register(sub, common):
     p_tr.add_argument("--command", default="", help="the command that ran the tests")
     p_tr.add_argument("--test", action="append", default=None,
                       help="a test id this run covered (repeatable): RED if --failed, GREEN if "
-                           "--passed")
+                           "--passed. Use the FULL id, path::Class::test (pytest's node id) — "
+                           "only a full id can prove an AC on the Proof screen")
     p_tr.add_argument("--ac", action="append", default=None,
                       help="AC=TEST — map an acceptance criterion to a test id (repeatable)")
+    p_tr.add_argument("--runner-report", action="append", default=None, metavar="FILE",
+                      help="the test runner's own output for THIS run (pytest -rA / -v / "
+                           "--collect-only text, or a JUnit XML): a bare --test name is recorded "
+                           "under the full id the runner reported for it — and only then")
     p_tr.add_argument("--run", default=None,
                       help="the run (default: the run resolved for this session)")
     p_tr.set_defaults(func=cmd_progress_test_run)
@@ -819,6 +946,40 @@ def register(sub, common):
     p_wt_remove.add_argument("--yes", action="store_true",
                              help="approve non-interactively")
     p_wt_remove.set_defaults(func=cmd_worktree_remove)
+    p_wt_merge = wt_sub.add_parser(
+        "merge", parents=[common],
+        help="the GATED merge of a session worktree into the main checkout's branch: evidence at "
+             "its head, then your approval (`mokata approve <id>`), then --proposal runs it",
+    )
+    p_wt_merge.add_argument("target", nargs="?", default="",
+                            help="the worktree's path or branch")
+    p_wt_merge.add_argument("--strategy", default="merge-commit",
+                            choices=["merge-commit", "squash", "ff"])
+    p_wt_merge.add_argument("--message-file", default="",
+                            help="the merge commit message (default: drafted from the spec)")
+    p_wt_merge.add_argument("--proposal", default="", help="run this APPROVED merge proposal")
+    p_wt_merge.add_argument("--recover", default="", metavar="MERGE_ID",
+                            help="finish or report an interrupted merge, from git truth. After a crash, never "
+                                 "`git commit` with the lock deleted by hand (it reverts the merge): "
+                                 "run this instead")
+    p_wt_merge.add_argument("--unlock-proposal", default="",
+                            help="with --recover: the approved removal of mokata's stale index lock")
+    p_wt_merge.set_defaults(func=cmd_worktree_merge)
+    p_wt_override = wt_sub.add_parser(
+        "merge-override", parents=[common],
+        help="(human, terminal only) allow merging a worktree with NO mokata run bound, at its "
+             "current head; dies when the branch moves",
+    )
+    p_wt_override.add_argument("target", help="the worktree's path or branch")
+    p_wt_override.add_argument("--reason", required=True, help="why (kept in the audit ledger)")
+    p_wt_override.set_defaults(func=cmd_worktree_merge_override)
+    p_wt_test = wt_sub.add_parser(
+        "test", parents=[common],
+        help="run the FULL configured test command in a session worktree and record it as the "
+             "merge's test evidence",
+    )
+    p_wt_test.add_argument("target", help="the worktree's path or branch")
+    p_wt_test.set_defaults(func=cmd_worktree_test)
 
     p_resume = sub.add_parser(
         "resume", parents=[common],
@@ -830,12 +991,14 @@ def register(sub, common):
 
     p_watch = sub.add_parser(
         "watch", parents=[common],
-        help="write a self-contained local HTML dashboard of the active run (read-only)",
+        help="watch the run: its terminal lanes, or (--open / settings.ux.progress ide|both) the "
+             "IDE's Sessions screen, re-using the IDE already open for this repo (read-only)",
     )
-    p_watch.add_argument("--once", action="store_true",
-                         help="write a single snapshot and exit (no live refresh loop)")
     p_watch.add_argument("--open", action="store_true",
-                         help="open the written HTML file in your browser")
+                         help="open the IDE on its Sessions screen for this run (starts it, or "
+                              "re-uses the one serving this repo)")
+    p_watch.add_argument("--no-browser", action="store_true",
+                         help="with --open: print the IDE link instead of launching a browser")
     p_watch.add_argument("--run", default=None,
                          help="a specific run id (default: the active/most-recent run)")
     p_watch.set_defaults(func=cmd_watch)
@@ -849,7 +1012,7 @@ def register(sub, common):
                           help="open the dashboard in your browser after writing it")
     p_govern.add_argument("--live", action="store_true",
                           help="auto-refresh: re-write on an interval + self meta-refresh "
-                               "(dashboard tier only; Ctrl-C to stop)")
+                               "(Ctrl-C to stop)")
     p_govern.add_argument("--once", action="store_true",
                           help="write a single static snapshot and exit (no live loop)")
     p_govern.set_defaults(func=cmd_govern)

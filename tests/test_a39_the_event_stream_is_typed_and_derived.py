@@ -992,7 +992,7 @@ _PRINT_REGISTER = {
                  "(0.0.26 L2)",
 }
 
-_CLI_SURFACES = ("cli.py", "menu.py", "onboard.py", "onboarding.py", "dashboard.py")
+_CLI_SURFACES = ("cli.py", "menu.py", "onboard.py", "onboarding.py")
 
 
 def _print_sites():

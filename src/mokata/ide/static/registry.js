@@ -5,7 +5,7 @@
 //     id: "my-feature",
 //     commands:    [{ id: "my.open", title: "My feature: open", run: () => ..., keys: "Mod+Shift+M" }],
 //     keybindings: [{ keys: "Alt+3", command: "my.open", inFields: false }],
-//     panels:      [{ id: "mine", title: "Mine", icon: "M", chord: "m", side: true,
+//     panels:      [{ id: "mine", title: "Mine", tab: "review", side: true,
 //                     mount(side, view) {...}, onShow() {...} }],
 //   });
 //
@@ -83,13 +83,13 @@
   // deletes the core handler AND its line here.
   const RESERVED = {
     "]": "app.js (next file)", "[": "app.js (previous file)", "J": "app.js (next change)",
-    "K": "app.js (previous change)", "U": "app.js (next unseen)", "E": "app.js (open in Navigate)",
+    "K": "app.js (previous change)", "U": "app.js (next unseen)", "E": "app.js (open in Code)",
     "Alt+ArrowLeft": "app.js (back)", "Alt+ArrowRight": "app.js (forward)",
     "Escape": "app.js / health.js (close)", "Enter": "palette.js (pick)",
     "ArrowUp": "palette.js (move)", "ArrowDown": "palette.js (move)",
     ">": "sessions.js (next session)", "<": "sessions.js (previous session)",
     "!": "sessions.js (most urgent)",
-    "G": "app.js (g + a letter: go to a screen)", "?": "app.js (every key)",
+    "G": "app.js (g r / g s / g c: go to a screen)", "?": "app.js (every key)",
   };
 
   // 0.0.26 P34 (R30, B-F16) — chords a BROWSER keeps for itself: Ctrl/⌘+W closes the IDE's window,
@@ -149,14 +149,13 @@
     for (const p of pans) {
       if (!p || typeof p.id !== "string" || !/^[a-z][a-z0-9-]*$/.test(p.id) || typeof p.title !== "string")
         fail(`${feature}: a panel needs {id (lower-case), title}`);
-      const core = (MK.SCREENS || []).some((s) => s.id === p.id);
+      // 0.0.27 UX-SIMPLIFY: a panel is a VIEW of one of the three screens — never a screen of its own.
+      if (!TABS.includes(p.tab)) fail(`${feature}: panel "${p.id}" needs tab: ${TABS.join(" | ")} — a feature adds a view to a screen, not a screen`);
+      if (p.chord !== undefined || p.icon !== undefined)
+        fail(`${feature}: panel "${p.id}" has a chord or an icon — there is no rail; only the three screens have a g letter`);
+      const core = (MK.VIEWS || []).some((s) => s.id === p.id);
       if (core || panels.has(p.id) || newPan.has(p.id))
         fail(`panel "${p.id}" is taken: by ${core ? "core" : (panels.get(p.id) || { feature }).feature}, wanted by ${feature}`);
-      if (p.chord !== undefined && (typeof p.chord !== "string" || !/^[a-z]$/.test(p.chord)))
-        fail(`${feature}: a screen's chord is one lower-case letter (g + it)`);
-      const chordOwner = p.chord && ((MK.SCREENS || []).find((s) => s.chord === p.chord)
-        || [...newPan.values()].find((q) => q.chord === p.chord));
-      if (chordOwner) fail(`chord g ${p.chord} is taken: by ${chordOwner.id}, wanted by ${feature} (${p.id})`);
       newPan.set(p.id, p);
     }
     // 2. apply
@@ -167,34 +166,31 @@
     return { commands: [...newCmd.keys()], keys: [...newKey.keys()], panels: [...newPan.keys()] };
   }
 
-  // ---------------------------------------------------------------------------- screens
-  // 0.0.26 P34 (IA-ONE-NAV): a panel IS a screen — a rail button (`data-screen`) + a centre view
-  // (#view-<id>) + with `side: true` a side panel (#panel-<id>) shown only with it. MK.setMode(id)
-  // is the one way to show it (rail highlight == visible view, R26); `chord` is its `g` letter.
-  // mount(side, view) builds DOM only (it runs at load — fetch nothing there); onShow() runs each
-  // time the screen is shown, and is where a feature asks the server for data.
+  // ---------------------------------------------------------------------------- views
+  // 0.0.27 UX-SIMPLIFY: three screens (top tabs) — Review, Sessions, Code. A panel is a VIEW of one
+  // of them: a sub-tab under the screen + a centre view (#view-<id>), with `side: true` its own side
+  // panel (#panel-<id>) in place of the screen's, with `full: true` neither side nor inspector.
+  // `order` places the sub-tab. MK.setMode(id) is the one way to show it. mount(side, view) builds
+  // DOM only (it runs at load — fetch nothing there); onShow() runs each time the view is shown.
+  const TABS = ["review", "sessions", "navigate"];
   function mountPanel(p, feature) {
-    const rec = { id: p.id, title: p.title, mode: true, side: !!p.side, chord: p.chord || null, feature,
+    const rec = { id: p.id, title: p.title, tab: p.tab, side: !!p.side, full: !!p.full, feature,
                   onShow: p.onShow || null };
     const doc = root.document;
-    if (MK.SCREENS) MK.SCREENS.push({ id: p.id, title: p.title, chord: p.chord || null, feature });
+    if (MK.VIEWS) MK.VIEWS.push({ id: p.id, title: p.title, tab: p.tab, side: !!p.side, full: !!p.full,
+                                  order: typeof p.order === "number" ? p.order : 50, feature });
     if (!doc) return rec;
-    const rail = doc.querySelector("nav.rail"), left = doc.getElementById("left");
-    const center = doc.querySelector("main.center");
-    const btn = doc.createElement("button");
-    btn.type = "button"; btn.className = "rail-btn"; btn.dataset.screen = p.id;
-    btn.title = p.title + (p.chord ? ` (g ${p.chord})` : ""); btn.setAttribute("aria-label", p.title);
-    btn.textContent = p.icon || p.title.slice(0, 1);
-    if (rail) rail.append(btn);
+    const left = doc.getElementById("left"), center = doc.querySelector("main.center");
     let sec = null;
     if (p.side) {
       sec = doc.createElement("section");
-      sec.className = "lp"; sec.id = "panel-" + p.id; sec.hidden = true;
+      sec.className = "lp lp-pad"; sec.id = "panel-" + p.id; sec.hidden = true;
       sec.setAttribute("aria-label", p.title);
       if (left) left.append(sec);
     }
     const view = doc.createElement("section");
     view.className = "view-pane"; view.id = "view-" + p.id; view.hidden = true;
+    view.setAttribute("role", "tabpanel"); view.setAttribute("aria-label", p.title);
     if (center) center.append(view);
     if (typeof p.mount === "function") p.mount(sec, view);
     return rec;
@@ -203,8 +199,8 @@
   function show(id) {
     if (panels.has(id) && MK.setMode) MK.setMode(id);      // onShow runs through MK.onModeFeatures
   }
-  // boot.js calls every MK.onMode* on a screen change: a feature screen shown by restore, a chord
-  // or the rail gets its onShow.
+  // boot.js calls every MK.onMode* on a view change: a feature view shown by restore, a sub-tab or a
+  // command gets its onShow.
   MK.onModeFeatures = (mode) => { const p = panels.get(mode); if (p && p.onShow) p.onShow(); };
 
   // ---------------------------------------------------------------------------- dispatch
@@ -229,6 +225,8 @@
       const b = bindings.get(combo);
       if (!b) continue;
       if (!b.inFields && typing(ev)) return;
+      // WCAG 2.1.4: a one-character binding (".") obeys the single-key switch (Keys dialog).
+      if (/^[^+]$/.test(combo) && MK.singleKeysOn && !MK.singleKeysOn()) return;
       const c = commands.get(b.command);
       if (c.when && !c.when()) return;
       ev.preventDefault();
@@ -246,7 +244,7 @@
       .sort((a, b) => a.title.localeCompare(b.title)),
     bindings: () => [...bindings.values()].map((b) => ({ ...b })),
     reserved: () => ({ ...RESERVED }),
-    panels: () => [...panels.values()].map((p) => ({ id: p.id, title: p.title, side: p.side, chord: p.chord, feature: p.feature })),
+    panels: () => [...panels.values()].map((p) => ({ id: p.id, title: p.title, tab: p.tab, side: p.side, full: p.full, feature: p.feature })),
     browserReserved: () => ({ ...BROWSER_RESERVED }),
     features: () => [...features],
     conflicts: () => conflicts.slice(),

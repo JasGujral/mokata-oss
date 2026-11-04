@@ -249,7 +249,8 @@ class TestCommaListTools(unittest.TestCase):
             from mokata import ci_check as CI
             res = CI.run_ci_check(d, ["a.py", "b.py"], changed_symbols=None)
             expected = {"blocked": res.blocked, "degraded": res.degraded, "overall": res.overall,
-                        "initialized": res.initialized,
+                        "checked": res.checked, "absent": res.absent_legs,
+                        "exit_code": res.exit_code, "initialized": res.initialized,
                         "legs": [{"name": lg.name, "status": lg.status, "summary": lg.summary,
                                   "degraded": lg.degraded, "unblock": lg.unblock}
                                  for lg in res.legs],

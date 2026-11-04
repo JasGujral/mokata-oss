@@ -9,17 +9,18 @@
 .wt-table td { border-bottom: 1px solid var(--line); padding: 4px 6px; color: var(--text2); white-space: nowrap; }
 .wt-state { font-weight: 600; }
 .wt-work .wt-state { color: var(--amber); }
-.wt-merged .wt-state, .wt-fresh .wt-state { color: var(--accent); }
+.wt-merged .wt-state, .wt-fresh .wt-state { color: var(--accent-ink); }
 .wt-running .wt-state { color: var(--blue); }
 .wt-missing .wt-state { color: var(--del); }
 .wt-acts { display: flex; gap: 4px; flex-wrap: wrap; }
 .wt-btn { font: inherit; font-size: 11px; padding: 2px 7px; color: var(--text2); background: transparent;
   border: 1px solid var(--line2); border-radius: 5px; cursor: pointer; }
-.wt-btn:hover { border-color: var(--accent); color: var(--accent); }
+.wt-btn:hover { border-color: var(--accent); color: var(--accent-ink); }
 .wt-btn:disabled { opacity: .5; cursor: default; }
 .wt-pending { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 0; padding: 6px 8px;
   border: 1px solid var(--amber-line); border-radius: 6px; color: var(--text); white-space: normal; }
-.wt-pending code { font-family: var(--mono); color: var(--accent); }
-.wt-list { list-style: none; margin: 6px 0; padding: 0; font-size: 12px; }
-.wt-li { padding: 3px 6px; cursor: pointer; color: var(--text2); border-radius: 4px; }
-.wt-li:hover { background: var(--sel); }
+.wt-pending code { font-family: var(--mono); color: var(--accent-ink); }
+/* P21 — the gated-merge card: a wrapping block below the table, never inside a nowrap cell. */
+.wt-merge-block { margin: 12px 0; padding: 8px 10px; border: 1px solid var(--line2); border-radius: 6px;
+  max-width: 100%; box-sizing: border-box; white-space: normal; overflow-wrap: anywhere; }
+.wt-merge-block pre, .wt-merge-block code { white-space: pre-wrap; overflow-wrap: anywhere; }

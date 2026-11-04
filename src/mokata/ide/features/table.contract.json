@@ -1,0 +1,1099 @@
+{
+ "schemas": {
+  "TableSummary": {
+   "type": "object",
+   "properties": {
+    "rows": {
+     "type": [
+      "integer",
+      "null"
+     ]
+    },
+    "complete": {
+     "type": "boolean"
+    },
+    "ragged": {
+     "type": "integer"
+    },
+    "bad_utf8": {
+     "type": "integer"
+    },
+    "cut": {
+     "type": "integer"
+    }
+   }
+  },
+  "TableInfo": {
+   "type": "object",
+   "required": [
+    "path",
+    "state",
+    "size",
+    "delimiter",
+    "delimiter_name",
+    "delimiter_by",
+    "bom",
+    "header",
+    "width",
+    "page",
+    "page_max",
+    "cell_max",
+    "rows",
+    "complete",
+    "ragged",
+    "bad_utf8",
+    "cut",
+    "estimate",
+    "sample",
+    "encoding"
+   ],
+   "properties": {
+    "path": {
+     "type": "string"
+    },
+    "state": {
+     "enum": [
+      "ok"
+     ]
+    },
+    "size": {
+     "type": "integer"
+    },
+    "delimiter": {
+     "type": "string"
+    },
+    "delimiter_name": {
+     "type": "string"
+    },
+    "delimiter_by": {
+     "enum": [
+      "extension",
+      "sniffed",
+      "default"
+     ]
+    },
+    "bom": {
+     "type": "boolean"
+    },
+    "header": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "width": {
+     "type": "integer"
+    },
+    "page": {
+     "type": "integer"
+    },
+    "page_max": {
+     "type": "integer"
+    },
+    "cell_max": {
+     "type": "integer"
+    },
+    "rows": {
+     "type": [
+      "integer",
+      "null"
+     ]
+    },
+    "complete": {
+     "type": "boolean"
+    },
+    "ragged": {
+     "type": "integer"
+    },
+    "bad_utf8": {
+     "type": "integer"
+    },
+    "cut": {
+     "type": "integer"
+    },
+    "estimate": {
+     "type": "integer"
+    },
+    "sample": {
+     "type": "boolean"
+    },
+    "cache": {
+     "type": "object"
+    },
+    "encoding": {
+     "enum": [
+      "utf-8",
+      "utf-16-le",
+      "utf-16-be"
+     ]
+    },
+    "record_max": {
+     "type": "integer"
+    }
+   }
+  },
+  "TableRows": {
+   "type": "object",
+   "required": [
+    "path",
+    "state",
+    "row",
+    "rows",
+    "flags",
+    "total",
+    "indexed",
+    "indexed_rows",
+    "estimate",
+    "complete",
+    "sample"
+   ],
+   "properties": {
+    "path": {
+     "type": "string"
+    },
+    "state": {
+     "enum": [
+      "ok"
+     ]
+    },
+    "row": {
+     "type": "integer"
+    },
+    "rows": {
+     "type": "array",
+     "items": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     }
+    },
+    "flags": {
+     "type": "object"
+    },
+    "total": {
+     "type": [
+      "integer",
+      "null"
+     ]
+    },
+    "indexed": {
+     "type": "boolean"
+    },
+    "indexed_rows": {
+     "type": "integer"
+    },
+    "estimate": {
+     "type": "integer"
+    },
+    "complete": {
+     "type": "boolean"
+    },
+    "sample": {
+     "type": "boolean"
+    }
+   }
+  },
+  "TableCount": {
+   "type": "object",
+   "required": [
+    "path",
+    "state",
+    "rows",
+    "complete",
+    "ragged",
+    "bad_utf8",
+    "cut",
+    "sample"
+   ],
+   "properties": {
+    "path": {
+     "type": "string"
+    },
+    "state": {
+     "enum": [
+      "ok"
+     ]
+    },
+    "rows": {
+     "type": [
+      "integer",
+      "null"
+     ]
+    },
+    "complete": {
+     "type": "boolean"
+    },
+    "ragged": {
+     "type": "integer"
+    },
+    "bad_utf8": {
+     "type": "integer"
+    },
+    "cut": {
+     "type": "integer"
+    },
+    "sample": {
+     "type": "boolean"
+    }
+   }
+  },
+  "TableChange": {
+   "type": "object",
+   "required": [
+    "op",
+    "old_row",
+    "new_row",
+    "old",
+    "new",
+    "changed"
+   ],
+   "properties": {
+    "op": {
+     "enum": [
+      "add",
+      "del",
+      "chg"
+     ]
+    },
+    "old_row": {
+     "type": [
+      "integer",
+      "null"
+     ]
+    },
+    "new_row": {
+     "type": [
+      "integer",
+      "null"
+     ]
+    },
+    "old": {
+     "type": [
+      "array",
+      "null"
+     ]
+    },
+    "new": {
+     "type": [
+      "array",
+      "null"
+     ]
+    },
+    "changed": {
+     "type": "array",
+     "items": {
+      "type": "integer"
+     }
+    }
+   }
+  },
+  "TableDiff": {
+   "type": "object",
+   "required": [
+    "path",
+    "state",
+    "id",
+    "base",
+    "head",
+    "summary",
+    "from",
+    "changes",
+    "sample"
+   ],
+   "properties": {
+    "path": {
+     "type": "string"
+    },
+    "state": {
+     "enum": [
+      "ok"
+     ]
+    },
+    "id": {
+     "type": "string"
+    },
+    "base": {
+     "type": "string"
+    },
+    "head": {
+     "type": "string"
+    },
+    "from": {
+     "type": "integer"
+    },
+    "sample": {
+     "type": "boolean"
+    },
+    "summary": {
+     "type": "object",
+     "required": [
+      "columns",
+      "key",
+      "mode",
+      "added",
+      "removed",
+      "changed",
+      "same",
+      "changes"
+     ],
+     "properties": {
+      "columns": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      },
+      "key": {
+       "type": "string"
+      },
+      "mode": {
+       "enum": [
+        "key",
+        "position"
+       ]
+      },
+      "columns_added": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      },
+      "columns_removed": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      },
+      "added": {
+       "type": "integer"
+      },
+      "removed": {
+       "type": "integer"
+      },
+      "changed": {
+       "type": "integer"
+      },
+      "same": {
+       "type": "integer"
+      },
+      "duplicate_keys": {
+       "type": "integer"
+      },
+      "old_rows": {
+       "type": [
+        "integer",
+        "null"
+       ]
+      },
+      "new_rows": {
+       "type": [
+        "integer",
+        "null"
+       ]
+      },
+      "changes": {
+       "type": "integer"
+      },
+      "memory": {
+       "type": "string"
+      },
+      "memory_bytes": {
+       "type": "integer"
+      }
+     }
+    },
+    "changes": {
+     "type": "array",
+     "items": {
+      "$ref": "#/schemas/TableChange"
+     }
+    }
+   }
+  },
+  "TableView": {
+   "type": "object",
+   "required": [
+    "path",
+    "state",
+    "id",
+    "matched",
+    "scanned",
+    "complete",
+    "runs",
+    "not_numeric",
+    "sample"
+   ],
+   "properties": {
+    "path": {
+     "type": "string"
+    },
+    "state": {
+     "enum": [
+      "ok"
+     ]
+    },
+    "id": {
+     "type": "string"
+    },
+    "matched": {
+     "type": "integer"
+    },
+    "scanned": {
+     "type": "integer"
+    },
+    "complete": {
+     "type": "boolean"
+    },
+    "runs": {
+     "type": "integer"
+    },
+    "not_numeric": {
+     "type": "integer"
+    },
+    "sorted_by": {
+     "type": [
+      "integer",
+      "null"
+     ]
+    },
+    "sort_dir": {
+     "type": "integer"
+    },
+    "filter": {
+     "type": [
+      "object",
+      "null"
+     ]
+    },
+    "memory": {
+     "type": "string"
+    },
+    "sample": {
+     "type": "boolean"
+    }
+   }
+  },
+  "TableViewRows": {
+   "type": "object",
+   "required": [
+    "state"
+   ],
+   "properties": {
+    "state": {
+     "enum": [
+      "ok",
+      "gone"
+     ]
+    },
+    "id": {
+     "type": "string"
+    },
+    "from": {
+     "type": "integer"
+    },
+    "total": {
+     "type": "integer"
+    },
+    "rows": {
+     "type": "array",
+     "items": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     }
+    },
+    "nums": {
+     "type": "array",
+     "items": {
+      "type": "integer"
+     }
+    },
+    "flags": {
+     "type": "object"
+    },
+    "note": {
+     "type": "string"
+    }
+   }
+  },
+  "TableRefusal": {
+   "type": "object",
+   "required": [
+    "path",
+    "state",
+    "note"
+   ],
+   "properties": {
+    "path": {
+     "type": "string"
+    },
+    "state": {
+     "enum": [
+      "absent",
+      "unreadable",
+      "binary",
+      "unsupported",
+      "sample",
+      "bad-column"
+     ]
+    },
+    "note": {
+     "type": "string"
+    }
+   }
+  }
+ },
+ "routes": [
+  {
+   "path": "/api/table/info",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "path": "repo-relative path of a delimited text file"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "oneOf": [
+       {
+        "$ref": "#/schemas/TableInfo"
+       },
+       {
+        "type": "object",
+        "required": [
+         "path",
+         "state",
+         "note"
+        ],
+        "properties": {
+         "path": {
+          "type": "string"
+         },
+         "state": {
+          "enum": [
+           "absent",
+           "unreadable",
+           "binary",
+           "unsupported",
+           "sample"
+          ]
+         },
+         "note": {
+          "type": "string"
+         }
+        }
+       }
+      ]
+     }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "query": {
+      "path": "data/none.csv"
+     },
+     "status": 200
+    },
+    {
+     "query": {
+      "path": "../etc/passwd"
+     },
+     "status": 400
+    },
+    {
+     "query": {},
+     "status": 400
+    },
+    {
+     "query": {
+      "path": "a.csv"
+     },
+     "status": 200,
+     "demo": true
+    }
+   ]
+  },
+  {
+   "path": "/api/table/rows",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "path": "the file",
+     "row": "first data row (0-based, header excluded)",
+     "count": "rows wanted (at most page_max)"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "oneOf": [
+       {
+        "$ref": "#/schemas/TableRows"
+       },
+       {
+        "type": "object",
+        "required": [
+         "path",
+         "state",
+         "note"
+        ],
+        "properties": {
+         "path": {
+          "type": "string"
+         },
+         "state": {
+          "enum": [
+           "absent",
+           "unreadable",
+           "binary",
+           "unsupported",
+           "sample"
+          ]
+         },
+         "note": {
+          "type": "string"
+         }
+        }
+       }
+      ]
+     }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "query": {
+      "path": "data/none.csv"
+     },
+     "status": 200
+    },
+    {
+     "query": {
+      "path": "data/none.csv",
+      "row": "x"
+     },
+     "status": 400
+    },
+    {
+     "query": {
+      "path": "data/none.csv",
+      "count": "0"
+     },
+     "status": 400
+    },
+    {
+     "query": {
+      "path": "../x.csv"
+     },
+     "status": 400
+    }
+   ]
+  },
+  {
+   "path": "/api/table/count",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "path": "the file",
+     "sync_ms": "how long to wait before answering the job's handle"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "oneOf": [
+       {
+        "$ref": "#/schemas/TableCount"
+       },
+       {
+        "type": "object",
+        "required": [
+         "path",
+         "state",
+         "note"
+        ],
+        "properties": {
+         "path": {
+          "type": "string"
+         },
+         "state": {
+          "enum": [
+           "absent",
+           "unreadable",
+           "binary",
+           "unsupported",
+           "sample"
+          ]
+         },
+         "note": {
+          "type": "string"
+         }
+        }
+       }
+      ]
+     }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "query": {
+      "path": "data/none.csv"
+     },
+     "status": 200
+    },
+    {
+     "query": {},
+     "status": 400
+    }
+   ]
+  },
+  {
+   "path": "/api/table/diff",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "path": "the changed file",
+     "old_path": "its path on the base side (a rename)",
+     "base": "old side's revision (default HEAD)",
+     "head": "new side's revision (empty: the working tree)",
+     "key": "a column to match rows on (empty: by row position)",
+     "sync_ms": "how long to wait before answering the job's handle"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "oneOf": [
+       {
+        "$ref": "#/schemas/TableDiff"
+       },
+       {
+        "type": "object",
+        "required": [
+         "path",
+         "state",
+         "note"
+        ],
+        "properties": {
+         "state": {
+          "enum": [
+           "bad-key",
+           "binary",
+           "unsupported",
+           "sample"
+          ]
+         },
+         "path": {
+          "type": "string"
+         },
+         "note": {
+          "type": "string"
+         }
+        }
+       }
+      ]
+     }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "query": {
+      "path": "data/none.csv"
+     },
+     "status": 200
+    },
+    {
+     "query": {
+      "path": "data/none.csv",
+      "base": "-x"
+     },
+     "status": 400
+    },
+    {
+     "query": {},
+     "status": 400
+    }
+   ]
+  },
+  {
+   "path": "/api/table/diff/rows",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "id": "the diff's id (from /api/table/diff)",
+     "from": "first change (0-based)",
+     "count": "changes wanted"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "state"
+      ],
+      "properties": {
+       "state": {
+        "enum": [
+         "ok",
+         "gone"
+        ]
+       },
+       "id": {
+        "type": "string"
+       },
+       "from": {
+        "type": "integer"
+       },
+       "total": {
+        "type": "integer"
+       },
+       "changes": {
+        "type": "array",
+        "items": {
+         "$ref": "#/schemas/TableChange"
+        }
+       },
+       "note": {
+        "type": "string"
+       }
+      }
+     }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "query": {
+      "id": "nope"
+     },
+     "status": 200
+    },
+    {
+     "query": {
+      "id": "nope",
+      "from": "-1"
+     },
+     "status": 400
+    }
+   ]
+  },
+  {
+   "path": "/api/table/export",
+   "method": "POST",
+   "kind": "action",
+   "params": {
+    "body": {
+     "rows": "[[cell, ...], ...] \u2014 the rows to copy",
+     "format": "csv | tsv"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "text",
+       "format",
+       "rows",
+       "guarded"
+      ],
+      "properties": {
+       "text": {
+        "type": "string"
+       },
+       "format": {
+        "enum": [
+         "csv",
+         "tsv"
+        ]
+       },
+       "rows": {
+        "type": "integer"
+       },
+       "guarded": {
+        "type": "boolean"
+       }
+      }
+     }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "body": {
+      "rows": [
+       [
+        "=1+1",
+        "b"
+       ]
+      ],
+      "format": "csv"
+     },
+     "status": 200
+    },
+    {
+     "body": {
+      "rows": "x",
+      "format": "csv"
+     },
+     "status": 400
+    }
+   ]
+  },
+  {
+   "path": "/api/table/view",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "path": "the file",
+     "scol": "column index to sort by (omit: no sort)",
+     "sdir": "1 ascending, -1 descending",
+     "fcol": "column index to filter on (-1: any column)",
+     "fop": "contains | equals | starts | empty | notempty | gt | lt | gte | lte",
+     "fval": "the filter's value",
+     "sync_ms": "how long to wait before answering the job's handle"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "oneOf": [
+       {
+        "$ref": "#/schemas/TableView"
+       },
+       {
+        "$ref": "#/schemas/TableRefusal"
+       }
+      ]
+     }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "query": {
+      "path": "data/none.csv",
+      "scol": "0"
+     },
+     "status": 200
+    },
+    {
+     "query": {
+      "path": "data/none.csv"
+     },
+     "status": 400
+    },
+    {
+     "query": {
+      "path": "data/none.csv",
+      "fcol": "0",
+      "fop": "zz"
+     },
+     "status": 400
+    },
+    {
+     "query": {
+      "scol": "0"
+     },
+     "status": 400
+    }
+   ]
+  },
+  {
+   "path": "/api/table/view/rows",
+   "method": "GET",
+   "kind": "json",
+   "params": {
+    "query": {
+     "id": "the view's id (from /api/table/view)",
+     "from": "first row (0-based)",
+     "count": "rows wanted"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/TableViewRows"
+     }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "query": {
+      "id": "nope"
+     },
+     "status": 200
+    },
+    {
+     "query": {
+      "id": "nope",
+      "from": "-1"
+     },
+     "status": 400
+    }
+   ]
+  }
+ ]
+}

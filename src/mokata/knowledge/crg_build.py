@@ -837,6 +837,12 @@ def build_now(root: str, *, on_progress: Optional[Callable[[str], None]] = None,
                     else REPAIR_FULL
                 swap = True
                 full = repair == REPAIR_FULL
+            if full and (index_built(root) or had_complete_build(db_path(root))):
+                # 0.0.27 V-SCALE: `--full` over an existing index builds BESIDE it into an empty
+                # directory. In place, code-review-graph opened the old graph first and refused it
+                # for good when it was built for another root (a copied or renamed checkout); the
+                # beside build has no old graph to refuse, and the one in use serves until the swap.
+                swap = True
             if swap and (full or repair) and (index_built(root)
                                               or had_complete_build(db_path(root))):
                 # R39: rebuild BESIDE the index in use; it is replaced only when the rebuild is

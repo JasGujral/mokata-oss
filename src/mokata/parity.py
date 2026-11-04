@@ -99,6 +99,18 @@ def _surfaces() -> List[CommandSurface]:
                             "knows which session asked, so it opens or re-focuses the window; "
                             "the agent finds it, points the human at code and reads the session "
                             "browser + needs-you queue through the ide_* reads (lane ID3)"),
+        CommandSurface("explain", slash=("explain",),
+                       mcp_read=("explain_bundle", "explain_save"),
+                       mcp_write=("explain_commit",),
+                       note="the change explainer (P46) — the CLI only PRINTS the claude "
+                            "command (mokata never runs a model); `/mokata:explain` reads the "
+                            "fact bundle and saves the cited page over MCP; committing a page "
+                            "into the repo is the gated write"),
+        CommandSurface("evidence", mcp_write=("evidence_commit",),
+                       note="G3-EVIDENCE — committing a run's ledger rows + gate "
+                            "evidence to `.mokata/runs/<run>/` for the PR check → gated write "
+                            "(`evidence_commit`: the proposal previews every byte; field "
+                            "allowlist + redaction at write time; a secret hard-blocks)"),
         CommandSurface("init", slash=("init",), mcp_write=("init",),
                        note="scaffold config — gated MCP write (preview→approve) + slash; the "
                             "interactive first-run wizard runs through this surface (Stage 56)"),
@@ -224,7 +236,7 @@ def _surfaces() -> List[CommandSurface]:
                             "ungated). Distinct from `sessions` (pipeline runs) and `session` "
                             "(shareable bundles)."),
         CommandSurface("worktree", mcp_read=("worktree_list",),
-                       mcp_write=("worktree_clean", "worktree_remove"),
+                       mcp_write=("worktree_clean", "worktree_remove", "worktree_merge"),
                        note="WT-LIST (FR-WT-1) — `worktree list` is a READ: every git worktree of "
                             "this repo joined to its owning session with a staleness verdict → "
                             "read tool (creates/prunes/removes nothing, writes no registry row). "
@@ -238,13 +250,19 @@ def _surfaces() -> List[CommandSurface]:
                             "surface. WT.S3 brings the destructive half in-harness: "
                             "`worktree_clean` / `worktree_remove` are propose-only gated writes "
                             "(a human mints the approval), re-checked at apply and routed through "
-                            "`WorktreeManager.remove` — the one remove path."),
+                            "`WorktreeManager.remove` — the one remove path. The gated merge adds "
+                            "`worktree_merge`: the gated merge (evidence at the branch head, a "
+                            "human's approval of exactly that merge; `merge_gate`, one "
+                            "implementation for CLI / IDE / MCP)."),
         CommandSurface("decompose", slash=("decompose",), mcp_read=("decompose",),
                        note="propose an independent-subtask split of the spec ACs (read-only) "
                             "→ read tool + slash; the confirm + fan-out stay the human-gated "
                             "`decompose --run` / exec flow (Stage 54f)"),
-        CommandSurface("watch", slash=("watch",), mcp_read=("watch",),
-                       note="self-contained run dashboard → read tool + slash (Stage 54d)"),
+        CommandSurface("watch", slash=("watch",), mcp_read=("lanes", "ide_sessions"),
+                       note="watch the run: the terminal lanes, or the IDE's Sessions screen "
+                            "(WATCH-FOLD — the HTML dashboard and its `watch` tool are "
+                            "gone). `/mokata:watch` runs `mokata watch --open`; an MCP call "
+                            "starts no server, so the data twins are `lanes` + `ide_sessions`"),
         CommandSurface("plan", mcp_read=("plan_list", "plan_show"),
                        note="saved brainstorm plan files (Stage 6p): list/show the internal "
                             ".mokata/plans/<slug>.md → read tools. `plan export` is the "

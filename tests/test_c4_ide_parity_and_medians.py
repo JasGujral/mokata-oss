@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -97,21 +98,28 @@ class TheLaunchIsLockedOnEveryOS(unittest.TestCase):
         then sees ITS server (re-focus), so exactly one start."""
         starts = []
         started = {"rec": None}
-        lock = threading.Lock()
+        gate = threading.Barrier(2)
 
-        def fake_inner(root, session, demo, browser, idle, terminal=False):
-            with lock:
-                if started["rec"] is None:
-                    starts.append(session)
-                    started["rec"] = {"port": 1}
-                    return "started"
-                return "refocused"
+        # The fake stands in for the private `_open_or_focus`; the rule is about how many
+        # STARTS happen, not which arguments ride along (0.0.27 P11 added `target`), so it takes
+        # whatever the locked wrapper forwards. It has NO lock of its own and a wide window
+        # between "is one running?" and "start one": only the launch lock can make it one start.
+        def fake_inner(root, session, *_forwarded):
+            if started["rec"] is None:
+                time.sleep(0.2)
+                starts.append(session)
+                started["rec"] = {"port": 1}
+                return "started"
+            return "refocused"
+
+        def launch(s):
+            gate.wait()
+            out.append(L.open_or_focus(d, s, browser=False))
         with tempfile.TemporaryDirectory() as d:
             init_repo(root=d, profile="standard", assume_yes=True, out=_silent)
             out = []
             with mock.patch.object(L, "_open_or_focus", side_effect=fake_inner):
-                ts = [threading.Thread(target=lambda s=s: out.append(L.open_or_focus(d, s, browser=False)))
-                      for s in ("A", "B")]
+                ts = [threading.Thread(target=launch, args=(s,)) for s in ("A", "B")]
                 for t in ts:
                     t.start()
                 for t in ts:

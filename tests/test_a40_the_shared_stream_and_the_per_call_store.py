@@ -625,10 +625,27 @@ class TheResumeTailCannotLoseTheMiddle(unittest.TestCase):
         self.assertEqual(EventStore(absent).after_seq(0), [])
 
     def test_both_readers_go_through_ONE_row_builder(self):
-        """A column added to one SELECT and wired up in one reader only is the drift this closes."""
+        """A column added to one SELECT and wired up in one reader only is the drift this closes.
+
+        DERIVED, not counted: every `EventStore` method that fetches rows (`.fetchall()`) is a
+        reader, and every reader must build its events through `_row_to_event` — however many
+        readers there are (0.0.27 P12 added `window`, the third). And no reader may construct a
+        `StoredEvent` itself: the only other construction is `emit`'s echo of the row it wrote."""
         src = io.open(os.path.join(SRC, "events", "store.py"), encoding="utf-8").read()
         self.assertEqual(src.count("def _row_to_event"), 1)
-        self.assertEqual(src.count("self._row_to_event(r)"), 2)
+        cls = next(n for n in ast.walk(ast.parse(src))
+                   if isinstance(n, ast.ClassDef) and n.name == "EventStore")
+        readers, builders = [], {}
+        for fn in (n for n in cls.body if isinstance(n, ast.FunctionDef)):
+            calls = [c.func for c in ast.walk(fn) if isinstance(c, ast.Call)]
+            names = {f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "") for f in calls}
+            if "fetchall" in names:
+                readers.append(fn.name)
+                self.assertIn("_row_to_event", names, f"{fn.name} reads rows without the builder")
+            if "StoredEvent" in names:
+                builders[fn.name] = True
+        self.assertGreaterEqual(len(readers), 3, readers)   # after_seq, query, window — at least
+        self.assertEqual({"_row_to_event", "emit"}, set(builders))
 
 
 # -------------------------- 6 · THE INVARIANT doc 77 ASKED FOR, as a guard instead of a sentence

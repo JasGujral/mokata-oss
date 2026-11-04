@@ -104,6 +104,7 @@
       "queued",
       "running",
       "partial",
+      "cancelling",
       "done",
       "failed",
       "cancelled"
@@ -184,6 +185,7 @@
       "queued",
       "running",
       "partial",
+      "cancelling",
       "done",
       "failed",
       "cancelled"
@@ -233,7 +235,8 @@
    "params": {
     "query": {
      "t": "the pairing token",
-     "focus": "optional session to focus"
+     "focus": "optional session to focus",
+     "screen": "optional screen id (the screen-id shape, else ignored): the browser that follows this link restores to it once, through a single-use landing cookie (mokata watch: sessions)"
     }
    },
    "responses": {
@@ -248,6 +251,13 @@
     {
      "query": {
       "t": "tok"
+     },
+     "status": 303
+    },
+    {
+     "query": {
+      "t": "tok",
+      "screen": "sessions"
      },
      "status": 303
     },
@@ -480,7 +490,8 @@
    "kind": "json",
    "params": {
     "query": {
-     "mokata": "1 = include the files mokata setup wrote (hidden by default, G23)"
+     "mokata": "1 = include the files mokata setup wrote (hidden by default, G23)",
+     "ws": "ignore = whitespace-only line changes shown as context, counted in ws_hidden (P5); show = as is"
     }
    },
    "responses": {
@@ -556,6 +567,12 @@
        }
       }
      }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
     }
    },
    "probes": [
@@ -567,6 +584,18 @@
       "mokata": "1"
      },
      "status": 200
+    },
+    {
+     "query": {
+      "ws": "ignore"
+     },
+     "status": 200
+    },
+    {
+     "query": {
+      "ws": "bogus"
+     },
+     "status": 400
     }
    ]
   },
@@ -576,7 +605,8 @@
    "kind": "json",
    "params": {
     "query": {
-     "id": "a session id"
+     "id": "a session id",
+     "ws": "ignore = whitespace-only line changes shown as context, counted in ws_hidden (P5); show = as is"
     }
    },
    "responses": {
@@ -648,6 +678,12 @@
        }
       }
      }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
     }
    },
    "probes": [
@@ -656,6 +692,20 @@
       "id": "S-1"
      },
      "status": 200
+    },
+    {
+     "query": {
+      "id": "S-1",
+      "ws": "ignore"
+     },
+     "status": 200
+    },
+    {
+     "query": {
+      "id": "S-1",
+      "ws": "bogus"
+     },
+     "status": 400
     }
    ]
   },
@@ -750,7 +800,8 @@
    "params": {
     "query": {
      "a": "snapshot id",
-     "b": "snapshot id"
+     "b": "snapshot id",
+     "ws": "ignore = whitespace-only line changes shown as context, counted in ws_hidden (P5); show = as is"
     }
    },
    "responses": {
@@ -786,6 +837,12 @@
         "type": "string"
        }
       }
+     }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
      }
     }
    },
@@ -796,6 +853,22 @@
       "b": "y"
      },
      "status": 200
+    },
+    {
+     "query": {
+      "a": "x",
+      "b": "y",
+      "ws": "ignore"
+     },
+     "status": 200
+    },
+    {
+     "query": {
+      "a": "x",
+      "b": "y",
+      "ws": "bogus"
+     },
+     "status": 400
     }
    ]
   },
@@ -806,7 +879,8 @@
    "params": {
     "query": {
      "base": "git ref",
-     "head": "git ref or empty for the working tree"
+     "head": "git ref or empty for the working tree",
+     "ws": "ignore = whitespace-only line changes shown as context, counted in ws_hidden (P5); show = as is"
     }
    },
    "responses": {
@@ -843,6 +917,12 @@
        }
       }
      }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
     }
    },
    "probes": [
@@ -852,6 +932,22 @@
       "head": ""
      },
      "status": 200
+    },
+    {
+     "query": {
+      "base": "HEAD",
+      "head": "",
+      "ws": "ignore"
+     },
+     "status": 200
+    },
+    {
+     "query": {
+      "base": "HEAD",
+      "head": "",
+      "ws": "bogus"
+     },
+     "status": 400
     }
    ]
   },
@@ -861,7 +957,8 @@
    "kind": "action",
    "params": {
     "body": {
-     "url": "a PR URL"
+     "url": "a PR URL",
+     "ws": "ignore = whitespace-only line changes shown as context, counted in ws_hidden (P5); show = as is"
     }
    },
    "responses": {
@@ -933,6 +1030,12 @@
        }
       }
      }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
     }
    },
    "probes": [
@@ -941,6 +1044,14 @@
       "url": ""
      },
      "status": 200,
+     "demo": true
+    },
+    {
+     "body": {
+      "url": "",
+      "ws": "bogus"
+     },
+     "status": 400,
      "demo": true
     }
    ]
@@ -997,6 +1108,12 @@
           },
           "files": {
            "type": "number"
+          },
+          "compact_path": {
+           "type": "string"
+          },
+          "compact_name": {
+           "type": "string"
           }
          }
         }
@@ -2874,7 +2991,8 @@
    "params": {
     "query": {
      "path": "repo-relative path",
-     "line": "line number"
+     "line": "line number",
+     "col": "optional: column number (1-based)"
     }
    },
    "responses": {
@@ -3462,313 +3580,6 @@
    ]
   },
   {
-   "path": "/api/timelapse",
-   "method": "GET",
-   "kind": "json",
-   "params": {
-    "query": {
-     "session": "session id"
-    }
-   },
-   "responses": {
-    "200": {
-     "media": "json",
-     "schema": {
-      "type": "object",
-      "required": [
-       "count",
-       "files",
-       "reads",
-       "run",
-       "sample",
-       "session",
-       "steps",
-       "truncated",
-       "unmeasured"
-      ],
-      "properties": {
-       "count": {
-        "type": "number"
-       },
-       "files": {
-        "type": "array",
-        "items": {
-         "type": "string"
-        }
-       },
-       "reads": {
-        "type": "string"
-       },
-       "run": {
-        "type": "string"
-       },
-       "sample": {
-        "type": "boolean"
-       },
-       "session": {
-        "type": "string"
-       },
-       "steps": {
-        "type": "array",
-        "items": {
-         "type": "object",
-         "required": [
-          "added",
-          "i",
-          "kind",
-          "measured",
-          "path",
-          "removed",
-          "snap",
-          "state",
-          "t"
-         ],
-         "properties": {
-          "added": {},
-          "i": {
-           "type": "number"
-          },
-          "kind": {
-           "type": "string"
-          },
-          "measured": {
-           "type": "boolean"
-          },
-          "path": {
-           "type": "string"
-          },
-          "removed": {},
-          "snap": {
-           "type": "string"
-          },
-          "state": {
-           "type": "string"
-          },
-          "t": {
-           "type": "number"
-          }
-         }
-        }
-       },
-       "truncated": {
-        "type": "boolean"
-       },
-       "unmeasured": {
-        "type": "number"
-       }
-      }
-     }
-    },
-    "400": {
-     "media": "json",
-     "schema": {
-      "$ref": "#/schemas/Error"
-     }
-    }
-   },
-   "probes": [
-    {
-     "query": {
-      "session": "S-1"
-     },
-     "status": 200
-    },
-    {
-     "status": 400
-    }
-   ]
-  },
-  {
-   "path": "/api/treemap",
-   "method": "GET",
-   "kind": "json",
-   "params": {
-    "query": {
-     "session": "optional session id",
-     "size": "loc|change"
-    }
-   },
-   "responses": {
-    "200": {
-     "media": "json",
-     "schema": {
-      "type": "object",
-      "required": [
-       "changed",
-       "count",
-       "dirs",
-       "files",
-       "heat_scale",
-       "height",
-       "not_on_disk",
-       "omitted",
-       "sample",
-       "session",
-       "size",
-       "sized_by",
-       "total_files",
-       "width"
-      ],
-      "properties": {
-       "changed": {
-        "type": "number"
-       },
-       "count": {
-        "type": "number"
-       },
-       "dirs": {
-        "type": "array",
-        "items": {
-         "type": "object",
-         "required": [
-          "depth",
-          "h",
-          "path",
-          "w",
-          "weight",
-          "x",
-          "y"
-         ],
-         "properties": {
-          "depth": {
-           "type": "number"
-          },
-          "h": {
-           "type": "number"
-          },
-          "path": {
-           "type": "string"
-          },
-          "w": {
-           "type": "number"
-          },
-          "weight": {
-           "type": "number"
-          },
-          "x": {
-           "type": "number"
-          },
-          "y": {
-           "type": "number"
-          }
-         }
-        }
-       },
-       "files": {
-        "type": "array",
-        "items": {
-         "type": "object",
-         "required": [
-          "added",
-          "bytes",
-          "h",
-          "heat",
-          "loc",
-          "path",
-          "removed",
-          "unmeasured",
-          "w",
-          "weight",
-          "writes",
-          "x",
-          "y"
-         ],
-         "properties": {
-          "added": {
-           "type": "number"
-          },
-          "bytes": {
-           "type": "number"
-          },
-          "h": {
-           "type": "number"
-          },
-          "heat": {
-           "type": "number"
-          },
-          "loc": {
-           "type": "number"
-          },
-          "path": {
-           "type": "string"
-          },
-          "removed": {
-           "type": "number"
-          },
-          "unmeasured": {
-           "type": "number"
-          },
-          "w": {
-           "type": "number"
-          },
-          "weight": {
-           "type": "number"
-          },
-          "writes": {
-           "type": "number"
-          },
-          "x": {
-           "type": "number"
-          },
-          "y": {
-           "type": "number"
-          }
-         }
-        }
-       },
-       "heat_scale": {
-        "type": "string"
-       },
-       "height": {
-        "type": "number"
-       },
-       "not_on_disk": {
-        "type": "array"
-       },
-       "omitted": {
-        "type": "number"
-       },
-       "sample": {
-        "type": "boolean"
-       },
-       "session": {
-        "type": "string"
-       },
-       "size": {
-        "type": "string"
-       },
-       "sized_by": {
-        "type": "string"
-       },
-       "total_files": {
-        "type": "number"
-       },
-       "width": {
-        "type": "number"
-       }
-      }
-     }
-    },
-    "400": {
-     "media": "json",
-     "schema": {
-      "$ref": "#/schemas/Error"
-     }
-    }
-   },
-   "probes": [
-    {
-     "status": 200
-    },
-    {
-     "query": {
-      "size": "x"
-     },
-     "status": 400
-    }
-   ]
-  },
-  {
    "path": "/api/open",
    "method": "POST",
    "kind": "action",
@@ -3776,6 +3587,7 @@
     "body": {
      "path": "repo-relative path",
      "line": "int",
+     "col": "optional int: column (1-based)",
      "session": "session id"
     }
    },

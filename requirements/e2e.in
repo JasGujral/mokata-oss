@@ -5,7 +5,7 @@
 # when they part) — and the whole job installs hash-pinned (no editable-install site).
 # The playwright version pins the Chromium build `python -m playwright install chromium` fetches.
 playwright==1.56.0
-mcp>=1.2,<2
+mcp>=1.30,<2
 starlette>=0.27
 uvicorn>=0.23.1
 sse-starlette>=1.6.1

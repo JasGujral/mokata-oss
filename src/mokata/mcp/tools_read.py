@@ -35,7 +35,7 @@ QUERY_TOOL_KINDS = tuple(QUERY_KINDS) + ("semantic",)
 __all__ = [
     "query", "recall", "consolidate_proposals", "doctor", "coverage", "budget", "audit",
     "status", "preview",
-    "progress", "lanes", "watch", "govern", "rules", "skills", "suggest", "lat_check",
+    "progress", "lanes", "govern", "rules", "skills", "suggest", "lat_check",
     "index_status", "tour", "ci_check", "baseline", "sessions", "session_list",
     "session_windows", "worktree_list", "session_save",
     "config_get", "export_preview", "decompose", "spec_show",
@@ -293,40 +293,17 @@ def lanes(path: str = ".", run: Optional[str] = None,
     return apply_response_format(response_format, out)
 
 
-@_tool("watch", "read")
-def watch(path: str = ".", run: Optional[str] = None) -> Dict[str, Any]:
-    """Write the self-contained, clickable local HTML dashboard of the active run (parallel
-    lanes + 7-phase pipeline + a bounded gate/decision feed) under gitignored temp_local/ and
-    return its path. The artifact has no network/server/assets. Honors settings.ux.progress:
-    the default `terminal` writes NO HTML (returns a note on how to enable it). Read-only over
-    run-state + the ledger — it never mutates a run or gates."""
-    from ..dashboard import (dashboard_enabled, ux_progress_setting,
-                             write_dashboard)
-    surface = _surface(path)
-    if not dashboard_enabled(surface):
-        return {"enabled": False, "tier": ux_progress_setting(surface),
-                "note": "dashboard off (settings.ux.progress=%s). Enable with "
-                        "`mokata config set settings.ux.progress dashboard` (or `both`)."
-                        % ux_progress_setting(surface)}
-    written = write_dashboard(surface, run_id=run)
-    return {"enabled": True, "path": written,
-            "note": "self-contained dashboard written under temp_local/ (read-only, "
-                    "no network); open it in a browser."}
-
-
 @_tool("govern", "read")
 def govern(path: str = ".", live: bool = False) -> Dict[str, Any]:
     """The governed-state view (Stage 48): the always-on rules tier, memory grouped by kind,
     the read/write ratio, pending self-healing proposals, and the Stage 60 "what changed since
     last session" diff. Writes the self-contained governance HTML under gitignored temp_local/
-    and returns its path + a structured summary. With `live=True` the HTML self-refreshes
-    (honours settings.ux.progress; degrades to a static snapshot off the dashboard tier).
+    and returns its path + a structured summary. With `live=True` the HTML self-refreshes.
     Read-only — it surfaces the gated `mokata memory edit` manage path, never writes state."""
-    from ..dashboard import (build_governance_view, dashboard_enabled,
-                             write_governance_dashboard)
+    from ..governance_view import build_governance_view, write_governance_dashboard
     surface = _surface(path)
     view = build_governance_view(surface)
-    refresh = 2 if (live and dashboard_enabled(surface)) else None
+    refresh = 2 if live else None
     written = write_governance_dashboard(surface, refresh_secs=refresh)
     # Stage 59 — the read-only memory-health nudge (proposal-only; empty string when healthy).
     h = view.health
@@ -397,23 +374,33 @@ def skills(path: str = ".", name: str = "", query: str = "") -> Dict[str, Any]:
 def suggest(path: str = ".", fresh: bool = False, spec: bool = False,
             failing_test: bool = False, implementation: bool = False, diff: bool = False,
             bug: bool = False, stacktrace: bool = False, perf: bool = False,
-            intent: str = "") -> Dict[str, Any]:
+            intent: str = "", run: str = "", session: str = "") -> Dict[str, Any]:
     """Suggest a relevant /mokata command for the current context (L6) — SUGGEST ONLY, it
     never runs anything. Pass the booleans that describe your state (fresh/spec/failing_test/
     implementation/diff/bug/stacktrace/perf), and/or `intent` — free text such as "flaky bug"
     (G-3: a deterministic keyword match, each hit naming the words that produced it; an
-    unmatched intent returns no suggestions rather than a guess). Read-only."""
+    unmatched intent returns no suggestions rather than a guess). Read-only.
+
+    With NONE of those (0.0.27 P14): the next step DERIVED from the run's recorded state —
+    `{status: hints|none|unknown, hints[{rule, text, command, cites[]}], reason, basis}`; each
+    hint cites the recorded fact it came from; `unknown` names the store that could not be read
+    (never "nothing to do"). `run` / `session` pick the run (default: resolved)."""
+    if not (intent and intent.strip()) and not any(
+            (fresh, spec, failing_test, implementation, diff, bug, stacktrace, perf)):
+        from ..hints import derive
+        return derive(os.path.abspath(path), run=run or "", session=session or "")
     from ..compose import SuggestionContext, recommend, suggest as _suggest
     ctx = SuggestionContext(starting_fresh=fresh, has_spec=spec,
                             has_failing_test=failing_test, has_implementation=implementation,
                             has_diff=diff, has_bug_report=bug, has_stacktrace=stacktrace,
                             has_perf_issue=perf)
     if intent and intent.strip():
-        return {"intent": intent,
+        return {"intent": intent, "basis": "as you described it",
                 "suggestions": [{"skill": r.skill, "reason": r.reason, "score": r.score,
                                  "matched": r.matched} for r in recommend(intent, ctx)]}
     return _empty_says(with_count(
-        {"suggestions": [{"skill": s.skill, "reason": s.reason} for s in _suggest(ctx)]},
+        {"basis": "as you described it",
+         "suggestions": [{"skill": s.skill, "reason": s.reason} for s in _suggest(ctx)]},
         "suggestions"), "suggestions", "no command fits the state you described — pass the "
                                        "booleans that describe it (fresh/spec/diff/bug/…).")
 
@@ -435,20 +422,29 @@ def index_status(path: str = ".") -> Dict[str, Any]:
     """The freshness-index STATUS (B4): how many files are tracked and what changed
     (added/removed/changed) since the last build — computed via a read-only DIFF; nothing is
     rebuilt or written (the durable rebuild stays `mokata index` on the CLI). Names the
-    code-graph backend the refresh would run against. Read-only."""
+    code-graph backend the refresh would run against, the languages indexed and how many source
+    files were skipped as unsupported (the index covers Python only). Read-only."""
     from ..knowledge import KnowledgeIndex, KnowledgeLayer
+    from ..knowledge.index import coverage_line
     surface = _surface(path)
     layer = KnowledgeLayer.from_surface(surface)
     backend = {"uses_graph": layer.uses_graph, "backend": layer.backend_name}
     data = surface.state.read("knowledge_index")
     if data is None:
         return {"built": False, "tracked": 0,
-                "note": "no index yet — run `mokata index` to build it (a durable write).",
+                "note": "no index yet — run `mokata index` to build it (a durable write). "
+                        "The index covers Python files only; other languages are not indexed.",
                 **backend}
     idx = KnowledgeIndex.from_dict(data)
     d = idx.diff(surface.root)
+    cov = idx.coverage()
     return {"built": True, "tracked": len(idx.entries), "added": len(d["added"]),
-            "removed": len(d["removed"]), "changed": len(d["changed"]), **backend}
+            "removed": len(d["removed"]), "changed": len(d["changed"]),
+            "languages_indexed": sorted(cov["indexed"]),
+            "unsupported_files": cov["unsupported_total"],
+            "unsupported_by_language": cov["unsupported"],
+            "unsupported_counted_languages": cov["counted"],
+            "coverage": coverage_line(cov), **backend}
 
 
 @_tool("tour", "read")
@@ -464,9 +460,9 @@ def tour(path: str = ".") -> Dict[str, Any]:
 def ci_check(path: str = ".", files: str = "", symbols: str = "") -> Dict[str, Any]:
     """Stage 58 — mokata as a PR check: run the completeness gate + spec-awareness regression
     guard over a change's `files` (comma-separated; `symbols` default to the ones defined in those
-    files) and return PASS/BLOCK + the review-comment body. READ-ONLY — it SURFACES blocks for a
+    files) and return pass / block / absent per leg + the review-comment body. READ-ONLY — it SURFACES blocks for a
     reviewer and PRODUCES the comment; it never posts to GitHub. DEGRADE-CLEAN: no saved spec /
-    no corpus / uninitialized repo → nothing to check → PASS (never a false block)."""
+    no corpus / uninitialized repo → that leg is ABSENT (never a pass, never a false block)."""
     from .. import ci_check as CI
     # D1d — same parse as before, but a non-empty list with no usable entries now REFUSES instead of
     # silently degrading to the unscoped default (which returned PASS over an unchecked change).
@@ -476,7 +472,11 @@ def ci_check(path: str = ".", files: str = "", symbols: str = "") -> Dict[str, A
     res = CI.run_ci_check(code_root(path), fl, changed_symbols=sy)   # P41: the session's tree
     # D5 — `degraded` rides the structured response too: an agent reading this dict must be able to
     # tell "checked, and clean" from "could not check" without parsing the prose.
+    # SPEC-TRISTATE — `checked` and `absent` ride the structure too: a leg with status "absent"
+    # had nothing to check, and `blocked: false` alone must not read as "clean". `exit_code` is the
+    # CLI's (1 only on a block), so an agent can see a 0 that is not a pass.
     return {"blocked": res.blocked, "degraded": res.degraded, "overall": res.overall,
+            "checked": res.checked, "absent": res.absent_legs, "exit_code": res.exit_code,
             "initialized": res.initialized,
             "legs": [{"name": leg.name, "status": leg.status, "summary": leg.summary,
                       "degraded": leg.degraded, "unblock": leg.unblock} for leg in res.legs],
@@ -1082,7 +1082,8 @@ def review_record(path: str = ".", passed: bool = False, failed: bool = False,
     try:
         event = record_review_verdict(surface, passed=passed, independent=independent,
                                       findings=findings or None, blocking=blocking,
-                                      run_id=(run or "").strip() or _CURRENT_RUN)
+                                      run_id=(run or "").strip() or _CURRENT_RUN,
+                                      tree_root=path)
     except ReviewLoopCapped as exc:
         # R4 — not a recording FAULT: the loop is over its cap and round six escalates. Nothing was
         # recorded, on purpose; the message is the escalation the review skill relays to the human.
@@ -1372,3 +1373,6 @@ def working_set(path: str = ".", run: str = "", note: str = "") -> Dict[str, Any
 # Imported HERE, at the very end, so they register at the READ tail: the registry order is an
 # append-only public surface (`test_pre_simp_tool_registry_parity`).
 from . import tools_ide  # noqa: E402,F401
+# 0.0.27 P46 — `explain_bundle` + `explain_save` (the change explainer), APPENDED to the READ tail
+# after the ide_* tools (registry order is append-only).
+from . import tools_explain  # noqa: E402,F401

@@ -32,7 +32,7 @@ class _TeamSurface:
 
 class TestFailClosedAccessGuard(unittest.TestCase):
     def test_d5_rider_1_guard_deny_by_default_on_team_manifest_fault(self):
-        with mock.patch("mokata.team_audit.actor", return_value="alice"), \
+        with mock.patch("mokata.session.actor", return_value="alice"), \
              mock.patch("mokata.run_mode.read_mode", return_value="team"), \
              mock.patch("mokata.degrade.note_degraded"):
             identity, access = _identity_and_access_for(_TeamSurface())

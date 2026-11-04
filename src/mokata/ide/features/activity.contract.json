@@ -1,0 +1,84 @@
+{
+  "schemas": {
+    "ActivityItem": {
+      "type": "object",
+      "required": ["id", "t", "type", "title", "verdict", "session", "run", "source", "ledger_seq", "detail"],
+      "properties": {
+        "id": {"type": "string"}, "t": {"type": "number"}, "type": {"type": "string"},
+        "title": {"type": "string"}, "verdict": {"type": "string"}, "session": {"type": "string"},
+        "run": {"type": "string"}, "source": {"type": "string"},
+        "ledger_seq": {"type": ["integer", "null"]}, "detail": {"type": "object"}
+      }
+    },
+    "ActivitySession": {
+      "type": "object",
+      "required": ["id", "short", "prompt", "status", "status_basis", "run", "chain", "phase",
+                   "activity", "files", "gates", "needs_you", "risk", "focused"],
+      "properties": {
+        "id": {"type": "string"}, "short": {"type": "string"}, "prompt": {"type": "string"},
+        "status": {"type": "string", "enum": ["live", "ended", "inactive"]},
+        "status_basis": {"type": "string"}, "run": {"type": "string"},
+        "chain": {"type": "array", "items": {"type": "string"}},
+        "phase": {"type": ["object", "null"], "required": ["current", "finished", "stages", "tests", "basis"],
+                  "properties": {"current": {"type": ["string", "null"]}, "finished": {"type": "boolean"},
+                                 "stages": {"type": "array", "items": {"type": "object", "required": ["stage", "status"]}},
+                                 "tests": {"type": "object", "required": ["failing", "passing"]},
+                                 "basis": {"type": "string"}}},
+        "activity": {"type": "object", "required": ["state", "last_tool", "last_path", "at", "text", "basis"],
+                     "properties": {"state": {"type": "string", "enum": ["working", "idle", "ended", "unknown"]},
+                                    "last_tool": {"type": "string"}, "last_path": {"type": "string"},
+                                    "at": {"type": "number"}, "text": {"type": "string"}, "basis": {"type": "string"}}},
+        "files": {"type": "object", "required": ["count", "last", "writes"]},
+        "gates": {"type": "object", "required": ["fired", "blocked"]},
+        "needs_you": {"type": "array", "items": {"type": "object", "required": ["reason", "text", "since", "risk", "detail"]}},
+        "risk": {"type": "integer"}, "focused": {"type": "boolean"}
+      }
+    }
+  },
+  "routes": [
+    {
+      "path": "/api/activity", "method": "GET", "kind": "read",
+      "params": {"query": {"focus": "a session id to include even when it is not live (default: the window's focus)"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"type": "object",
+          "required": ["sample", "sessions", "shown", "all", "store_seq", "bridge", "live", "needs_you", "waiting", "jobs", "bus", "focus", "types", "edge"],
+          "properties": {"sample": {"type": "boolean"}, "store_seq": {"type": "integer"},
+                         "bridge": {"type": "object", "required": ["wired", "note", "command"],
+                                    "properties": {"wired": {"type": "boolean"}, "note": {"type": "string"}}},
+                         "sessions": {"type": "array", "items": {"$ref": "#/schemas/ActivitySession"}},
+                         "shown": {"type": "integer"}, "all": {"type": "integer"}, "live": {"type": "integer"},
+                         "needs_you": {"type": "array"}, "waiting": {"type": "integer"},
+                         "jobs": {"type": "object", "required": ["active", "recent"],
+                                  "properties": {"active": {"type": "array", "items": {"$ref": "#/schemas/JobSnapshot"}},
+                                                 "recent": {"type": "array", "items": {"$ref": "#/schemas/JobSnapshot"}}}},
+                         "bus": {"type": "boolean"}, "focus": {"type": "string"},
+                         "types": {"type": "object"}, "edge": {"type": "string"}}}}
+      },
+      "probes": [{"status": 200}, {"query": {"focus": "S-1"}, "status": 200}, {"status": 200, "demo": true}]
+    },
+    {
+      "path": "/api/activity/history", "method": "GET", "kind": "json",
+      "params": {"query": {"session": "the session id (required); a resumed session is joined to the sessions it continues",
+                           "before": "the previous page's `next` cursor (omit for the newest page)",
+                           "limit": "events per page (default 200, at most 2000)",
+                           "types": "comma-separated item types to keep (see `types` in the answer)"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"type": "object",
+          "required": ["sample", "session", "joined", "run", "items", "count", "next", "window", "total", "types", "sources"],
+          "properties": {"sample": {"type": "boolean"}, "session": {"type": "string"},
+                         "joined": {"type": "array", "items": {"type": "string"}}, "run": {"type": "string"},
+                         "items": {"type": "array", "items": {"$ref": "#/schemas/ActivityItem"}},
+                         "count": {"type": "integer"}, "next": {"type": ["string", "null"]},
+                         "window": {"type": "object", "required": ["t_hi", "t_lo", "exclusive"]},
+                         "total": {"type": ["object", "null"], "required": ["events", "writes", "resumes"]},
+                         "types": {"type": "object"}, "sources": {"type": "array"}}}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"query": {"session": "S-1"}, "status": 200},
+                 {"query": {"session": "S-1", "limit": "1", "types": "edit,test"}, "status": 200},
+                 {"query": {"session": "sample-session-a"}, "status": 200, "demo": true},
+                 {"query": {}, "status": 400},
+                 {"query": {"session": "S-1", "before": "nope"}, "status": 400}]
+    }
+  ]
+}

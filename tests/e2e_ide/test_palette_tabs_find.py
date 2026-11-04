@@ -13,12 +13,11 @@ import _harness as H
 class ThePaletteRunsCommandsAndJumps(H.IdeFlow):
     FIXTURE = "shop"
 
-    def test_1_mod_shift_p_lists_ide_commands_with_their_shortcuts(self):
+    def test_1_gt_in_mod_k_lists_ide_commands_with_their_shortcuts(self):
         p = self.page
         self.until("!!document.getElementById('qo-open')", "the page")
-        self.press("Control+Shift+P")
+        self.press("Control+K")
         p.wait_for_selector("#qo:not([hidden])")
-        self.assertEqual(">", p.input_value("#qo-input"))
         p.fill("#qo-input", ">close tab")
         row = p.locator("#qo-results .qo-row", has_text="Tabs: close tab").first
         row.wait_for()
@@ -47,15 +46,24 @@ class ThePaletteRunsCommandsAndJumps(H.IdeFlow):
         self.until("MK.nav.path === 'shop/text.py' && MK.nav.line === 5",
                    "the cursor on title_slug's line (5)")
 
-    def test_4_mod_g_goes_to_a_line(self):
+    def test_4_colon_in_mod_k_goes_to_a_line(self):
         p = self.page
-        self.press("Control+G")
+        self.press("Control+K")
         p.wait_for_selector("#qo:not([hidden])")
-        self.assertEqual(":", p.input_value("#qo-input"))
         p.fill("#qo-input", ":2")
-        p.locator("#qo-results .qo-row").first.wait_for()
+        # wait for THE line row (a row from the previous query may still be first for a moment)
+        self.until("(() => { const r = document.querySelector('#qo-results .qo-row');"
+                   " return !!(r && r.textContent.includes('Go to line 2')); })()", "the line row")
         self.press("Enter")
         self.until("MK.nav.line === 2", "line 2")
+
+    def test_5_the_removed_openers_open_nothing(self):
+        """UX-SIMPLIFY #21: ⌘⇧P and ⌘G were deleted — one palette, opened by ⌘K (or ⌘P)."""
+        p = self.page
+        for keys in ("Control+Shift+P", "Control+G"):
+            self.press(keys)
+            p.wait_for_timeout(300)
+            self.assertTrue(p.evaluate("document.getElementById('qo').hidden"), keys + " opened the palette")
 
 
 class TabsOpenCloseAndReopen(H.IdeFlow):
@@ -80,7 +88,7 @@ class TabsOpenCloseAndReopen(H.IdeFlow):
         p = self.page
         self.until("document.getElementById('diff-title').textContent !== 'Loading…'"
                    " && document.querySelectorAll('#tabstrip .tab').length > 0", "the review's tab")
-        self.press("Control+Shift+P")
+        self.press("Control+K")
         p.fill("#qo-input", ">tabs: close all")
         p.locator("#qo-results .qo-row", has_text="Tabs: close all").first.click()
         try:
@@ -96,6 +104,17 @@ class TabsOpenCloseAndReopen(H.IdeFlow):
         self.count_is(2, "two tabs")
         self.assertEqual(["text.py", "test_text.py"], self.tabs())
         self.assertEqual("test_text.py", self.active())
+
+    def test_1b_the_tab_controls_are_24_px_targets(self):
+        """§6 WCAG 2.5.8 (UX-SIMPLIFY): the active tab's × is a 24×24 hit area at least, not an
+        18 px glyph; Δ (on a tab that has a change) is held to the same bar by its CSS."""
+        box = self.page.locator("#tabstrip .tab.active .tab-x").bounding_box()
+        self.assertGreaterEqual(min(box["width"], box["height"]), 24, box)
+        dl = self.page.evaluate(
+            "(() => { const b = document.createElement('button'); b.className = 'tab-delta';"
+            " document.getElementById('tabstrip').append(b); const r = b.getBoundingClientRect();"
+            " b.remove(); return [r.width, r.height]; })()")
+        self.assertGreaterEqual(min(dl), 24, dl)
 
     def test_2_alt_w_closes_the_active_tab(self):
         self.press("Alt+W")
@@ -129,10 +148,46 @@ class FindInTheCurrentFile(H.IdeFlow):
         self.press("Control+F")
         p.wait_for_selector("#find-bar:not([hidden])")
         p.fill("#find-input", "slug")
-        # text.py: `def slugify`, `def title_slug`, `return slugify(` -> 3; ".join(title" is not one
-        self.text_until("#find-bar .fb-count", "of 3", "the count to read n of 3")
-        self.assertEqual("1 of 3", p.text_content("#find-bar .fb-count").strip())
-        self.assertEqual(3, self.marks())
+        # text.py: `def slugify`, `def title_slug`, `return slugify(` -> 3; ".join(title" is not one.
+        # ONE atomic read of the state: the count AND the marks it counts. (Highlight tokens can
+        # arrive after the search and repaint the rows; the bar re-searches, so the state settles
+        # to this - waiting for the count alone and reading the marks later is the race.)
+        self.until("(() => { const c = document.querySelector('#find-bar .fb-count');"
+                   " return !!c && c.textContent.trim() === '1 of 3'"
+                   " && document.querySelectorAll('#code mark').length === 3; })()",
+                   "the count to read 1 of 3 with 3 highlights in the text")
+
+    def test_1b_a_repaint_never_leaves_a_stale_count(self):
+        """A re-render that detaches the marks must not leave the old `n of m` standing: right
+        after the repaint (one microtask, before the debounced re-search) the count is not a
+        number; once settled it is 1 of 3 again with 3 highlights."""
+        stale = self.page.evaluate(
+            "(async () => { MK.paintCodeRows(true); await Promise.resolve();"
+            " return [document.querySelector('#find-bar .fb-count').textContent.trim(),"
+            " document.querySelectorAll('#code mark').length]; })()")
+        self.assertFalse(stale[0] == "1 of 3" and stale[1] == 0, "stale count over zero marks: %r" % (stale,))
+        self.until("(() => document.querySelector('#find-bar .fb-count').textContent.trim() === '1 of 3'"
+                   " && document.querySelectorAll('#code mark').length === 3)()",
+                   "the bar to settle again after the repaint")
+
+    def test_1c_closing_cancels_a_pending_re_search(self):
+        """Esc inside the 60 ms re-search window must not leave highlights behind. Deterministic:
+        the page's timers are captured, a repaint arms the re-search, Esc closes the bar, and only
+        THEN are the captured timers fired by hand (as if the 60 ms had elapsed)."""
+        r = self.page.evaluate(
+            "(async () => { const t0 = window.setTimeout, c0 = window.clearTimeout, q = new Map(); let n = 0;"
+            " window.setTimeout = (fn) => { const id = ++n; q.set(id, fn); return id; };"
+            " window.clearTimeout = (id) => { q.delete(id); };"
+            " try { MK.paintCodeRows(true); await Promise.resolve();"
+            "  document.getElementById('find-input').dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));"
+            "  for (const fn of [...q.values()]) fn(); }"
+            " finally { window.setTimeout = t0; window.clearTimeout = c0; }"
+            " return document.querySelectorAll('#code mark').length; })()")
+        self.assertEqual(0, r, "highlights left behind by a re-search that outlived the bar")
+        self.press("Control+F")                        # back to the open-bar state test_2 steps in
+        self.until("(() => document.querySelector('#find-bar .fb-count').textContent.trim() === '1 of 3'"
+                   " && document.querySelectorAll('#code mark').length === 3)()",
+                   "the bar to reopen on 1 of 3")
 
     def test_2_enter_steps_to_the_next_match(self):
         self.press("Enter")

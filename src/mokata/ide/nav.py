@@ -63,7 +63,7 @@ def contained_rel(root: str, path: str) -> str:
         raise PathRefused("`..` is refused")
     rel = S.rel_path(root, path)
     if rel is None:
-        raise PathRefused("outside the repository")
+        raise PathRefused(S.refusal(root, path, "outside the repository"))
     return rel
 
 
@@ -156,6 +156,13 @@ def _page(rows: List[Any], offset: int, limit: int) -> Tuple[List[Any], Optional
     return got, (nxt if nxt < len(rows) else None)
 
 
+def _sole_chain(idx: "_DirIndex", d: str) -> str:
+    """Follow `d` down while it holds exactly one directory and no file of its own."""
+    while len(idx.subdirs[d]) == 1 and not idx.direct[d]:
+        d = next(iter(idx.subdirs[d]))
+    return d
+
+
 def tree(root: str, dir: str = "", filter: str = "", offset: int = 0,
          limit: int = TREE_PAGE) -> Dict[str, Any]:
     """The explorer, LAZY (0.0.26 P35, G13/R19). It used to send every path (TypeScript: 50,000
@@ -189,9 +196,18 @@ def tree(root: str, dir: str = "", filter: str = "", offset: int = 0,
         d = contained_rel(root, d)
         if d not in idx.subdirs:
             raise PathRefused("no such directory in the explorer's list")
-    rows: List[Dict[str, Any]] = [
-        {"kind": "dir", "path": sd, "name": sd[sd.rfind("/") + 1:], "files": idx.under.get(sd, 0)}
-        for sd in sorted(idx.subdirs[d])]
+    rows: List[Dict[str, Any]] = []
+    for sd in sorted(idx.subdirs[d]):
+        row: Dict[str, Any] = {"kind": "dir", "path": sd, "name": sd[sd.rfind("/") + 1:],
+                               "files": idx.under.get(sd, 0)}
+        deep = _sole_chain(idx, sd)
+        if deep != sd:
+            # 0.0.27 P11 — compact folders: `src/mokata/ide` shows as ONE row when every directory
+            # on the way holds nothing but the next one. `compact_path` is the chain's last
+            # directory (what to list), `compact_name` the row's label, relative to this listing.
+            row["compact_path"] = deep
+            row["compact_name"] = deep[len(d) + 1:] if d else deep
+        rows.append(row)
     rows += [{"kind": "file", "path": p, "name": p[p.rfind("/") + 1:]}
              for p in sorted(idx.direct[d])]
     got, nxt = _page(rows, offset, limit)
@@ -416,12 +432,8 @@ def matcher_name() -> str:
         return "python-floor"
 
 
-def _floor_score(q: str, cand: str) -> Optional[float]:
-    """The pure-Python floor: a case-insensitive SUBSEQUENCE match, scored for consecutive runs,
-    word-boundary hits and a basename hit, minus a length penalty. None = no match."""
-    lc = cand.lower()
-    base_start = lc.rfind("/") + 1
-    pos = -1
+def _run_score(q: str, cand: str, lc: str, base_start: int, pos: int) -> Optional[float]:
+    """Score the leftmost subsequence match of `q` in `lc` that starts after `pos`; None = none."""
     score = 0.0
     run = 0
     for ch in q:
@@ -439,6 +451,25 @@ def _floor_score(q: str, cand: str) -> Optional[float]:
         if nxt >= base_start:
             score += 1.5
         pos = nxt
+    return score
+
+
+def _floor_score(q: str, cand: str) -> Optional[float]:
+    """The pure-Python floor: a case-insensitive SUBSEQUENCE match, scored for consecutive runs,
+    word-boundary hits and a basename hit, minus a length penalty. None = no match.
+
+    0.0.27 V-SCALE: the match is scored twice — leftmost over the whole path, and inside the
+    basename alone — and the better one counts. Leftmost-only let a letter in a DIRECTORY break the
+    run: `kubelet.go` matched `pkg/kubelet/kubelet.go` from the `k` of `pkg`, so on kubernetes the
+    exact file ranked below twelve others and ⌘P never listed it."""
+    lc = cand.lower()
+    base_start = lc.rfind("/") + 1
+    score = _run_score(q, cand, lc, base_start, -1)
+    if score is None:
+        return None
+    in_base = _run_score(q, cand, lc, base_start, base_start - 1)
+    if in_base is not None and in_base > score:
+        score = in_base
     if lc[base_start:].startswith(q):
         score += 10.0
     if q in lc:

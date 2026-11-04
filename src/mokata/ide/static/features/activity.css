@@ -11,7 +11,7 @@
 .activity-chip.partial { border-style: dashed; }
 .activity-chip.failed { color: var(--del); border-color: var(--del); }
 .activity-chip.failed .act-dot { background: var(--del); }
-.activity-chip.done { color: var(--accent); }
+.activity-chip.done { color: var(--accent-ink); }
 .activity-chip.done .act-dot { background: var(--accent); }
 @keyframes mk-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .activity-chip.busy .act-dot, .job-spin { animation: none; border-right-color: var(--accent); } }
@@ -22,7 +22,7 @@
 
 .act-drawer { position: fixed; top: 52px; right: 14px; width: min(460px, calc(100vw - 28px)); max-height: 70vh;
   overflow: auto; z-index: 60; background: var(--panel); border: 1px solid var(--line2); border-radius: 6px;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, .35); padding: 10px 12px; }
+  box-shadow: 0 8px 28px var(--shadow); padding: 10px 12px; }
 .act-dhead { display: flex; align-items: center; justify-content: space-between; }
 .act-dhead h2 { font-size: 13px; margin: 0; }
 .act-list { list-style: none; margin: 6px 0 0; padding: 0; }
@@ -31,7 +31,7 @@
 .act-head { display: flex; align-items: baseline; gap: 8px; }
 .act-head b { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .act-state { font-family: var(--mono); font-size: 11px; color: var(--muted); }
-.act-row.running .act-state, .act-row.queued .act-state, .act-row.partial .act-state { color: var(--accent); }
+.act-row.running .act-state, .act-row.queued .act-state, .act-row.partial .act-state { color: var(--accent-ink); }
 .act-row.failed .act-state { color: var(--del); }
 .act-row.cancelled .act-state { color: var(--amber); }
 .act-bar { height: 3px; background: var(--line); border-radius: 2px; margin: 4px 0; overflow: hidden; }

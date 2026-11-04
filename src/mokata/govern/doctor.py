@@ -708,6 +708,9 @@ def _graph_ts_install_line() -> str:
 FIX_CAPABILITIES = ("lexical", "meaning", "graph", "ts", "setup")
 FIX_STATES = ("not-installed", "model-not-local", "unbuilt", "failed", "not-wired", "not-set-up")
 _EXTRA_OF = {"lexical": "ide", "meaning": "embeddings", "graph": "full", "ts": "graph-ts"}
+# The package(s) each capability actually needs from its extra (0.0.27 UX-SIMPLIFY §6): the fix
+# line installs these, never the whole extra (the graph row used to print every `[full]` package).
+_NEEDS_OF = {"graph": ("code-review-graph",)}
 
 
 def fix_line(capability: str, state: str) -> str:
@@ -724,7 +727,7 @@ def fix_line(capability: str, state: str) -> str:
     from ..adoption_modes import setup_command_for
     if state == "not-installed" and capability in _EXTRA_OF:
         from ..install_route import plan_extra_install
-        return plan_extra_install(_EXTRA_OF[capability]).display
+        return plan_extra_install(_EXTRA_OF[capability], only=_NEEDS_OF.get(capability)).display
     if state == "model-not-local":
         return setup_command_for("memory")
     if state in ("unbuilt", "failed"):

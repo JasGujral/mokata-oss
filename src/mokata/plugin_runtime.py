@@ -92,6 +92,34 @@ def on_plugin_route(env: Optional[Mapping[str, str]] = None) -> bool:
     return bool(env.get("CLAUDE_PLUGIN_ROOT") or env.get("MOKATA_VIA_PLUGIN"))
 
 
+def slash_command(name: str, root: Optional[str] = None,
+                  env: Optional[Mapping[str, str]] = None, home: Optional[str] = None) -> str:
+    """The slash command a user types for the mokata skill `name`, as it is ACTUALLY INSTALLED:
+    on the plugin route (env) `/mokata:<name>`; else `/<bare>` when `mokata init` wrote that
+    command file in the project (`<root>/.claude/commands/`) or the user home; else the plugin's
+    `/mokata:<name>`. `<bare>` is `mokata-<name>` for a name Claude Code owns (what init writes —
+    never `/review`, `/init`). Every text that tells a human or the IDE terminal to type one asks
+    here, passing the repo root it knows."""
+    namespaced = f"/mokata:{name}"
+    if on_plugin_route(env):
+        return namespaced
+    from pathlib import Path
+    from .harness_paths import scope_base
+    from .harness_setup import CLAUDE_CODE_BUILTIN_COMMANDS
+    bare = f"mokata-{name}" if name in CLAUDE_CODE_BUILTIN_COMMANDS else name
+    bases = []
+    if root:
+        bases.append(scope_base("project", root))
+    try:
+        bases.append(scope_base("user", root or ".", home))
+    except (RuntimeError, OSError):          # no resolvable home
+        pass
+    for base in bases:
+        if (Path(base) / ".claude" / "commands" / f"{bare}.md").is_file():
+            return f"/{bare}"
+    return namespaced
+
+
 def plugin_data_dir(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
     """`${CLAUDE_PLUGIN_DATA}` — exported by Claude Code to a plugin's MCP servers and hooks only."""
     value = (os.environ if env is None else env).get("CLAUDE_PLUGIN_DATA") or ""
@@ -407,6 +435,6 @@ def _guess_data_dir(env: Mapping[str, str]) -> Optional[str]:
 __all__ = [
     "UV_PYTHON",
     "FIRST_RUN_COST", "PIN_EXTRA", "RouteCheck", "RouteReport", "UV_INSTALL_LINES",
-    "find_uvx", "first_session_line", "on_plugin_route", "pin_spec", "plugin_data_dir", "plugin_route_report",
+    "find_uvx", "first_session_line", "on_plugin_route", "slash_command", "pin_spec", "plugin_data_dir", "plugin_route_report",
     "read_runtime", "record_hook_seen", "record_runtime", "runtime_record_name", "uv_install_hint",
 ]

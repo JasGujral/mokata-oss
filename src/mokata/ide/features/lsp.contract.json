@@ -1,0 +1,155 @@
+{
+  "schemas": {
+    "LspAnswer": {
+      "type": "object",
+      "required": ["sample", "kind", "path", "line", "col", "source", "lsp", "results", "edge"],
+      "properties": {
+        "sample": {"type": "boolean"},
+        "kind": {"type": "string", "enum": ["definition", "references", "hover", "symbols", "diagnostics"]},
+        "path": {"type": "string"},
+        "line": {"type": "integer"},
+        "col": {"type": "integer"},
+        "language": {"type": ["string", "null"]},
+        "symbol": {"type": "string"},
+        "source": {"type": "string", "enum": ["lsp", "graph", "none"]},
+        "lsp": {"type": "object", "required": ["state"], "properties": {"state": {"type": "string"}, "note": {"type": "string"}}},
+        "results": {"type": "array", "items": {"type": "object"}},
+        "edge": {"type": "object"}
+      }
+    },
+    "LspServer": {
+      "type": "object",
+      "required": ["language", "server", "state", "indexing", "refused_edits", "refused_methods", "restarts"],
+      "properties": {
+        "language": {"type": "string"}, "server": {"type": "string"},
+        "state": {"type": "string", "enum": ["indexing", "ready", "stopped", "crashed"]},
+        "indexing": {"type": ["object", "null"]}, "refused_edits": {"type": "integer"},
+        "refused_methods": {"type": "array"}, "restarts": {"type": "integer"},
+        "index_job": {"type": ["string", "null"]}
+      }
+    }
+  },
+  "routes": [
+    {
+      "path": "/api/lsp", "method": "GET", "kind": "json",
+      "params": {},
+      "responses": {
+        "200": {"media": "json", "schema": {"type": "object",
+          "required": ["sample", "trust", "servers", "languages", "read_only"],
+          "properties": {
+            "sample": {"type": "boolean"},
+            "trust": {"type": "object", "required": ["trusted", "why", "command", "revoke_command", "approve_here", "will_run"],
+                      "properties": {"trusted": {"type": "boolean"}, "why": {"type": "string"}, "note": {"type": "string"},
+                                     "will_run": {"type": "array", "items": {"type": "object", "required": ["language", "server", "argv"]}},
+                                     "command": {"type": "string"}, "revoke_command": {"type": "string"},
+                                     "approve_here": {"type": "object", "required": ["available", "reason"]}}},
+            "servers": {"type": "array", "items": {"$ref": "#/schemas/LspServer"}},
+            "languages": {"type": "array", "items": {"type": "object", "required": ["language", "exts", "found", "candidates"]}},
+            "read_only": {"type": "string"}}}}
+      },
+      "probes": [{"status": 200}, {"status": 200, "demo": true}]
+    },
+    {
+      "path": "/api/lsp/trust/code", "method": "POST", "kind": "action",
+      "params": {"body": {"decision": "trust"}},
+      "unprobed": {"200": "{printed, expires_in, tries, note} — needs the server at a human TTY (tests/test_p24_ide_lsp_readonly.py covers it)",
+                   "429": "RateLimited {error, note, retry_in} — a second mint within 3 s"},
+      "responses": {
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}},
+        "409": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"body": {}, "status": 400},
+                 {"body": {"decision": "trust"}, "status": 409},
+                 {"body": {"decision": "trust"}, "status": 409, "demo": true}]
+    },
+    {
+      "path": "/api/lsp/trust", "method": "POST", "kind": "action",
+      "params": {"body": {"decision": "trust | revoke", "code": "with trust: the one-time code printed in the server's terminal"}},
+      "unprobed": {"200": "{decision, trust, stopped} — a revoke on a real repo, or a trust with the TTY code (tests/test_p24_ide_lsp_readonly.py covers both)",
+                   "403": "BadCode {error, note} — a wrong or spent code at a TTY"},
+      "responses": {
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}},
+        "409": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"body": {"decision": "maybe"}, "status": 400},
+                 {"body": {"decision": "trust", "code": "ABCD-EFGH"}, "status": 409},
+                 {"body": {"decision": "revoke"}, "status": 409, "demo": true}]
+    },
+    {
+      "path": "/api/lsp/start", "method": "POST", "kind": "action",
+      "params": {"body": {"language": "python | typescript | go | rust | a language from ~/.mokata/lsp.json"}},
+      "unprobed": {"200": "{started, already, language, server} — needs a trusted workspace and a server binary (tests/test_p24_ide_lsp_readonly.py covers it)"},
+      "responses": {
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}},
+        "409": {"media": "json", "schema": {"type": "object", "required": ["started", "error", "note"],
+                 "properties": {"started": {"type": "boolean"}, "error": {"type": "string"}, "note": {"type": "string"}}}}
+      },
+      "probes": [{"body": {"language": "cobol"}, "status": 400},
+                 {"body": {"language": "python"}, "status": 409},
+                 {"body": {"language": "python"}, "status": 409, "demo": true}]
+    },
+    {
+      "path": "/api/lsp/stop", "method": "POST", "kind": "action",
+      "params": {"body": {"language": "the language whose server to stop"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"type": "object", "required": ["stopped", "language"],
+                 "properties": {"stopped": {"type": "boolean"}, "language": {"type": "string"}}}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"body": {"language": "python"}, "status": 200},
+                 {"body": {}, "status": 400}]
+    },
+    {
+      "path": "/api/lsp/definition", "method": "GET", "kind": "json",
+      "params": {"query": {"path": "repo-relative file", "line": "1-based line", "col": "1-based character column"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"$ref": "#/schemas/LspAnswer"}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"query": {"path": "src/app/core.py", "line": "8", "col": "16"}, "status": 200},
+                 {"query": {"path": "src/app/core.py", "line": "0", "col": "1"}, "status": 400},
+                 {"query": {"path": "../etc/passwd", "line": "1", "col": "1"}, "status": 400},
+                 {"query": {"path": "src/app/core.py", "line": "1", "col": "5"}, "status": 200, "demo": true}]
+    },
+    {
+      "path": "/api/lsp/references", "method": "GET", "kind": "json",
+      "params": {"query": {"path": "repo-relative file", "line": "1-based line", "col": "1-based character column"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"$ref": "#/schemas/LspAnswer"}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"query": {"path": "src/app/core.py", "line": "1", "col": "5"}, "status": 200},
+                 {"query": {"status": "x"}, "status": 400}]
+    },
+    {
+      "path": "/api/lsp/hover", "method": "GET", "kind": "json",
+      "params": {"query": {"path": "repo-relative file", "line": "1-based line", "col": "1-based character column"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"$ref": "#/schemas/LspAnswer"}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"query": {"path": "src/app/core.py", "line": "1", "col": "5"}, "status": 200},
+                 {"query": {"path": "src/app/core.py", "line": "x", "col": "1"}, "status": 400}]
+    },
+    {
+      "path": "/api/lsp/symbols", "method": "GET", "kind": "json",
+      "params": {"query": {"path": "repo-relative file"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"$ref": "#/schemas/LspAnswer"}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"query": {"path": "src/app/core.py"}, "status": 200},
+                 {"query": {}, "status": 400}]
+    },
+    {
+      "path": "/api/lsp/diagnostics", "method": "GET", "kind": "json",
+      "params": {"query": {"path": "repo-relative file"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"$ref": "#/schemas/LspAnswer"}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"query": {"path": "src/app/core.py"}, "status": 200},
+                 {"query": {"path": "nope/missing.py"}, "status": 400}]
+    }
+  ]
+}

@@ -21,7 +21,7 @@ import _support  # noqa: F401  (puts src/ on the path)
 from mokata import extras_install, install_route as R
 
 REQUIRES = [
-    'mcp<2,>=1.2',
+    'mcp<2,>=1.30',
     'model2vec>=0.3; extra == "embeddings"',
     'numpy>=1.24; extra == "embeddings"',
     'tree-sitter>=0.23; extra == "graph-ts"',

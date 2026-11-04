@@ -339,7 +339,7 @@ class _Browser(unittest.TestCase):
         return pg
 
     def wl_state(self, pg, key):
-        return pg.evaluate("(k) => { const r = document.querySelector(`#view-welcome li.wl-row[data-key=${k}]`); return r ? r.dataset.state : null; }", key)
+        return pg.evaluate("(k) => { const r = document.querySelector(`#hp-welcome li.wl-row[data-key=${k}]`); return r ? r.dataset.state : null; }", key)
 
 
 @unittest.skipIf(SKIP, SKIP)
@@ -400,30 +400,34 @@ class InTheBrowser_RealIde(_Browser):
     @unittest.skipUnless(_crg(), "code-review-graph is not installed in this interpreter")
     def test_1_R34_welcome_first_then_set_up_then_build_the_graph_then_impact_turns_structural(self):
         pg = self.page()
-        pg.wait_for_function("() => document.body.dataset.mode === 'welcome'", timeout=20000)
-        g = "#view-welcome li.wl-row[data-key=graph]"
+        # UX-SIMPLIFY §6 P1: a first run never takes the window — it lands on Review, whose empty
+        # state (and the health chip) lead to Get started, a section of the Health dialog
+        self.assertEqual("review", pg.evaluate("document.body.dataset.mode"))
+        pg.click("#health-chip")
+        g = "#hp-welcome li.wl-row[data-key=graph]"
         pg.wait_for_selector(g)
         self.assertEqual("needs-setup", self.wl_state(pg, "sessions"))
-        self.assertTrue(pg.is_disabled("#view-welcome li.wl-row[data-key=sessions] button.wl-open"))
+        self.assertTrue(pg.is_disabled("#hp-welcome li.wl-row[data-key=sessions] button.wl-open"))
         self.assertIn("(floor)", pg.inner_text(g + " button.wl-open"))
         self.assertTrue(pg.locator(g + " .wl-cost").inner_text())
         # P34 finding: browsing writes nothing for this repo — not in it, not in the profile
-        pg.click("nav.rail .rail-btn[data-screen=navigate]")
+        pg.click("#hp-close")
+        pg.click("#tab-navigate")
         pg.evaluate("() => MK.openFile('src/app/core.py', 1, null)")
         pg.wait_for_timeout(1500)                           # the tabs' debounced save
         self.assertEqual("", self._git_clean())
         files = _home_files(self.home)
         self.assertFalse([f for f in files if not f.endswith(("server.json", "repo.txt"))], files)
-        pg.click("nav.rail .rail-btn[data-screen=welcome]")
+        pg.click("#health-chip")
         # Set up -> consent (what it writes) -> confirm -> job -> ready
-        pg.click("#view-welcome li.wl-row[data-key=sessions] button.wl-act")
+        pg.click("#hp-welcome li.wl-row[data-key=sessions] button.wl-act")
         pg.wait_for_selector("#wl-consent h3")
         self.assertIn(".mokata/", pg.inner_text("#wl-consent"))
         self.assertEqual("", self._git_clean(), "nothing is written before Confirm")
         pg.click("#wl-consent button.wl-confirm")
-        pg.wait_for_function("() => { const r = document.querySelector('#view-welcome li.wl-row[data-key=sessions]'); return r && r.dataset.state === 'ready'; }", timeout=90000)
+        pg.wait_for_function("() => { const r = document.querySelector('#hp-welcome li.wl-row[data-key=sessions]'); return r && r.dataset.state === 'ready'; }", timeout=90000)
         self.assertTrue(os.path.isfile(os.path.join(self.repo, ".mokata", "manifest.json")))
-        self.assertFalse(pg.is_disabled("#view-welcome li.wl-row[data-key=sessions] button.wl-open"))
+        self.assertFalse(pg.is_disabled("#hp-welcome li.wl-row[data-key=sessions] button.wl-open"))
         # Build graph -> consent names .code-review-graph + its cost -> job -> structural Impact
         pg.wait_for_selector(g + " button.wl-act[data-action=build-graph]", timeout=20000)
         pg.click(g + " button.wl-act")
@@ -437,6 +441,7 @@ class InTheBrowser_RealIde(_Browser):
         self.assertIn("(structural)", pg.inner_text(g + " button.wl-open"))
         pg.click(g + " button.wl-open")
         self.assertEqual("graph", pg.evaluate("document.body.dataset.mode"))
+        self.assertTrue(pg.is_hidden("#hp"), "opening a capability closes Health")
         self.assertEqual([], self.errors)
 
     def test_2_R33_plan_worktrees_tree_and_outline_errors_have_retry_and_the_cli_twin(self):
@@ -451,21 +456,24 @@ class InTheBrowser_RealIde(_Browser):
                                "**/api/tree*": maybe_503, "**/api/file?*": maybe_503})
         probe = "(s) => { const b = document.querySelector(s); return [!!b.querySelector('button'), (b.querySelector('code') || {}).textContent || '', b.textContent]; }"
         got = {}
-        pg.click("nav.rail .rail-btn[data-screen=plan]")
+        pg.click("#tab-sessions")
+        pg.click("#subtab-plan")
         pg.wait_for_selector("#plan-state .region-msg.error", timeout=10000)
         got["plan"] = pg.evaluate(probe, "#plan-state .region-msg.error")
-        pg.click("nav.rail .rail-btn[data-screen=navigate]")
+        pg.click("#tab-navigate")
         pg.evaluate("() => MK.loadTree(true)")
         pg.wait_for_selector("#tree .region-msg.error", timeout=10000)
         got["tree"] = pg.evaluate(probe, "#tree .region-msg.error")
         pg.evaluate("() => MK.openFile('src/app/core.py', 1, null)")
+        pg.click("#ltab-outline")                # UX-SIMPLIFY: Code's side panel: Files · Search · Outline
         pg.wait_for_selector("#outline .region-msg.error", timeout=10000)
         got["outline"] = pg.evaluate(probe, "#outline .region-msg.error")
         fail["on"] = False                     # Retry, once the server answers, shows content
         pg.click("#outline .region-msg.error button")
         pg.wait_for_function("() => !document.querySelector('#outline .region-msg.error')", timeout=10000)
         fail["on"] = True
-        pg.click("nav.rail .rail-btn[data-screen=worktrees]")
+        pg.click("#tab-sessions")
+        pg.click("#subtab-worktrees")
         pg.wait_for_selector("#view-worktrees .region-msg.error", timeout=10000)
         got["worktrees"] = pg.evaluate(probe, "#view-worktrees .region-msg.error")
         fail["on"] = False
@@ -477,6 +485,13 @@ class InTheBrowser_RealIde(_Browser):
             self.assertNotIn("Service Unavailable", text, f"{k}: the raw server text is shown")
         self.assertEqual({"plan", "tree", "outline", "worktrees"}, set(got))
         self.assertEqual([], self.errors)
+
+
+def _restore_env(key, value):
+    if value is None:
+        os.environ.pop(key, None)
+    else:
+        os.environ[key] = value
 
 
 def _free_port():
@@ -497,42 +512,39 @@ class InTheBrowser_InProcess(_Browser):
         from playwright.sync_api import sync_playwright
         from mokata.ide import nav
         from mokata.ide.server import AppState, build_app
+        # Every step registers its own undo BEFORE the next step can fail, so a setUpClass that
+        # raises half way (no Chromium here, a port race) leaves nothing behind: no patched HOME
+        # for the next module in the process, no running Playwright loop, no server thread.
         cls._t = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls._t.cleanup)
+        # Chromium is found through the REAL home (~/Library/Caches/ms-playwright on macOS,
+        # %LOCALAPPDATA% on Windows), so it is launched BEFORE HOME is pointed at the sandbox.
+        cls.pw = sync_playwright().start()
+        cls.addClassCleanup(cls.pw.stop)
+        cls.browser = cls.pw.chromium.launch()
+        cls.addClassCleanup(cls.browser.close)
         base = os.path.realpath(cls._t.name)
         cls.repo, cls.home = os.path.join(base, "repo"), os.path.join(base, "home")
         os.makedirs(cls.repo)
         os.makedirs(cls.home)
-        cls._env = {k: os.environ.get(k) for k in ("HOME", "USERPROFILE")}
+        for k in ("HOME", "USERPROFILE"):
+            cls.addClassCleanup(_restore_env, k, os.environ.get(k))
         os.environ["HOME"] = os.environ["USERPROFILE"] = cls.home
         P29.stranger_repo(cls.repo)
+        cls.addClassCleanup(nav.close_layers)
         nav.close_layers()
         port = _free_port()
         cls.state = AppState(cls.repo, "tok39", port, None, False)
+        cls.addClassCleanup(cls.state.close, 2)
         cls.server = uvicorn.Server(uvicorn.Config(build_app(cls.state), host="127.0.0.1",
                                                    port=port, log_level="warning",
                                                    lifespan="off"))
+        cls.addClassCleanup(setattr, cls.server, "should_exit", True)
         threading.Thread(target=cls.server.run, daemon=True).start()
         t0 = time.time()
         while not cls.server.started and time.time() - t0 < 20:
             time.sleep(0.05)
         cls.url = f"http://127.0.0.1:{port}/pair?t=tok39"
-        cls.pw = sync_playwright().start()
-        cls.browser = cls.pw.chromium.launch()
-
-    @classmethod
-    def tearDownClass(cls):
-        from mokata.ide import nav
-        cls.browser.close()
-        cls.pw.stop()
-        cls.server.should_exit = True
-        cls.state.close(2)
-        nav.close_layers()
-        for k, v in cls._env.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
-        cls._t.cleanup()
 
     def test_R35_a_failing_graph_view_shows_degraded_graph_views_failing_in_health_with_retry(self):
         from mokata.errors import MokataError
@@ -563,7 +575,7 @@ class InTheBrowser_InProcess(_Browser):
         with mock.patch.object(SR, "EMBEDDER_FACTORY", lambda: FakeEmbedder()):
             pg = self.page()
             pg.wait_for_function("() => document.body.dataset.mode === 'welcome'", timeout=20000)
-            sel = "#view-welcome li.wl-row[data-key=meaning]"
+            sel = "#hp-welcome li.wl-row[data-key=meaning]"
             pg.wait_for_selector(sel + " button.wl-act")
             self.assertTrue(pg.is_disabled(sel + " button.wl-open"), "nothing to open yet")
             pg.click(sel + " button.wl-act")

@@ -18,7 +18,8 @@ CLI and plugin use — no separate logic):
 
 **Committed specs are opt-in.** By default a spec lives only in `.mokata/temp_local/` (git-ignored),
 so a CI checkout has none and the spec-drift leg prints *"no committed specs — spec drift not
-checked"*. That is a visible skip, never a silent pass, and the check still exits 0. To have CI check
+checked"*. That leg is **absent** — neither a pass nor a failure. It is shown as *not checked*, never
+counted as a pass, and the check still exits 0 (it did not fail; it also did not pass). To have CI check
 specs, turn on `settings.specs.commit` (human-gated, like every config change):
 
 ```bash
@@ -29,19 +30,25 @@ From then on, approving a spec (emit or amend) also writes the approved spec to
 `.mokata/specs/<run>.json`, inside the same human-gated commit. The approval preview names the file.
 Commit it with the change it describes. The completeness and spec-awareness legs read these files too.
 
+On a CI checkout (no run state) the completeness leg reads these committed specs, and its output lists
+the **AC -> test map**: each acceptance criterion with the test that covers it, or `(no test)`.
+
 Each block names the **single unblock action** (e.g. *write a test for the unmapped AC*, or
 *confirm/amend the affected spec*).
 
 ## It never false-blocks (degrade-clean)
 
 A PR gate that cries wolf gets turned off. mokata only flags what it can genuinely check — it
-**PASSES** (and says why) when there's nothing to:
+**does not fail** (and says why) when there's nothing to check. Every leg ends **pass**, **fail** or
+**absent**, and *absent is not a pass*: the headline reads `NOT CHECKED` when no leg graded anything
+and `PASSED (PARTIAL: … not checked)` when some did, the comment names each unchecked leg, and the
+green tick is kept for a check that passed in full.
 
-- the repo isn't mokata-initialized → nothing to check;
-- there's **no saved spec** → the completeness leg skips;
-- the repo doesn't tag its tests with **AC ids** → the completeness leg skips (no convention to
+- the repo isn't mokata-initialized → nothing was checked;
+- there's **no saved spec** → the completeness leg is absent;
+- the repo doesn't tag its tests with **AC ids** → the completeness leg is absent (no convention to
   enforce), rather than blocking;
-- there's **no saved spec corpus** → the spec-awareness leg skips;
+- there's **no saved spec corpus** → the spec-awareness leg is absent;
 - **no code graph** → spec-awareness falls back to lexical/file overlap and says so.
 
 ## Opt in — add the workflow
@@ -72,10 +79,10 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install --quiet mokata
       - id: check
-        uses: JasGujral/mokata-oss/.github/actions/mokata-check@v0.0.26
+        uses: JasGujral/mokata-oss/.github/actions/mokata-check@v0.0.27
         with:
           base: ${{ github.event.pull_request.base.sha }}
-          fail-on-block: "true"          # set "false" for report-only (never fails the job)
+          fail-on-block: "true"          # "false" = report-only: exits 0 unless the check could not run (exit 2)
       - name: Post the mokata review comment
         if: always() && hashFiles(steps.check.outputs.comment-file) != ''
         env:
@@ -95,7 +102,20 @@ The reusable composite action lives at
 | `path` | `.` | repo root mokata operates on |
 | `install` | *(empty)* | optional `pip install` target (e.g. `mokata` or `-e .`) |
 | `comment-file` | `mokata-check-comment.md` | where the review-comment body is written |
+| `evidence-file` | `mokata-evidence.md` | the evidence render (verdicts + gate evidence + committed run records), appended to the job's step summary |
 | `fail-on-block` | `true` | fail the check on a real block (`false` = report-only) |
+
+## Evidence in the comment
+
+Under the verdicts the comment shows the gate **evidence**: the AC → test checks this check ran
+(each test file linked at the PR's commit), and any **run record the PR committed** with
+`mokata evidence commit` (`.mokata/runs/<run>/`: the run's approvals, writes, gate verdicts and
+lowered gates, field-allowlisted and redacted). A committed record is the PR author's claim — it is
+marked `[committed, unverified]` on every line and never changes the verdict. With none committed
+the comment says so (*not opted in* / *none in this PR*), never "no evidence found". GitHub limits
+a comment to 65,536 characters and a step summary to 1 MiB: mokata keeps failing sections first,
+leaves any section out whole rather than cutting it, and says how many were left out and where to
+find them.
 
 ## Run it locally
 
@@ -109,7 +129,7 @@ mokata ci-check --files src/payments.py,tests/test_payments.py
 mokata ci-check --base origin/main --comment-file mokata-check-comment.md
 ```
 
-Exit code is non-zero on a real block (0 with `--no-fail`). Inside Claude Code the read-only
+Exit code is 1 on a real block, 0 on any verdict with `--no-fail`, and 2 when the check could not run (an unresolvable `--base`, usually a shallow checkout) even with `--no-fail`. Inside Claude Code the read-only
 `ci_check` MCP tool returns the same verdict + comment body.
 
 See also [the pipeline & gates](../concepts/pipeline.md) and

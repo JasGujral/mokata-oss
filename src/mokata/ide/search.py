@@ -39,7 +39,7 @@ from ..quiet_spawn import hidden
 from . import nav
 from ..errors import MokataError
 from ..knowledge.cancel import Cancelled, checkpoint, kill_on_cancel, report
-from ..repo_paths import name_of
+from ..repo_paths import hardlinked_private, name_of
 
 # 0.0.26 P36 (G13/R16) — no hard stop. A word/regex answer is a PAGE of `PAGE_MATCHES` hits in a
 # deterministic order (rg `--sort path`); `next_offset` asks for the next page ("load more"), so
@@ -114,15 +114,29 @@ class _Page:
     """Collects one page of hits: skips the first `offset` (they were on earlier pages), keeps the
     next `page`, and notes whether at least one more exists (the "load more" signal)."""
 
-    def __init__(self, offset: int, page: int):
+    def __init__(self, offset: int, page: int, root: str):
         self.offset, self.page = max(0, offset), max(1, page)
+        self.root = root
         self.seen = 0
         self.kept = 0
         self.more = False
         self.found: Dict[str, list] = {}
+        self._private: Dict[str, bool] = {}
+
+    def private(self, rel: str) -> bool:
+        """0.0.27 SEC-HARDEN — a file the walk listed under an ordinary name can still be a HARD
+        LINK into `.git`/`.mokata`; its lines are never a hit. Judged once per file that HAS a hit
+        (one stat), so a search costs nothing extra for the files it does not match."""
+        got = self._private.get(rel)
+        if got is None:
+            from . import snapshots as S
+            got = self._private[rel] = S.rel_path(self.root, rel) is None
+        return got
 
     def add(self, rel: str, hit: Dict[str, Any]) -> bool:
         """False once the page is full AND one more hit proved there is a next page."""
+        if self.private(rel):
+            return True
         self.seen += 1
         if self.seen <= self.offset:
             return True
@@ -317,7 +331,7 @@ def text(root: str, q: str, mode: str = "word", case: bool = False,
     why."""
     q = q or ""
     mode = "regex" if mode == "regex" else "word"
-    pg = _Page(int(offset or 0), int(page or PAGE_MATCHES))
+    pg = _Page(int(offset or 0), int(page or PAGE_MATCHES), root)
     out: Dict[str, Any] = {"sample": False, "q": q, "mode": mode, "engine": engine_name(),
                            "engine_note": "", **_shape(root, pg)}
     if not q.strip():
@@ -341,7 +355,7 @@ def text(root: str, q: str, mode: str = "word", case: bool = False,
         if out["engine"] == "rg":
             out["engine_note"] = "rg could not answer this pattern — the pure-Python floor did"
         out["engine"] = "python-floor"
-        pg = _Page(pg.offset, pg.page)                # rg's half-read page is discarded whole
+        pg = _Page(pg.offset, pg.page, root)          # rg's half-read page is discarded whole
         _floor(root, sorted(scope) if scope is not None else files, pat, pg)
     out.update(_shape(root, pg))
     return out
@@ -761,6 +775,8 @@ def build_index(root: str, emb: Any, *,
                     st = os.stat(ab)
                 except OSError:
                     continue
+                if hardlinked_private(root, st):
+                    continue                  # SEC-HARDEN: a hard link into .git/.mokata is not code
                 hit = prev.get(rel)
                 if hit and hit.get("mtime") == st.st_mtime and hit.get("size") == st.st_size:
                     b = old_blob(hit)

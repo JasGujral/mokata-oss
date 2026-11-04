@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import argparse
 
-from ..knowledge.index import skipped_checkout_lines
+from ..knowledge.index import coverage_line, skipped_checkout_lines
 from ._common import (
     AdapterContract,
     negotiate,
@@ -38,6 +38,8 @@ def cmd_index(args: argparse.Namespace) -> int:
     # purpose would otherwise just find it unsearchable with nothing to read.
     for line in skipped_checkout_lines(idx.skipped_checkouts):
         print(line)
+    # Coverage is part of "done": the index covers Python only, and a TS/JS/Go repo must read that.
+    print(coverage_line(idx.coverage()))
     # Stage 35f: name the code-graph backend the refresh runs against — the adopted graph
     # (e.g. code-review-graph) when present, the floor when not. Degrade-clean: never a hard error.
     # (The example read `neo4j` until 0.0.18 stage 14 removed it; an example is a claim.)

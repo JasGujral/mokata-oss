@@ -179,7 +179,8 @@ def _policy(path: str, tool: str, *, human_approved: bool = False,
 
 
 def _consent(path: str, tool: str, args: Dict[str, Any],
-             proposal_id: str, *, surface: Optional["Surface"] = None) -> approval.Consent:
+             proposal_id: str, *, surface: Optional["Surface"] = None,
+             run_id: Optional[str] = None) -> approval.Consent:
     """THE gate. Two questions, in order.
 
     1. MAY this tool write at all? (K3/SI.4) A `read-only` tool is refused HERE, before it proposes
@@ -196,16 +197,21 @@ def _consent(path: str, tool: str, args: Dict[str, Any],
     MCP-SURF — `surface` is an OPTIONAL already-resolved `Surface`, forwarded to `_trust` so a tool
     that resolved one at its top does not pay for a second `Surface.load` here. It feeds the trust
     READ only; it cannot reach the consent decision, which still comes solely from
-    `approval.consent` over a record a human minted out-of-band."""
+    `approval.consent` over a record a human minted out-of-band.
+
+    0.0.27 P21 — `run_id` names the approval run when a tool's proposals are deliberately shared
+    across surfaces (the gated merge's `gated-merge`: one proposal id from the CLI, MCP and the
+    IDE). It selects WHICH human-minted record is verified; it cannot reach GRANTED by itself."""
     if not _trust(path, surface).can_write(tool, MCP_SURFACE):
         AuditLedger.from_mokata_dir(_mokata_dir(path)).record(
             "write_gate", write_kind="mcp", target=f"tool:{tool}", actor="mcp",
-            decision="blocked", reason="read-only trust")
+            decision="blocked", reason="read-only trust", run=_current_run())
         return approval.Consent(
             approval.REFUSED, code=REFUSED_READ_ONLY,
             reason=(f"'{tool}' is read-only on the mcp surface — writes are not permitted "
                     f"(settings.trust)"))
-    return approval.consent(path, tool=tool, args=args, run_id=_approval_run(path),
+    return approval.consent(path, tool=tool, args=args,
+                            run_id=_approval_run(path) if run_id is None else run_id,
                             proposal_id=proposal_id)
 
 
@@ -365,3 +371,10 @@ def _gated_write(mokata_dir: str, kind: str, target: str, content: str,
             "reason": outcome.reason,
             "findings": [f.kind for f in outcome.findings],
             "result": box.get("result")}
+
+
+def _current_run() -> str:
+    """G3-EVIDENCE — the run this ledger row belongs to (`session.current_run_id`), so a committed
+    run record can export it. Imported late: the session module must not load at import time here."""
+    from ..session import current_run_id
+    return current_run_id()

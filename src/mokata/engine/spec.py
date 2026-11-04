@@ -154,6 +154,7 @@ class TestRef:
     ac_ids: List[str] = field(default_factory=list)
     path: str = ""
     line: int = 0
+    resolved_from: str = ""     # L9 r4 — the bare name this was resolved from at emit ("" = as given)
 
 
 @dataclass
@@ -180,6 +181,11 @@ class Spec:
     # recommended answer) and the stated assumptions the spec proceeds on.
     clarifications: List["Clarification"] = field(default_factory=list)
     assumptions: List["Assumption"] = field(default_factory=list)
+    # L9 r3 — set ONLY by `committed_specs.load_committed`: the spec was read from the tracked
+    # `.mokata/specs/` and `tests` is its OWN AC -> test map (None = the file records none, so its
+    # tests cannot be graded). Never serialized by `to_dict`: the committed file carries the map.
+    committed: bool = False
+    tests: Optional[List[Any]] = None
 
     @property
     def ac_ids(self) -> List[str]:

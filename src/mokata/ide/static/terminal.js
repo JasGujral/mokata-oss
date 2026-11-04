@@ -88,8 +88,9 @@
     this.wrapNext = false;
   };
 
-  const C16 = ["#1b1f1d", "#ff6b6b", "#3df58c", "#ffb454", "#8ab4ff", "#d78bff", "#5fd7d7", "#d8e2dc",
-    "#5f6b64", "#ff9b9b", "#8ff5bb", "#ffd28a", "#b4ceff", "#e6b4ff", "#9af0f0", "#ffffff"];
+  // The 16 ANSI colours are the THEME's (--ansi-0 … --ansi-15 in themes.css), so a switch repaints
+  // the terminal's existing text with no redraw; 256-colour and truecolor are the program's own.
+  const C16 = Array.from({ length: 16 }, (_, i) => `var(--ansi-${i})`);
   function c256(n) {
     if (n < 16) return C16[n];
     if (n >= 232) { const v = 8 + (n - 232) * 10; return `rgb(${v},${v},${v})`; }
@@ -289,6 +290,7 @@
   }
   function render() {
     T.frame = 0;
+    if (!T.scr) return;                 // focus/blur before any session started: nothing to draw yet
     const box = $("term-screen");
     const sb = $("term-sb");
     for (const l of T.scr.sbNew.splice(0)) sb.append(drawLine(l, -1));

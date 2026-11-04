@@ -153,9 +153,11 @@ def _emit(ctx: PhaseContext, store: Any, gate: WriteGate, approve: bool) -> Phas
     # run's `emitted_spec` AND appends to the shared `spec_corpus` in the same gated commit, so a
     # spec on record is always a spec `spec-check` can see. approve=True -> auto-approve;
     # approve=False -> a deterministic decline (no prompt).
+    # The in-process pipeline has no working tree of its own: the store's repo is the tree.
     committed, _reason, _size = commit_spec(
         store, ctx.spec, gate=gate, assume_yes=approve,
-        confirm=None if approve else (lambda _t: False), surface=CLI_SURFACE)
+        confirm=None if approve else (lambda _t: False), surface=CLI_SURFACE,
+        tree=_repo_root(store))
     if committed:
         ctx.emitted = ctx.spec.to_dict()
     return PhaseRecord("emit", committed,
@@ -237,7 +239,9 @@ def run_pipeline(handoff: Any, spec: Spec, tests: List[TestRef],
         else:  # emit
             rec = _emit(ctx, store, gate, approve)
         if ledger is not None:
-            ledger.record("phase", phase=phase, ok=rec.ok, summary=rec.summary)
+            from ..session import current_run_id
+            ledger.record("phase", phase=phase, ok=rec.ok, summary=rec.summary,
+                          run=current_run_id())
         # SS.S1 (b) — a passed gate in the live pipeline leaves a resume checkpoint (degrade-clean;
         # only when a store is wired, so the runner stays byte-identical but for the side effect).
         if store is not None and rec.ok:

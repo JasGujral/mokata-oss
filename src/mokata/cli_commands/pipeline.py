@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from ._common import (
@@ -118,13 +119,24 @@ def cmd_playbook(args: argparse.Namespace) -> int:
     return 0 if result.ok else 1
 
 
+_SUGGEST_FLAGS = ("fresh", "spec", "failing_test", "implementation", "diff", "bug", "stacktrace",
+                  "perf")
+
+
 def cmd_suggest(args: argparse.Namespace) -> int:
+    intent = " ".join(getattr(args, "intent", None) or []).strip()
+    if not intent and not any(getattr(args, f, False) for f in _SUGGEST_FLAGS):
+        # 0.0.27 P14 — no description given: the next step DERIVED from what mokata recorded
+        # (approach, spec, test record, gates, review, finish), each hint citing its fact. An
+        # unreadable store says UNKNOWN naming it — never "no suggestions". Never runs anything.
+        from ..hints import derive, render
+        print(render(derive(os.path.abspath(args.path), run=args.run or "")))
+        return 0
     ctx = SuggestionContext(
         starting_fresh=args.fresh, has_spec=args.spec,
         has_failing_test=args.failing_test, has_implementation=args.implementation,
         has_diff=args.diff, has_bug_report=args.bug,
         has_stacktrace=args.stacktrace, has_perf_issue=args.perf)
-    intent = " ".join(getattr(args, "intent", None) or []).strip()
     if intent:
         # G-3 — free-text intent ("flaky bug") on top of the flags. Deterministic, never runs.
         from ..compose import recommend
@@ -161,8 +173,11 @@ def cmd_chain(args: argparse.Namespace) -> int:
 def register(sub, common):
     p_sug = sub.add_parser(
         "suggest", parents=[common],
-        help="suggest a relevant command for the context (suggest only, never runs)",
+        help="the next step, derived from the run's recorded state (no args), or a command "
+             "for the context you describe (flags / intent) — suggest only, never runs",
     )
+    p_sug.add_argument("--run", default=None,
+                       help="the run to derive the next step for (default: resolved)")
     for flag in ("fresh", "spec", "diff", "bug", "stacktrace", "perf"):
         p_sug.add_argument(f"--{flag}", action="store_true")
     p_sug.add_argument("--failing-test", dest="failing_test", action="store_true")

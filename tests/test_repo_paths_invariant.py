@@ -217,6 +217,10 @@ class TestTheProductSideIsRoutedThroughTheChokePoint(unittest.TestCase):
     #: separating it from that mistake is that its input crossed in from outside the process.
     #: A row here is the claim that it did, so a fourth caller has to be argued for.
     AS_NAME_CALLERS = {
+        "src/mokata/run_record.py":
+            "0.0.27 G3-EVIDENCE `_touched_dirs`: the PR's changed-file list, which arrives from "
+            "`--files` (a human) or `git diff --name-only` (an outside process) and is matched "
+            "against `.mokata/runs/<run>/`. It crosses in; nothing here produced it.",
         "src/mokata/memory/intentions.py":
             "0.0.23 D15: an intention's `when_path` trigger — a glob a HUMAN typed into the "
             "`remember` call — and the changed paths it is matched against, which arrive from "
@@ -236,6 +240,25 @@ class TestTheProductSideIsRoutedThroughTheChokePoint(unittest.TestCase):
             "(or read back from the saved workspace file the browser wrote). It crosses in over "
             "HTTP; nothing in this process produced it, and containment stays behind the routes' "
             "own `nav.contained_rel`.",
+        "src/mokata/ide/features/lsp.py":
+            "0.0.27 P24 `ac_ties`: a spec CodeAnchor's `file` — what a HUMAN wrote into the "
+            "emitted spec, possibly natively spelled — matched against the route's repo NAME. "
+            "Nothing in this process produced it.",
+        "src/mokata/ide/proof.py":
+            "0.0.27 P13: a RECORDED test id's file (`mokata progress test-run --test`, the MCP "
+            "gate's argument — typed by a person or an agent, often a Windows pytest node id) and "
+            "a ledger row's `target` (the hook payload's `file_path`). Both cross in; the trace "
+            "compares them against `/`-spelled change-set names.",
+        "src/mokata/committed_specs.py":
+            "0.0.27 L9 `normalize_rel`: the file part of a test a spec DECLARES (`spec emit` input, "
+            "typed by a person or an agent, possibly natively spelled on Windows) and the same "
+            "part read back from the committed spec file. It crosses in; it is normalised at emit "
+            "and again at comparison so one file has one spelling.",
+        "src/mokata/test_ids.py":
+            "0.0.27 P13 round 6 `normalise_path`: the file part of a RECORDED test id, as the "
+            "writer was handed it (`mokata progress test-run --test`, the MCP TDD gate, a pytest "
+            "node id printed on Windows) — it crosses in, and is normalised once, at write time "
+            "and at read time, to one `/`-spelled path.",
     }
 
     def test_every_as_name_caller_row_still_resolves(self):

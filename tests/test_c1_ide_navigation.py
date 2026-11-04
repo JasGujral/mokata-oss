@@ -447,9 +447,20 @@ class ThePage(unittest.TestCase):
         from mokata.ide.server import STATIC_FILES
         with open(os.path.join(STATIC, "index.html"), encoding="utf-8") as fh:
             html = fh.read()
+        # 0.0.26 P7: a script a FRAME document loads (the Mermaid layout frame) is loaded there,
+        # not by the page.
+        with open(os.path.join(STATIC, "mermaid-frame.html"), encoding="utf-8") as fh:
+            frame = fh.read()
+        # 0.0.27 P9: a WORKER script is loaded by `new Worker("/static/<name>")` in a feature script
+        # (never by a <script> tag - that would run it in the page).
+        feat = os.path.join(STATIC, "features")
+        feature_js = "".join(open(os.path.join(feat, n), encoding="utf-8").read()
+                             for n in sorted(os.listdir(feat)) if n.endswith(".js"))
         for name in self._js():
             self.assertIn(name, STATIC_FILES)
-            self.assertIn(f'src="/static/{name}"', html)
+            self.assertTrue(f'src="/static/{name}"' in html or f'src="/static/{name}"' in frame
+                            or f'new Worker("/static/{name}")' in feature_js,
+                            f"{name} is served but no page loads it")
         self.assertLess(html.index("app.js"), html.index("boot.js"), "boot runs last")
 
     def test_keyboard_commands_ignore_typing_in_fields(self):
@@ -465,13 +476,15 @@ class ThePage(unittest.TestCase):
     def test_the_design_shell_is_there(self):
         with open(os.path.join(STATIC, "index.html"), encoding="utf-8") as fh:
             html = fh.read()
-        # P34 (IA-ONE-NAV): the screens are rail buttons (`data-screen`); there is no mode bar.
-        for needle in ('data-screen="review"', 'data-screen="navigate"', 'data-screen="graph"',
-                       'id="qo-open"', 'class="rail"', 'id="nav-list"', 'data-filter="unseen"',
+        # UX-SIMPLIFY: the screens are the top tabs (Review · Sessions · Code); the graph is an
+        # overlay opened by Expand graph from the inspector. No rail, no mode bar.
+        for needle in ('id="tab-review"', 'id="tab-navigate"', 'id="view-graph"', 'id="insp-ripple"',
+                       'id="qo-open"', 'role="tablist"', 'id="nav-list"', 'data-filter="unseen"',
                        'data-filter="untested"', 'data-filter="tests"', 'id="mark-seen"',
                        'id="pos-label"', 'id="only-changed"', 'id="outline"', 'id="ref-tabs"',
                        'id="nav-back"', 'id="nav-fwd"', 'id="change-float"', 'id="insp-blast"'):
             self.assertIn(needle, html)
+        self.assertNotIn('class="rail"', html)
 
     def test_unseen_marks_survive_a_storage_that_throws(self):
         js = self._js()["app.js"]

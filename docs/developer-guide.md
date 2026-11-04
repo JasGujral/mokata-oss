@@ -3,7 +3,7 @@
 mokata is a pure-Python package under `src/mokata/`, with one capability model. Supported
 Python: **3.12+** (the floor; CI runs 3.12).
 
-**Dependencies.** The one required runtime dependency is the **MCP SDK** (`mcp>=1.2,<2`) — it
+**Dependencies.** The one required runtime dependency is the **MCP SDK** (`mcp>=1.30,<2`) — it
 ships by default so the bundled `mokata-mcp` server works straight out of `pip install mokata`.
 The upper bound is deliberate: `mcp` 2.0.0 removed `mcp.server.fastmcp`, which the mokata MCP
 server is built on, so 2.x needs a port rather than a version bump. If your environment already
@@ -109,7 +109,7 @@ suggestions), `playbook.py` (the end-to-end integration runner), `packaging.py`
 (plugin/marketplace validators), `team*.py` (the opt-in shared Postgres store).
 
 ### The MCP server (`mcp/`)
-`registry.py` is the single source of truth for the tool set — **70 tools: 46 read, 23 write, 1
+`registry.py` is the single source of truth for the tool set — **74 tools: 47 read, 26 write, 1
 approve** — and `server.py` builds the `mokata-mcp` server from it. Every write tool is
 propose-only; `tools_approve.py` is the default-off, opt-in in-chat approval
 (`settings.approvals.in_chat`). The robustness layer is shared by every tool rather than

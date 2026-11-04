@@ -258,6 +258,10 @@ CONVERTED = [
 # "relpath:qualname", with the reason it is NOT a committed-config write. A site that is neither
 # converted nor registered here fails `test_r_man_no_bare_manifest_writes`.
 OUT_OF_SCOPE = {
+    ("merge_gate.py", "_checkout"):
+        "Not the manifest. 0.0.27 P21 — the gated merge copies `.git/index` to a private temp index "
+        "beside it (`mokata-merge-<id>.index`) for `read-tree -m -u`; it is removed after, and only "
+        "`IndexLock.commit_index` ever puts index bytes onto `.git/index` (lock, fsync, rename).",
     ("mcp/server.py", "_run_stdio"):
         "Not a file write. 0.0.26 O14 — `os.fdopen` over a DUPLICATE of the process's own stdout "
         "descriptor, so the MCP JSON-RPC transport writes a private fd while fd 1 points at stderr.",
@@ -267,9 +271,13 @@ OUT_OF_SCOPE = {
         "Already atomic (temp + os.replace). 0.0.26 L2 — the updater's job file under ~/.mokata/update/ (and a copy of the stdlib updater script), not the manifest.",
     ("ide/handoff.py", "_write"):
         "Already atomic (temp + os.replace). 0.0.26 P37 — a job handoff record under temp_local/ide/jobs/ (or the user-dir twin on an un-set-up repo), not the manifest.",
+    ("explain/safedir.py", "SafeDir.write"):
+        "Already atomic (O_EXCL|O_NOFOLLOW temp in the same directory fd, fsync, os.replace). 0.0.27 P46 — explainer pages, sidecars and cached fact bundles under temp_local/reviews/ (gitignored, refused on an un-set-up repo), not the manifest.",
     ("ide/workspace.py", "save"):
         "Already atomic (temp + os.replace). 0.0.26 P2 — the IDE's restore state (tabs, scroll, focus) under temp_local/ide/ (or ~/.mokata/ide-repos/<hash>/ on an un-set-up repo, P29), not the manifest.",
 
+    ("ide/usages.py", "SpillWriter.__init__"):
+        "Not the manifest. 0.0.27 P4 — an owner-only `mkstemp` spill file (a Find Usages / Copy with Context result too big to hold) in the IDE's spill dir, written once by its own job, then only read, and removed on release; never a committed file.",
     ("ide/search.py", "_write_index"):
         "Already atomic (temp + os.replace; the vectors file under a fresh name first). 0.0.23 C2 / 0.0.26 O13 — the IDE's local semantic index under temp_local/ide/semantic/, a derived artifact, not the manifest.",
     ("knowledge/crg_build.py", "_acquire"):
@@ -326,9 +334,7 @@ OUT_OF_SCOPE = {
         "Writes a pulled artifact to a caller-named `dest` (a READ's optional side-output). The "
         "vault's own artifact + index writes were made atomic at MS.S6.",
     # --- DERIVED / REGENERABLE: rebuilt on demand, never a source of truth.
-    ("dashboard.py", "write_dashboard"):
-        "Rendered HTML view, regenerated on every `mokata watch` refresh tick.",
-    ("dashboard.py", "write_governance_dashboard"):
+    ("governance_view.py", "write_governance_dashboard"):
         "Rendered HTML view, regenerated on demand from run-state + the ledger.",
     ("cli_commands/skills.py", "_skill_author.commit"):
         "Materializes ONE authored skill file to a caller-named `dest`. Gated, but not committed "

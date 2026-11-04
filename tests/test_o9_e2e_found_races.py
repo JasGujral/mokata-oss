@@ -78,11 +78,18 @@ class TheDrawerNeverUnfinishesAJob(unittest.TestCase):
 
 class WelcomeDoesNotYankAUserWhoMoved(unittest.TestCase):
     def test_input_before_the_first_refresh_keeps_the_users_screen(self):
+        """The race this pinned (Welcome taking back the screen a person had moved to) cannot
+        happen any more: UX-SIMPLIFY §6 P1 made Get started a section of Health that opens only
+        when asked. Pinned as the absence of the takeover: Welcome never picks a view on load and
+        keeps no "the person moved" listener; it changes the view only from a button the person
+        pressed. The browser e2e `test_activity_panel` test_1b is the behavioural proof."""
         src = _read(os.path.join(STATIC, "welcome.js"))
-        self.assertIn('document.addEventListener("keydown", moved', src)
-        self.assertIn('document.addEventListener("pointerdown", moved', src)
-        self.assertIn("if (!d.first_run || W.moved ||", src)
-
+        self.assertNotIn("moved", src)
+        self.assertNotIn("first_run || W.moved", src)
+        self.assertNotIn("decideWelcome", src)
+        for line in src.splitlines():
+            if "MK.setMode(" in line:
+                self.assertTrue("onclick" in line or "=> MK.setMode" in line, line)
 
 if __name__ == "__main__":
     unittest.main()

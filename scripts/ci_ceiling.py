@@ -28,19 +28,26 @@ PER SHARD (0.0.26 O6, `WINDOWS-CI-TIME`). `ci.yml`'s `test` job runs the unit su
 (the same call as above) and, with `--record PATH`, writes that time down; the shard runner writes
 the leg's unit-suite seconds beside it (`shard_tests.py run --record`).
 
-THE TAG GATE, RE-ASSEMBLED. `release.yml`'s `test` job still runs the whole suite in ONE job, and
-no single shard measures that any more. The `tag-ceiling` job collects every ubuntu shard's two
-records and re-assembles what one unsharded leg would have measured:
+THE TAG GATE, PER SHARD (0.0.27 R3, `TAG-GATE-UNSHARDED`, ruling V3). `release.yml`'s `test` job
+ran the whole suite in ONE job until 0.0.27, and the PR gate re-assembled that job's time from the
+ubuntu shards (1799 s at CI #172 — within 1.07x of the cliff that cancelled v0.0.23). The tag gate
+is now sharded exactly as `ci.yml` is (same `shard_tests.py run --of N -s tests -t tests`, same
+jsonschema legs, integration once per leg on shard 1), so its ceiling bounds ONE SHARD, and the
+`tag-ceiling` job grades it with the time an ubuntu PR-gate shard actually took:
 
-    unsharded = max(job_seconds - unit_seconds over the shards)    the per-leg steps, paid once
-              + sum(unit_seconds over the shards)                   the whole unit suite
+    worst = max(job_seconds over every ubuntu shard of every leg)
+
+An ubuntu `ci.yml` shard runs a SUPERSET of the same-numbered tag shard (the same modules — the
+plan is a pure function of the record and N — plus the PR gate's own once-per-leg extras), so its
+clock is an upper bound on the tag shard's, never an under-report.
 
     - run: python scripts/ci_ceiling.py --from-shards ci-clock \\
              --workflow .github/workflows/release.yml --job test
 
-It is checked per group (one group per matrix leg the shards belong to) and the WORST group is
-the verdict. A group whose shard count is not complete ("of" says N, fewer arrived) cannot answer:
-a partial sum under-reports, and an under-report reading CLEARS is the failure this exists to stop.
+It CANNOT ANSWER (exit 2) — never CLEARS — when a leg's shard set is not a complete 1..N, or when
+the shards were cut into a different N than the target job's own `shard_tests.py run --of N`
+(a shard of 1/3 of the suite says nothing about a ceiling over 1/4 of it), or when the target
+job does not shard at all (a per-shard time says nothing about a whole-suite job).
 
 THE RULE, TWO NUMBERS
 ---------------------
@@ -132,12 +139,39 @@ def _load(path: str) -> Optional[dict]:
         return None
 
 
-def unsharded_seconds(dirpath: str) -> Tuple[Optional[float], str]:
-    """Re-assemble one unsharded leg's time from the shard records under `dirpath` (see the module
-    docstring). Each shard's records sit in their own sub-directory: `job.json` (this script's
-    `--record`) and `unit.json` (`shard_tests.py run --record`). Returns (seconds, detail), or
-    (None, why) when it cannot answer — never a partial sum."""
-    groups: Dict[str, Dict[int, Tuple[float, float, int]]] = {}
+_SHARD_RUN = re.compile(r"shard_tests\.py\s+run\b[^\n#]*?--of\s+(\d+)")
+
+
+def job_shard_count(workflow_text: str, job: str) -> Optional[int]:
+    """The `--of N` of `job`'s `shard_tests.py run` step, or None when the job does not shard.
+    The same narrow line reader as `job_ceiling` (jobs at column 2): a comment is not a step, and
+    another job's shard call is not this job's. Two different N inside one job cannot answer."""
+    in_jobs, in_job, found = False, False, set()
+    job_re = re.compile(r"^  " + re.escape(job) + r":\s*(#.*)?$")
+    for line in workflow_text.splitlines():
+        if _JOBS.match(line):
+            in_jobs = True
+            continue
+        if in_jobs and _TOP_KEY.match(line):
+            in_jobs = False
+        if not in_jobs:
+            continue
+        if re.match(r"^  \S", line):
+            in_job = bool(job_re.match(line))
+            continue
+        if in_job and not line.lstrip().startswith("#"):
+            m = _SHARD_RUN.search(line)
+            if m:
+                found.add(int(m.group(1)))
+    return found.pop() if len(found) == 1 else None
+
+
+def worst_shard_seconds(dirpath: str, of: int) -> Tuple[Optional[float], str]:
+    """The slowest shard leg's measured seconds under `dirpath` (see the module docstring). Each
+    shard's records sit in their own sub-directory: `job.json` (this script's `--record`) and
+    `unit.json` (`shard_tests.py run --record`). Returns (seconds, detail), or (None, why) when it
+    cannot answer — a missing shard could be the slow one, so a partial set never CLEARS."""
+    groups: Dict[str, Dict[int, Tuple[float, int]]] = {}
     try:
         subdirs = sorted(d for d in os.listdir(dirpath) if os.path.isdir(os.path.join(dirpath, d)))
     except OSError as exc:
@@ -148,25 +182,25 @@ def unsharded_seconds(dirpath: str) -> Tuple[Optional[float], str]:
         if not job or not unit:
             return None, "%s/%s lacks job.json or unit.json" % (dirpath, d)
         try:
-            group, shard, of = str(job["group"]), int(unit["shard"]), int(unit["of"])
-            groups.setdefault(group, {})[shard] = (float(job["seconds"]),
-                                                   float(unit["unit_seconds"]), of)
+            group, shard, n = str(job["group"]), int(unit["shard"]), int(unit["of"])
+            groups.setdefault(group, {})[shard] = (float(job["seconds"]), n)
         except (KeyError, TypeError, ValueError) as exc:
             return None, "%s/%s is malformed (%s)" % (dirpath, d, exc)
     if not groups:
         return None, "no shard records under %s" % dirpath
     worst, detail = -1.0, ""
     for group, shards in sorted(groups.items()):
-        ofs = {of for _j, _u, of in shards.values()}
-        if len(ofs) != 1 or set(shards) != set(range(1, ofs.pop() + 1)):
-            return None, ("group %s has shards %s — not a complete 1..N set, and a partial sum "
-                          "under-reports" % (group, sorted(shards)))
-        fixed = max(j - u for j, u, _of in shards.values())
-        total = fixed + sum(u for _j, u, _of in shards.values())
-        if total > worst:
-            worst = total
-            detail = ("%s: %d shards, unit %ds summed + %ds per-leg steps"
-                      % (group, len(shards), round(total - fixed), round(fixed)))
+        ofs = {n for _j, n in shards.values()}
+        if ofs != {of}:
+            return None, ("group %s was cut into %s shards but the graded job runs %d — a shard "
+                          "of a different split says nothing about this ceiling"
+                          % (group, sorted(ofs), of))
+        if set(shards) != set(range(1, of + 1)):
+            return None, ("group %s has shards %s of %d — not a complete 1..N set, and the missing "
+                          "one could be the slowest" % (group, sorted(shards), of))
+        k, (secs, _n) = max(shards.items(), key=lambda kv: (kv[1][0], -kv[0]))
+        if secs > worst:
+            worst, detail = secs, "%s shard %d/%d" % (group, k, of)
     return worst, detail
 
 
@@ -175,7 +209,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     clock = ap.add_mutually_exclusive_group(required=True)
     clock.add_argument("--since", help="the clock's start, epoch seconds")
     clock.add_argument("--from-shards", dest="from_shards",
-                       help="a directory of shard records: re-assemble the unsharded time")
+                       help="a directory of shard records: grade the slowest shard")
     ap.add_argument("--workflow", required=True, help="the workflow file whose ceiling is checked")
     ap.add_argument("--job", required=True, help="the job id inside that workflow")
     ap.add_argument("--record", default=None,
@@ -184,12 +218,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--now", default=None, help=argparse.SUPPRESS)   # tests pin the clock
     a = ap.parse_args(argv)
 
+    try:
+        with open(a.workflow, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError as exc:
+        print("CI-CEILING cannot answer: %s unreadable (%s)." % (a.workflow, exc), file=sys.stderr)
+        return CANNOT_ANSWER
     if a.from_shards is not None:
-        seconds, detail = unsharded_seconds(a.from_shards)
+        of = job_shard_count(text, a.job)
+        if of is None:
+            print("CI-CEILING cannot answer: %s:%s runs no single `shard_tests.py run --of N`, so "
+                  "a per-shard time cannot grade its ceiling." % (os.path.basename(a.workflow),
+                                                                  a.job), file=sys.stderr)
+            return CANNOT_ANSWER
+        seconds, detail = worst_shard_seconds(a.from_shards, of)
         if seconds is None:
             print("CI-CEILING cannot answer: %s." % detail, file=sys.stderr)
             return CANNOT_ANSWER
-        print("CI-CEILING re-assembled the unsharded leg — %s" % detail)
+        print("CI-CEILING graded per shard — the slowest is %s" % detail)
     else:
         try:
             t0 = float(a.since)
@@ -208,12 +254,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             with open(a.record, "w", encoding="utf-8", newline="\n") as fh:
                 json.dump({"group": a.group, "seconds": round(seconds, 1)}, fh, sort_keys=True)
                 fh.write("\n")
-    try:
-        with open(a.workflow, encoding="utf-8") as fh:
-            text = fh.read()
-    except OSError as exc:
-        print("CI-CEILING cannot answer: %s unreadable (%s)." % (a.workflow, exc), file=sys.stderr)
-        return CANNOT_ANSWER
     ceiling = job_ceiling(text, a.job)
     where = "%s:%s" % (os.path.basename(a.workflow), a.job)
     if ceiling is None:

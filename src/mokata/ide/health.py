@@ -215,6 +215,17 @@ def _search_row(root: str) -> Dict[str, Any]:
                 action="rebuild-search", action_label="Build index")
 
 
+def problems(rows: List[Dict[str, Any]], setup: bool) -> int:
+    """The health chip's count: what is WRONG, not what is not done yet (0.0.27 UX-SIMPLIFY §6).
+
+    "Not set up" is never a fault — it is the start of a stranger's first run, and Get started
+    (Health's first section) says what setup adds. On a repo mokata has not set up, an index that
+    has not been built yet ("out of sync") is the same: not done, not broken. Broken, missing and
+    degraded always count; once set up, out of sync counts too."""
+    return sum(1 for r in rows if r["state"] in (BROKEN, MISSING, DEGRADED)
+               or (setup and r["state"] == STALE))
+
+
 def _setup_row() -> Dict[str, Any]:
     from .statedir import SETUP_COMMAND, lights_up
     r = _row("setup", "mokata setup", NOT_SET_UP,
@@ -386,7 +397,7 @@ def health(root: str, layer: Any, *, demo: bool = False, full: bool = True,
         # 0.0.26 P29 — a repo mokata has not set up: ONE top row that says so and what setup
         # lights up; every row below it is a check that still runs (version, graph floor, search).
         rows.insert(0, _setup_row())
-    bad = sum(1 for r in rows if r["state"] != OK)
+    bad = problems(rows, setup)
     return {"sample": False, "rows": rows, "problems": bad, "full": full, "jobs": _maintenance(jobs),
             "initialized": setup}
 

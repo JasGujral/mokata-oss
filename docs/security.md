@@ -131,8 +131,8 @@ see [platform support](reference/platform-support.md).
 
 ## Approving from the IDE
 
-`mokata ide` shows each durable write an agent proposed as a card in the Activity drawer and on the
-Review screen. The card shows the write in full, plus the `mokata approve <id>` command with a Copy
+`mokata ide` shows each durable write an agent proposed as a card in the **waiting bar** under its
+top bar — the one place the window says what waits on you, on every tab. The card shows the write in full, plus the `mokata approve <id>` command with a Copy
 button. It turns "approved", with its audit-ledger row, the moment you approve it in a terminal.
 
 **Approve / Reject inside the window** needs one more thing: a **one-time code** printed to the
@@ -166,4 +166,28 @@ Why a code, and not just the window's login:
 **The limit (the same one `mokata approve` has).** A process that can type into your own terminal,
 or read its screen, could also run `mokata approve --yes`. This design keeps the model's tools and
 its shell out of the decision. It cannot protect a terminal the agent already controls.
+
+## Workspace trust and language servers
+
+The window's code intelligence (hover, definition, references, symbols, diagnostics) comes from the
+project's own language servers through a **read-only** bridge: only an allowlist of read methods is
+ever sent, and a server's own request to apply an edit is answered "not applied". A language server
+**runs the repo's code** — `rust-analyzer` runs `build.rs` and proc macros, `gopls` runs Go tooling,
+tsserver loads plugins from `node_modules`, pyright follows the config to a venv — so none is started
+until a human marks the workspace **trusted**. That decision is gated like an approval: in the window
+it needs the one-time code printed to the terminal running `mokata ide --foreground`; in a terminal
+it is `mokata ide --trust` (TTY only, never inside a Claude Code session). It is recorded on the audit
+ledger (`workspace_trust`) and in your own profile, never in the repo, so a checkout cannot ship its
+own trust and a clone at another path is another decision. Revoking (`--untrust`, or the window's
+Revoke) needs no code and stops every server — immediately, also when revoked from a terminal while
+the window runs (trust is re-read on every use). A `GET` never starts a server. The server map is
+mokata's built-ins plus **your own** `~/.mokata/lsp.json`; a repo's files never choose a server you
+configured, an argument, or `node` — but a repo **may** supply its own copy of a **built-in** server
+(its venv, its `node_modules`, a PATH entry you put inside it), which is what trusting it allows. The
+prompt shows the exact command lines. Binaries are found in the project's venv, its
+`node_modules/<pkg>/package.json` `bin` (the realpath of `node_modules` inside the repo and the
+script's realpath inside `node_modules`, run as `node <script>`) or on
+your PATH (absolute entries only, never the current directory), **never installed** by mokata and
+never run through a shell — no `.cmd`/`.bat` is run or parsed. Each server runs in its own process
+group (POSIX) or Job Object (Windows), so stopping it — or its crash — stops everything it started.
 

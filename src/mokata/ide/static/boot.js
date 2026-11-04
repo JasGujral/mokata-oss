@@ -12,6 +12,7 @@
   MK.setMode("review");
   MK.api("/api/caps").then((c) => {
     if (!c || c.error) return;
+    MK.caps = c;                                          // Health › About shows these
     MK.$("st-graph").textContent = c.graph || "—";
     MK.$("st-graph").classList.toggle("degraded", !!c.graph_degraded);
     MK.$("st-matcher").textContent = c.matcher || "—";

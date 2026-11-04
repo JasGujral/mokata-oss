@@ -68,7 +68,8 @@ def with_tasks(spec: Any) -> Any:
 
 def commit_planned(store, spec, **kwargs):
     """`engine.emit.spec_commit` for a fixture `Spec` built in code, given the one-task plan."""
-    from mokata.engine.emit import spec_commit
+    from mokata.engine.emit import _repo_root, spec_commit
+    kwargs.setdefault("tree", _repo_root(store))       # a fixture runs in the store's own tree
     return spec_commit(store, with_tasks(spec), **kwargs)
 
 

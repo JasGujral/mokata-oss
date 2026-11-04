@@ -68,7 +68,11 @@ def routes(reg: Any, ctx: Any) -> None:
         snap = ctx.q(request, "snap")
         if not snap or len(snap) > 200:
             raise ctx.bad_request("snap is required: a snapshot id from the timeline")
-        return state.source.write(snap)
+        from .. import diffview as DV
+        try:
+            return DV.apply_ws(state.source.write(snap), ctx.q(request, "ws"))
+        except ValueError as exc:                  # 0.0.27 P5: ws = ignore | show
+            raise ctx.bad_request(str(exc)) from None
 
     reg.register("/api/sessions/list", listing, kind="json", feature="sessionindex")
     reg.register("/api/sessions/stats", stats, kind="json", feature="sessionindex",

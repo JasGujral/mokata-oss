@@ -36,7 +36,7 @@
       b.setAttribute("aria-pressed", on ? "true" : "false");
     }
     $("sr-meaning").hidden = !S.meaning;
-    $("search-cols").classList.toggle("two", S.meaning);
+
     for (const b of document.querySelectorAll("button[data-sscope]")) {
       b.classList.toggle("active", b.dataset.sscope === S.scope);
       b.setAttribute("aria-checked", b.dataset.sscope === S.scope ? "true" : "false");
@@ -56,8 +56,10 @@
     run();
   }
 
+  // UX-SIMPLIFY §5 #4: Search is the Code screen's left Search tab; results open in Code beside it.
   function openSearch(text) {
-    MK.setMode("search");
+    MK.setMode("navigate");
+    if (MK.showCodeSide) MK.showCodeSide("search");
     if (text !== undefined) $("sq").value = text;
     $("sq").focus();
     run();
@@ -316,6 +318,6 @@
   MK.onViewing.push(() => {
     if (S.scope === "session" && MK.sessionFiles() === null) S.scope = "all";
     syncToggles();
-    if (ui.mode === "search" && S.scope === "session" && $("sq").value.trim()) run();
+    if (ui.mode === "navigate" && MK.nav && MK.nav.side === "search" && S.scope === "session" && $("sq").value.trim()) run();
   });
 })();

@@ -188,15 +188,19 @@ class _Matrix:
                                                "credited to R")
         self.assertIn(sid, lc["sessions"], stage)
 
-        # 6. the browser and the time-lapse join the resumed session to its predecessor
+        # 6. the browser and the Sessions Timeline join the resumed session to its predecessor
+        #    (UX-SIMPLIFY deleted the Replay scrubber; the Timeline is where the break is read)
+        from mokata.ide import activity as A
         rows = {r["id"]: r for r in V.browser(d)["sessions"]}
         self.assertEqual(R, rows[sid]["run"], stage)
-        tl = V.timelapse(d, sid)
+        tl = A.history(d, sid, limit=A.PAGE_MAX)
         self.assertEqual(R, tl["run"], stage)
-        kinds = [st["kind"] for st in tl["steps"]]
-        self.assertIn("resume", kinds, f"{stage}: no resume marker in the time-lapse")
-        paths_before = [st.get("path") for st in tl["steps"][:kinds.index("resume")]]
-        paths_after = [st.get("path") for st in tl["steps"][kinds.index("resume"):]]
+        oldest_first = list(reversed(tl["items"]))
+        kinds = [it["type"] for it in oldest_first]
+        self.assertIn("resume", kinds, f"{stage}: no resume marker in the Timeline")
+        cut = kinds.index("resume")
+        paths_before = [it["detail"].get("path") for it in oldest_first[:cut]]
+        paths_after = [it["detail"].get("path") for it in oldest_first[cut:]]
         self.assertIn("tests/test_ours.py", paths_before, f"{stage}: the pre-break work is missing")
         self.assertIn("tests/test_more.py", paths_after, stage)
         if self.NEW_ID:

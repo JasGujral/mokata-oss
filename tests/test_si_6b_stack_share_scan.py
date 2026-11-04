@@ -434,10 +434,28 @@ class TestTheRegisterRecordsTheClosure(unittest.TestCase):
                           f"{site} is one of KB.S1's 6 setup one-shots — recorded, not bypassing")
         self.assertEqual(
             sorted(LEDGERED), sorted(setup_cluster + [("memory/migrate.py", "_drop_source"),
-                                                      ("memory/reembed.py", "run_reembed")]),
-            "LEDGERED is KB.S1's 6 setup one-shots, `run_reembed` (0.0.17 stage 1a review) and "
-            "`_drop_source` (0.0.17 stage 16). Anything else arriving here is a bespoke-consent "
-            "durable write nobody reviewed into it.")
+                                                      ("memory/reembed.py", "run_reembed"),
+                                                      # 0.0.27 P24 — the workspace-trust record:
+                                                      # the TTY one-time code (or `mokata ide
+                                                      # --trust` at a TTY) + a `workspace_trust`
+                                                      # ledger row, no WriteGate.
+                                                      ("ide/trust.py", "_write"),
+                                                      # 0.0.27 P21 — the gated merge's four writes.
+                                                      # Each runs only under a human's approval of
+                                                      # exactly this merge (`mokata approve`), or of
+                                                      # exactly this stale lock's removal, and each
+                                                      # leaves a `gated_merge` ledger row; no
+                                                      # WriteGate (git's own ref/index machinery):
+                                                      # the s6 checkout, Recover's finish, the
+                                                      # lock-to-index rename, the stale-lock unlink.
+                                                      ("merge_gate.py", "_checkout"),
+                                                      ("merge_gate.py", "_finish"),
+                                                      ("merge_lock.py", "IndexLock.commit_index"),
+                                                      ("merge_lock.py", "remove_stale")]),
+            "LEDGERED is KB.S1's 6 setup one-shots, `run_reembed` (0.0.17 stage 1a review), "
+            "`_drop_source` (0.0.17 stage 16), the workspace-trust record (0.0.27 P24) and the "
+            "gated merge's four approved writes (0.0.27 P21). Anything else arriving here is a "
+            "bespoke-consent durable write nobody reviewed into it.")
 
 
 if __name__ == "__main__":

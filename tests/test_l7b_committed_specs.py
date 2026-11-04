@@ -42,7 +42,7 @@ RUN = "run-l7b"
 CRITERIA = [{"id": "AC1", "text": "charge() bills the card",
              "anchors": [{"file": "src/pay.py", "symbol": "charge", "kind": "impl",
                           "source": "spec", "confidence": "high"}]}]
-TESTS = [{"name": "test_charge", "ac_ids": ["AC1"]}]
+TESTS = [{"name": "tests/test_pay.py::test_charge", "ac_ids": ["AC1"]}]
 TASKS = [{"id": "T1", "title": "charge", "ac_ids": ["AC1"], "scope": ["src/pay.py"]}]
 CLARIFY = [{"id": "Q1", "question": "which currency?", "recommended": "EUR", "answer": "EUR"}]
 
@@ -123,6 +123,8 @@ class TestL7bTheCommittedCopy(unittest.TestCase):
             self.assertIsNotNone(on_disk, "the approved spec must be committed")
             state = repo.run_state()
             self.assertEqual(on_disk.pop("run_id"), RUN)
+            # L9 r3 — plus the spec's OWN declared AC -> test map, so CI grades it by its tests
+            self.assertEqual(on_disk.pop("tests"), [{"name": "tests/test_pay.py::test_charge", "ac_ids": ["AC1"]}])
             self.assertEqual(on_disk, state, "the committed copy is exactly the approved spec")
             self.assertEqual(on_disk["tasks"][0]["id"], "T1")
             self.assertEqual(on_disk["clarifications"][0]["answer"], "EUR")
@@ -143,7 +145,8 @@ class TestL7bTheCommittedCopy(unittest.TestCase):
             with open(CS.spec_path(repo.path, RUN), "rb") as fh:
                 raw = fh.read()
             self.assertNotIn(b"\r", raw)
-            self.assertEqual(raw, CS.render(RUN, repo.run_state()).encode("utf-8"))
+            self.assertEqual(raw, CS.render(RUN, dict(
+                repo.run_state(), tests=[{"name": "tests/test_pay.py::test_charge", "ac_ids": ["AC1"]}])).encode("utf-8"))
             self.assertIn("\n", seen, "the committed spec is written with newline='\\n'")
             keys = list(json.loads(raw))
             self.assertEqual(keys, sorted(keys))
@@ -171,6 +174,8 @@ class TestL7bTheCommittedCopy(unittest.TestCase):
             on_disk = repo.committed()
             self.assertEqual(on_disk["clarifications"][0]["answer"], "USD")
             self.assertEqual(on_disk["version"], 2)
+            self.assertEqual(on_disk["tests"], [{"name": "tests/test_pay.py::test_charge", "ac_ids": ["AC1"]}],
+                             "an amendment keeps the spec's declared tests in the committed copy")
             self.assertEqual(on_disk["plan_hash"], repo.run_state()["plan_hash"])
 
 

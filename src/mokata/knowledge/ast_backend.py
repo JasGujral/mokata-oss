@@ -98,7 +98,11 @@ BLAST_RADIUS_TIME_BUDGET_S = 2.0
 # depth-3 walk reaches on the 1.2M-line scale repo, and cancellable between steps. A full walk the
 # ceiling still cuts is marked truncated exactly like a default one — never a silent partial.
 BLAST_RADIUS_FULL_MAX_REFS = 1_000_000
-BLAST_RADIUS_FULL_TIME_BUDGET_S = 60.0
+#: 0.0.27 P4 (R2-1) — the full walk has NO wall-clock budget: a time cut is not reproducible (two
+#: identical asks could stop at different references), and the human who asked for it holds
+#: Cancel. Passed as `budget_s=UNTIMED`; `None` keeps meaning the DEFAULT budget. What still bounds
+#: a full walk is the reference ceiling above — a count, so the same tree gives the same cut.
+UNTIMED = float("inf")
 #: The leading words of a full-budget cut's reason, so a reader can tell the two cuts apart.
 FULL_BUDGET_CUT = "even with the full budget"
 
@@ -141,8 +145,11 @@ CACHE_SCHEMA_VERSION = 2
 
 def parse_source(source: str) -> ast.AST:
     """Parse Python source with the stdlib parser. The single seam the incremental cache
-    guards — it is called ONLY on a cache miss, so it is also the point a re-parse spy counts."""
-    return ast.parse(source)
+    guards — it is called ONLY on a cache miss, so it is also the point a re-parse spy counts.
+    0.0.27 P4 (R2-3): parsed in the VIEWER's line numbering (`textlines.for_parse`), so every
+    `lineno` the floor hands out is the line the IDE shows."""
+    from ..textlines import for_parse
+    return ast.parse(for_parse(source))
 
 
 # --------------------------------------------------------------------- edge extraction (pure)
@@ -322,8 +329,9 @@ class AstBackend(GraphBackend):
 
     def blast_radius_full(self, target: str, depth: int = 1,
                           checkpoint: Optional[Callable[[], None]] = None) -> QueryResult:
-        """0.0.26 O7 — the blast radius walked with the FULL budget (see
-        `BLAST_RADIUS_FULL_TIME_BUDGET_S`); same answer shape and honesty rules as `query`."""
+        """0.0.26 O7 — the blast radius walked with the FULL budget: no wall-clock bound (0.0.27
+        P4, `UNTIMED`), the `BLAST_RADIUS_FULL_MAX_REFS` count ceiling, Cancel between steps; same
+        answer shape and honesty rules as `query`."""
         return self._answer("blast_radius", target, depth, full=True, checkpoint=checkpoint)
 
     def definitions(self) -> List[Tuple[str, str, int, str]]:
@@ -379,7 +387,7 @@ class AstBackend(GraphBackend):
             if full:
                 refs, cut = self._blast_radius_bounded(
                     target, depth, max_refs=BLAST_RADIUS_FULL_MAX_REFS,
-                    budget_s=BLAST_RADIUS_FULL_TIME_BUDGET_S, checkpoint=checkpoint)
+                    budget_s=UNTIMED, checkpoint=checkpoint)
                 cut = f"{FULL_BUDGET_CUT}: {cut}" if cut else ""
             else:
                 refs, cut = self._blast_radius_bounded(target, depth)
@@ -747,9 +755,12 @@ class AstBackend(GraphBackend):
         `BLAST_RADIUS_TIME_BUDGET_S` seconds) and how far it got. Within the bounds the answer is
         the unbounded BFS's prefix, in the same order. 0.0.26 O7: `checkpoint` (if given) is
         called before each frontier symbol and cancels the walk by raising."""
+        from .cancel import report
         cap = BLAST_RADIUS_MAX_REFS if max_refs is None else max_refs
         budget = BLAST_RADIUS_TIME_BUDGET_S if budget_s is None else budget_s
         deadline = time.monotonic() + budget
+        t_report = time.monotonic()
+        expanded = 0
         seen_syms = {target}
         seen_refs: set = set()
         out: List[Reference] = []
@@ -759,6 +770,14 @@ class AstBackend(GraphBackend):
             for sym in frontier:
                 if checkpoint is not None:
                     checkpoint()              # O7: raises to cancel a long on-request walk
+                expanded += 1
+                if time.monotonic() - t_report >= 0.3:
+                    # P4 (R2-1): the frontier grows as it walks, so there is no true total —
+                    # the walk says what it has DONE (indeterminate), never a made-up n/N.
+                    t_report = time.monotonic()
+                    report(done=len(out), unit="references found",
+                           note=f"blast radius of {target}: hop {hop} of {max(1, depth)}, "
+                                f"{expanded} symbols expanded, {len(nxt)} queued")
                 if time.monotonic() > deadline:
                     return out, (f"blast radius stopped at the {budget:g}s time budget during hop "
                                  f"{hop} of {max(1, depth)} with {len(out)} reference(s); deeper "

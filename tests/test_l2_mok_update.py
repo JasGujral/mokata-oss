@@ -39,11 +39,11 @@ ON_PATH = {"uv": "/usr/bin/uv", "pipx": "/usr/bin/pipx"}.get
 
 # mokata's Requires-Dist, as the installed metadata states it (shape of pyproject's extras).
 REQUIRES = [
-    "mcp<2,>=1.2",
+    "mcp<2,>=1.30",
     'jsonschema>=4.0; extra == "schema"',
     'starlette>=0.27; extra == "ide"', 'uvicorn>=0.23.1; extra == "ide"',
     'sse-starlette>=1.6.1; extra == "ide"', 'pywinpty>=2.0; sys_platform == "win32" and extra == "ide"',
-    'mcp<2,>=1.2; extra == "mcp"',
+    'mcp<2,>=1.30; extra == "mcp"',
     'psycopg>=3.1; extra == "postgres"',
     'model2vec>=0.3; extra == "embeddings"', 'numpy>=1.24; extra == "embeddings"',
     'tree-sitter>=0.23; extra == "graph-ts"', 'tree-sitter-typescript>=0.23; extra == "graph-ts"',

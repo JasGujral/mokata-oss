@@ -85,17 +85,31 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read        # checkout only (explicit least-privilege, not the inherited default)
-    # CI-JOBS-WITHOUT-A-TIMEOUT (0.0.19 stage 09). Slowest leg that has ever COMPLETED x 1.5.
-    # RE-DERIVED at 0.0.24: the 0.0.23 suite grew past the old 22-minute ceiling — the v0.0.23
-    # release run 38966278058 had its 3.10/3.11/3.13 legs CANCELLED at 22m with no test failing,
-    # so nothing published. Its slowest completed leg: 1240.6s (`test (3.12, present)`) -> 1861s
-    # -> **32**. Re-derive again whenever the suite grows; a ceiling the suite can reach is a red
-    # that says nothing about the code.
+    # CI-JOBS-WITHOUT-A-TIMEOUT (0.0.19 stage 09). History: 22 -> 32 (0.0.24, after v0.0.23's
+    # legs were CANCELLED at 22m with no test failing — run 38966278058, nothing published) -> 45
+    # (0.0.26 cut: the PR gate re-assembled this job from CI #172's ubuntu shards, run 40631802534,
+    # at 1799 s = 1.07x of 32 min, under the 1.2x alarm). Every step of that history raised the
+    # ceiling of ONE job over a suite that grows every release: it only moved the cliff.
     #
-    # 32 -> 45 (0.0.26 cut). The PR gate's `tag-ceiling` job (ci.yml) re-assembled this job from
-    # the ubuntu shards of CI #172 (run 40631802534, PR #87): 1799 s against 32 min = 1.07x, under
-    # the 1.2x alarm — the same cliff that cancelled v0.0.23. 1.5 x 1799 s = 2698.5 s -> **45**.
-    timeout-minutes: 45
+    # 45 -> 26 (0.0.27 R3, TAG-GATE-UNSHARDED, ruling V3: "tag time must test what it publishes").
+    # This job is SHARDED exactly as ci.yml's `test` is, so this ceiling bounds ONE SHARD, not the
+    # suite. Derived from the measured record the same way ci.yml's 45 is, with this job's runner
+    # (ubuntu -> `ci_scale.per_os.Linux`) in place of the slowest OS — never chosen:
+    #
+    #     worst predicted shard   1278 s   (`scripts/shard_tests.py plan --of 4 --os Linux`; shard 1
+    #                                       includes the record's once-per-leg `fixed` steps)
+    #     x 1.8   provisional imbalance (worst/mean of the local 4-shard run, until `absorb`)
+    #     x 0.319 Linux scale (half of Windows' 0.638; CI #141 ubuntu legs ~2x faster)
+    #     + 300 s leg overhead (checkout, Python, pip)           = 1034 s
+    #     x 1.5 (the tree's rule, `ci_ceiling.py`)              = 1551 s -> **26**
+    #
+    # Cross-check against a MEASUREMENT, not the record: CI #172's ubuntu leg re-assembled at
+    # 1799 s for the WHOLE suite; (1799 - 300) / 4 x 1.8 + 300 = 975 s for a worst shard, so 26 min
+    # is 1.6x the worst imbalance the record allows on measured ubuntu time — not a small limit.
+    # Graded both ways: `tests/test_r3_tag_gate_sharded.py` reds when the record stops clearing 26
+    # or 26 sits >5 above what it derives, and ci.yml's `tag-ceiling` job grades it on every PR
+    # against the slowest ubuntu PR-gate shard (a superset of the same-numbered shard here).
+    timeout-minutes: 26
     strategy:
       fail-fast: false
       matrix:
@@ -103,6 +117,13 @@ jobs:
         # Python as the PR gate — mokata's floor since 0.0.26 L12 (`requires-python = ">=3.12"`).
         python: ["3.12"]
         jsonschema: ["absent", "present"]
+        # TAG-GATE-UNSHARDED (0.0.27 R3): the SAME four shards as ci.yml's `test` — the same
+        # `shard_tests.py run --of 4 -s tests -t tests`, balanced on the same record, so every
+        # module runs in exactly one shard per jsonschema leg and the tag gate selects exactly the
+        # PR gate's test set. `4` is written here and in `--of 4` below, and must equal ci.yml's;
+        # `tests/test_r3_tag_gate_sharded.py` reds when any copy parts. `build` needs `test`, and
+        # a `needs:` on a matrix job waits for EVERY leg and is skipped if any leg is not green.
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -117,9 +138,27 @@ jobs:
           python -m pip install -e .
           python -m pip install --require-hashes -r requirements/ci.txt   # PyYAML for the workflow-lint tests (not a mokata dep)
           if [ "${{ matrix.jsonschema }}" = "present" ]; then python -m pip install --require-hashes -r requirements/jsonschema.txt; fi
-      - name: Unit test suite (must pass with jsonschema absent AND present)
-        run: python -m unittest discover -s tests -t tests
+          # The `absent` leg must REALLY be absent, as `ci.yml`'s "Ensure jsonschema absent" step makes it:
+          # mcp>=1.30 requires jsonschema>=4.20, so `pip install -e .` pulls it in (0.0.27 R3 verify F1).
+          if [ "${{ matrix.jsonschema }}" = "absent" ]; then python -m pip uninstall -y jsonschema || true; fi
+      - name: Unit test suite, this shard (must pass with jsonschema absent AND present)
+        # `shard_tests.py run` builds the suite with the very loader call
+        # `python -m unittest discover -s tests -t tests` makes and runs this shard's modules of it;
+        # the four shards of a leg together are that selection exactly.
+        # MOKATA_REQUIRE_MCP_SDK exactly as ci.yml sets it (0.0.27 R3, ruling V3): on the leg that
+        # installed the SDK an MCP gate must FAIL, never skip — otherwise the tag gate publishes
+        # having tested less than the PR gate did. Empty on `absent`, where a broken SDK is the
+        # point of the leg. `tests/test_r3_tag_gate_sharded.py` reds when the two gates' suite
+        # steps set different env on any leg.
+        env:
+          MOKATA_REQUIRE_MCP_SDK: ${{ matrix.jsonschema == 'present' && '1' || '' }}
+        run: python scripts/shard_tests.py run --shard ${{ matrix.shard }} --of 4 -s tests -t tests
       - name: Integration suite — REQUIRED release gate (jsonschema absent AND present)
+        # Shard 1 only: once per jsonschema leg, as in ci.yml (the record's `fixed` block preloads
+        # shard 1 with its time, so the balancer gives that shard fewer modules).
+        if: matrix.shard == 1
+        env:
+          MOKATA_REQUIRE_MCP_SDK: ${{ matrix.jsonschema == 'present' && '1' || '' }}
         run: python -m unittest discover -s tests/integration -t tests/integration
 
   validate:
@@ -278,7 +317,7 @@ jobs:
         # the published package, its REQUIRED dependency closure, and the install baseline.
         #
         # ⚠ THIS COMMENT USED TO ASSERT THAT MOKATA REQUIRED NOTHING AT RUNTIME, AND THAT HAS BEEN
-        # FALSE SINCE THE MCP SDK BECAME UNCONDITIONAL: `pyproject.toml` declares `mcp>=1.2,<2`, whose
+        # FALSE SINCE THE MCP SDK BECAME UNCONDITIONAL: `pyproject.toml` declares `mcp>=1.30,<2`, whose
         # resolved closure is THIRTY packages (measured 2026-08-13 off an installed 3.12 venv:
         # mcp + anyio, httpx, httpcore, h11, certifi, idna, jsonschema, attrs, referencing,
         # jsonschema-specifications, rpds-py, pydantic, pydantic-core, pydantic-settings,

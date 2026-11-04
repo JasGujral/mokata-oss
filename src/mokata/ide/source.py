@@ -210,18 +210,50 @@ class RealSource:
         from . import plans
         return plans.saved_plan(self.root, slug, where)
 
-    # --- 0.0.25 ID3 session browser / needs-you / time-lapse / treemap (see `session_views`) --
+    # --- 0.0.27 P13 the AC → test → code trace and its risk overlay (see `proof`) -------------
+    def proof(self, run: str, session: str, base: str, head: str, live: bool, page: int,
+              size: int) -> Dict[str, Any]:
+        from . import proof as P
+        return P.trace(self.root, run=run or None, session=session or None, base=base,
+                       head=head, live=live, page=page, size=size, code_root=self._code_root())
+
+    def proof_targets(self) -> Dict[str, Any]:
+        from . import proof as P
+        return P.targets(self.root, self.focus_of())
+
+    # --- 0.0.25 ID3 session browser / needs-you (see `session_views`) -----------
     def browser(self, bus_events: List[Dict[str, Any]]) -> Dict[str, Any]:
         from . import session_views as SV
         return SV.browser(self.root, bus_events=bus_events)
 
-    def timelapse(self, sid: str) -> Dict[str, Any]:
-        from . import session_views as SV
-        return SV.timelapse(self.root, sid)
+    # 0.0.27 P12 — the Activity panel: the live picture, and one session's paged timeline.
+    def activity(self, bus_events: List[Dict[str, Any]], focus: Optional[str],
+                 jobs: Dict[str, Any]) -> Dict[str, Any]:
+        from . import activity as A
+        return A.live(self.root, bus_events=bus_events, focus=focus or None, jobs=jobs)
 
-    def treemap(self, sid: Optional[str], size: str) -> Dict[str, Any]:
-        from . import session_views as SV
-        return SV.treemap(self.root, sid, size)
+    def activity_history(self, sid: str, before: Optional[str], limit: int,
+                         types: List[str]) -> Dict[str, Any]:
+        from . import activity as A
+        return A.history(self.root, sid, before=before, limit=limit, types=types)
+
+    # 0.0.27 P14 — each card's next step, derived from its run's recorded state (`mokata.hints`).
+    def hints(self, sids: List[str]) -> Dict[str, Any]:
+        from .. import hints as H
+        from . import sessions as SS
+        rows = {}
+        for r in SS.sessions(self.root, transcripts=False):
+            for sid in (r.chain or [r.id]):
+                rows.setdefault(sid, r)
+        subjects = []
+        for sid in sids:
+            r = rows.get(sid)
+            subjects.append(H.Subject(session=sid, run=(r.run if r else ""),
+                                      chain=tuple(r.chain if r and r.chain else
+                                                  SS.chain(self.root, sid)),
+                                      own_only=True))
+        answers = H.derive_batch(self.root, subjects)
+        return {"sample": False, "answers": dict(zip(sids, answers)), "count": len(sids)}
 
 
 # ------------------------------------------------------------------------------------- SAMPLE
@@ -494,34 +526,109 @@ class DemoSource:
                 "started": t, "started_basis": "SAMPLE", "marks": marks,
                 "test_record": {"failing": 0, "passing": 1}}
 
+    # --- 0.0.27 P13 over the SAMPLE: an invented, labelled trace --------------------------------
+    def proof(self, run: str, session: str, base: str, head: str, live: bool, page: int,
+              size: int) -> Dict[str, Any]:
+        from .features.proof import sample_trace
+        return sample_trace(run=run, session=session, base=base, head=head, live=live, page=page,
+                            size=size)
+
+    def proof_targets(self) -> Dict[str, Any]:
+        return {"sample": True, "initialized": True, "git": True, "focus": None,
+                "runs": [{"run": rid, "acs": 3, "sessions": [s["id"] for s in self._sessions
+                                                              if s["run"] == rid], "note": ""}
+                         for rid in _DEMO_PLANS],
+                "sessions": [{"session": s["id"], "run": s["run"], "files": len(s["files"]),
+                              "writes": s["writes"]} for s in self._sessions],
+                "default": {"run": "run-parser-fix"}, "note": "SAMPLE"}
+
     # --- 0.0.25 ID3 over the SAMPLE: invented sessions, one marked as waiting on a human -------
     def browser(self, bus_events: List[Dict[str, Any]]) -> Dict[str, Any]:
         from . import session_views as SV
         return SV.sample_browser(self._sessions)
 
-    def timelapse(self, sid: str) -> Dict[str, Any]:
-        entries = self.timeline(sid or None)["entries"]
-        steps = [{"i": i, "t": e["t"], "kind": "write" if e["kind"] == "after" else "before",
-                  "path": e["path"], "snap": e["id"], "state": "ok", "added": None,
-                  "removed": None, "measured": e["kind"] != "after"}
-                 for i, e in enumerate(entries)]
-        files = list(dict.fromkeys(s["path"] for s in steps))
-        return {"sample": True, "session": sid, "run": "", "steps": steps, "files": files,
-                "count": len(steps), "truncated": False, "reads": "SAMPLE",
-                "unmeasured": sum(1 for s in steps if s["kind"] == "write")}
+    def activity(self, bus_events: List[Dict[str, Any]], focus: Optional[str],
+                 jobs: Dict[str, Any]) -> Dict[str, Any]:
+        from . import activity as A
+        b = self.browser(bus_events)
+        stages = ["brainstorm", "spec", "test", "develop", "review", "ship"]
+        rows = []
+        for i, s in enumerate(b["sessions"]):
+            cur = 3 if i == 0 else 5
+            rows.append({"id": s["id"], "short": s["short"], "prompt": s["prompt"],
+                         "status": s["status"], "status_basis": "SAMPLE", "run": s["run"],
+                         "branch": s["branch"], "worktree": "", "chain": [s["id"]],
+                         "resumed_from": "", "last": s["last"], "started": s["started"],
+                         "phase": {"current": stages[cur] if i == 0 else None, "finished": i != 0,
+                                   "regressed": False,
+                                   "stages": [{"stage": st, "status": "done" if j < cur or i
+                                               else "current" if j == cur else "pending",
+                                               "blocks": 0} for j, st in enumerate(stages)],
+                                   "tests": {"failing": 1 - i, "passing": 1 + i},
+                                   "basis": "SAMPLE"},
+                         "activity": {"state": "working" if i == 0 else "ended",
+                                      "last_tool": "Edit" if i == 0 else "",
+                                      "last_path": s["files"][0], "at": s["last"],
+                                      "tools": 3, "text": "SAMPLE", "basis": "SAMPLE"},
+                         "files": {"count": len(s["files"]), "last": s["files"][0],
+                                   "writes": s["writes"]},
+                         "gates": s["gates"], "secret_hits": 0, "needs_you": s["needs_you"],
+                         "risk": s["risk"], "focused": s["id"] == (focus or "")})
+        return {"sample": True, "sessions": rows, "shown": len(rows), "all": len(rows),
+                "store_seq": 0, "bridge": {"wired": False, "note": "SAMPLE", "command": ""},
+                "live": 1, "needs_you": b["needs_you"], "waiting": b["waiting"],
+                "risk_formula": b["risk_formula"], "jobs": jobs, "bus": False,
+                "focus": focus or "", "types": dict(A.TYPES), "edge": "SAMPLE"}
 
-    def treemap(self, sid: Optional[str], size: str) -> Dict[str, Any]:
-        from . import session_views as SV
-        touched = {e["path"] for e in self.timeline(sid or None)["entries"]}
-        leaves = [{"path": p, "loc": t.count("\n"), "bytes": len(t), "weight": max(1, t.count("\n")),
-                   "writes": 1 if p in touched else 0, "added": t.count("\n") if p in touched else 0,
-                   "removed": 0, "unmeasured": 0} for p, t in sorted(self._FILES.items())]
-        dirs = SV.layout(leaves)
-        return {"sample": True, "session": sid or "", "size": size, "width": SV.TREEMAP_W,
-                "height": SV.TREEMAP_H, "files": leaves, "dirs": dirs, "count": len(leaves),
-                "total_files": len(leaves), "omitted": 0,
-                "changed": sum(1 for lf in leaves if lf["writes"]), "not_on_disk": [],
-                "heat_scale": "SAMPLE", "sized_by": "lines of code"}
+    def activity_history(self, sid: str, before: Optional[str], limit: int,
+                         types: List[str]) -> Dict[str, Any]:
+        from . import activity as A
+        from . import snapshots as S
+        entries = self.timeline(sid or None)["entries"]
+        items = [A.item_from_snapshot(S.Snapshot.from_dict(e)) for e in entries]
+        t = self._t0
+        items.append(dict(id="ev:1", t=t + 310, type="test", title="test RED · test_parser::empty",
+                          verdict="red", session=sid, run="run-parser-fix", source="SAMPLE",
+                          ledger_seq=1, detail={"test": "test_parser::empty", "event": "red"}))
+        items.append(dict(id="ev:2", t=t + 970, type="test", title="test GREEN · test_parser::empty",
+                          verdict="green", session=sid, run="run-parser-fix", source="SAMPLE",
+                          ledger_seq=2, detail={"test": "test_parser::empty", "event": "green"}))
+        items.append(dict(id="ev:3", t=t + 950, type="gate", title="write_gate · allowed · src/parser.py",
+                          verdict="passed", session=sid, run="run-parser-fix", source="SAMPLE",
+                          ledger_seq=3, detail={"gate": "write_gate", "decision": "allowed",
+                                                "subject": "src/parser.py", "why": "SAMPLE"}))
+        items.append(dict(id="ev:4", t=t + 100, type="phase", title="entered develop", verdict="",
+                          session=sid, run="run-parser-fix", source="SAMPLE", ledger_seq=None,
+                          detail={"phase": "develop", "outcome": "enter"}))
+        if types:
+            items = [i for i in items if i["type"] in types]
+        items.sort(key=lambda i: -i["t"])
+        return {"sample": True, "session": sid, "joined": [sid], "run": "run-parser-fix",
+                "items": items[:limit], "count": min(limit, len(items)), "next": None,
+                "window": {"t_hi": None, "t_lo": None, "exclusive": False},
+                "total": {"events": 4, "writes": len(entries), "resumes": 0},
+                "types": dict(A.TYPES), "sources": ["SAMPLE"], "reads": "SAMPLE"}
+
+    def hints(self, sids: List[str]) -> Dict[str, Any]:
+        from .. import hints as H
+        t = self._t0
+        out = {}
+        for i, sid in enumerate(sids):
+            if i == 0:
+                h = H.Hint(H.C_RERUN, "SAMPLE · src/parser.py was written after the last test "
+                           "run — re-run test_parser::empty", "mokata test",
+                           (H.Cite("timeline", "SAMPLE · after:src/parser.py", t + 970),
+                            H.Cite("test_record", "SAMPLE · test_runs.last_suite", t + 310)))
+                status, hs, reason = H.STATUS_HINTS, [h], ""
+            else:
+                status, hs, reason = H.STATUS_NONE, [], "SAMPLE · run finished"
+            out[sid] = {"version": H.HINTS_VERSION, "status": status,
+                        "hints": [x.to_dict() for x in hs], "count": len(hs), "reason": reason,
+                        "subject": {"session": sid, "run": "run-parser-fix", "chain": [sid]},
+                        "basis": {"run": "SAMPLE", "source": "SAMPLE", "read": {}, "bash": "SAMPLE",
+                                  "note": ""},
+                        "derived_at": t + 1000}
+        return {"sample": True, "answers": out, "count": len(sids)}
 
     def pr(self, url: str) -> Dict[str, Any]:
         return _fake("PR #42 (sample/repo) against origin/main",

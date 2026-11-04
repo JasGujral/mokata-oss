@@ -1,0 +1,16 @@
+/* mokata ide — Copy with Context (its ref shape included) / Find Usages (0.0.27 P4). Reuses the menu, chip and
+   ref-card vocabulary; only what those do not cover lives here. */
+.p4-pop { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; max-height: 70vh; overflow: auto;
+          box-shadow: 0 8px 24px var(--shadow); }
+.p4-pop-title { font-weight: 600; overflow-wrap: anywhere; }
+.p4-pop-body { display: flex; flex-direction: column; gap: 8px; }
+.p4-facts { display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
+.p4-facts .warn, .p4-usages .warn { color: var(--amber); }
+.p4-shapes { display: flex; flex-direction: column; gap: 6px; }
+.p4-shape-row { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.p4-usages { margin-top: 18px; }
+.p4-head { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.p4-label { color: var(--text2); overflow-wrap: anywhere; }
+.p4-cands { flex-wrap: wrap; gap: 4px; }
+.p4-pager { gap: 8px; align-items: center; margin-top: 6px; }
+.p4-row:focus-visible, .p4-shape:focus-visible, .p4-pop button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }

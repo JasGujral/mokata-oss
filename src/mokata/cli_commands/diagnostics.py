@@ -73,6 +73,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     for line in mcp_admin.full_status(root=args.path,
                                       home=getattr(args, "home", None)).lines:
         print(line)
+    from ..ide import trust as ide_trust
+    trust_line = ide_trust.status_line(args.path)
+    if trust_line:
+        print(trust_line)
     # B-VER — the version-parity finding (parity + scope/plugin shadow), the SAME shared reporter
     # `mokata mcp status` uses. Informational: doctor's ok/exit stays derived from `report.ok`,
     # never from parity. This is the MCP-server version axis — a DIFFERENT axis than DB.S1's shared

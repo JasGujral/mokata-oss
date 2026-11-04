@@ -387,10 +387,11 @@ console.log(JSON.stringify({ kids: f.kids.map((k) => k.tag), asked }));
 
     def test_every_token_class_has_a_theme_colour_in_each_theme(self):
         css = (STATIC / "features" / "highlight.css").read_text(encoding="utf-8")
+        themes = (STATIC / "themes.css").read_text(encoding="utf-8")      # P6: the colours live per theme here
         for cls in H.TOKEN_CLASSES:
             self.assertIn(f".tk-{cls} ", css, cls)
-        for var in ("--tk-kw", "--tk-str", "--tk-com"):
-            self.assertEqual(4, css.count(var + ":"), f"{var}: dark, light, contrast x2")
+            if cls not in ("ins", "del", "em", "strong"):
+                self.assertEqual(4, themes.count(f"--tk-{cls}:"), f"--tk-{cls}: dark, light, hc-dark, hc-light")
 
 
 if __name__ == "__main__":

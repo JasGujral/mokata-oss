@@ -627,3 +627,57 @@ class TestTheShellRuleCannotDriftFromThePythonRule(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+@unittest.skipUnless(os.path.exists(SYNC_SH),
+                     "sync-public.sh is dev-only, excluded from the public mirror")
+@unittest.skipIf(_MISSING, f"needs {', '.join(_MISSING)} on PATH")
+class TestARelativeInvocationIsTheSameRun(_RealScriptHarness, unittest.TestCase):
+    """0.0.27 `SYNC-PUBLIC-RELATIVE-PATH`: `scripts/sync-public.sh ~/mokata-oss`, typed from the repo
+    root, must be the same run as `"$PWD/scripts/sync-public.sh" ~/mokata-oss`.
+
+    Business rule: how the release operator spells the script's path cannot change what the sync
+    decides. At 0.0.26 the script ran `cd "$DEST"` and only THEN resolved its companion
+    `verify-mirror.sh` from `dirname "$0"`. A relative `$0` resolved against the mirror, the companion
+    was "missing", and a destination with an origin was refused for a reason that was not true. The
+    0.0.26 cut worked around it by typing the absolute path.
+    """
+
+    sync_script = SYNC_SH
+
+    def _dest_with_origin(self):
+        # An origin is what sends the script to `verify-mirror.sh`: without one it never resolves
+        # the companion, and the defect cannot show.
+        bare = self.tmp()
+        self._git("init", "-q", "--bare", cwd=bare)
+        dest = self._dest()
+        self._git("remote", "add", "origin", bare, cwd=dest)
+        self._git("push", "-q", "origin", "main", cwd=dest)
+        self._git("remote", "set-head", "origin", "main", cwd=dest)
+        return dest
+
+    def _run(self, argv0, cwd, dest):
+        return subprocess.run(
+            _support.bash_argv(argv0, _support.as_posix(dest)), cwd=cwd,
+            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            env={**os.environ, **_GIT_ENV})
+
+    def test_relative_and_absolute_invocations_decide_the_same(self):
+        src = self._src()
+        rel = self._run("scripts/sync-public.sh", src, self._dest_with_origin())
+        absolute = self._run(_support.as_posix(os.path.join(src, "scripts", "sync-public.sh")),
+                             src, self._dest_with_origin())
+        out = rel.stdout + rel.stderr
+        self.assertNotIn("verify-mirror.sh is missing", out,
+                         "a relative $0 was resolved after `cd $DEST`:\n" + out)
+        self.assertEqual(rel.returncode, absolute.returncode,
+                         f"relative rc={rel.returncode} vs absolute rc={absolute.returncode}\n"
+                         f"--- relative ---\n{out}\n--- absolute ---\n{absolute.stdout}{absolute.stderr}")
+
+    def test_a_companion_that_really_is_missing_is_still_refused(self):
+        # The control: the fix must not turn "missing" into "assumed present".
+        src = self._src()
+        os.remove(os.path.join(src, "scripts", "verify-mirror.sh"))
+        proc = self._run("scripts/sync-public.sh", src, self._dest_with_origin())
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("verify-mirror.sh is missing", proc.stdout + proc.stderr)

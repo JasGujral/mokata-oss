@@ -284,7 +284,11 @@
     G.page = page || 1;
     G.view = view || G.view;
     hint();
-    for (const b of document.querySelectorAll("button[data-gview]")) b.classList.toggle("active", b.dataset.gview === G.view || (b.dataset.gview === "ripple" && G.view === "untested"));
+    for (const b of document.querySelectorAll("button[data-gview]")) {
+      const on = b.dataset.gview === G.view || (b.dataset.gview === "ripple" && G.view === "untested");
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-checked", String(on));
+    }
     $("g-untested").checked = G.view === "untested";
     $("g-untested-wrap").hidden = G.view === "focus" || G.view === "path";
     $("g-to-wrap").hidden = G.view !== "path";
@@ -405,7 +409,7 @@
       G.cy.on("tap", "node", (ev) => { const d = ev.target.data(); if (d.kind === "cluster") openCluster(d.id); else select(d, "node"); });
       G.cy.on("tap", "edge", (ev) => select(ev.target.data(), "edge"));
       G.cy.on("dbltap", "node", (ev) => { const d = ev.target.data(); if (d.symbol) show(G.view === "path" ? "ripple" : G.view, d.symbol); });
-      if (window.matchMedia) window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => G.cy.style(style()));
+      MK.theme.onChange(() => { if (G.cy) G.cy.style(style()); });   // P6: the theme moved
     }
     const vis = visible(data);
     G.vis = vis;
@@ -447,6 +451,13 @@
   }
 
   // --- P37 (R25): the ONE basis word — status line, legend and summary all say data.basis -----
+  // §6: plain words up front; the basis word itself stays (one field, R25) with its meaning on hover.
+  const BASIS_PLAIN = {
+    structural: "every arrow is from the call graph",
+    approximate: "some arrows are name matches only (dashed)",
+    floor: "no call graph answered — every arrow is a name match only",
+    pending: "nothing answered yet",
+  };
   const BASIS_SAYS = {
     structural: "structural — every edge is a call or import the code graph proved",
     approximate: "approximate — some edges are name matches (dashed), the rest are proved",
@@ -454,6 +465,7 @@
     pending: "pending — nothing answered yet",
   };
   function basisWord(data) { return (data && data.basis) || "pending"; }
+  function plainBasis(data) { const w = basisWord(data); return BASIS_PLAIN[w] || w; }
   function ensureChrome() {
     const stage = document.querySelector(".graph-stage");
     if (!$("g-status")) {
@@ -491,7 +503,7 @@
     if (data.partial) parts.push(data.view === "path" ? "partial — a path from the index, being confirmed"
       : `partial — ${data.rings_done || 0} of ${data.depth || "?"} ring(s) confirmed` + (data.index_rings ? `, ${data.index_rings} read from the index (faded = not yet confirmed)` : ""));
     else parts.push("done");
-    parts.push("basis: " + word);
+    parts.push(BASIS_PLAIN[word] || word);
     if (vis && vis.total > vis.nodes.length - vis.clusters.length) {
       parts.push(`showing ${vis.nodes.length - vis.clusters.length} of ${vis.total} nodes, ${vis.clusters.length} group(s) — click a group to open it`);
     }
@@ -499,6 +511,7 @@
     // P37 (U10 overruled: no hard cap) — a full page says so and offers the next one.
     if (data.more && !data.partial) parts.push(data.more_note || "more to draw");
     $("g-status-text").textContent = parts.join(" · ");
+    $("g-status-text").title = "basis: " + word + " — " + (BASIS_SAYS[word] || word);
     $("g-continue").hidden = !(data.more && !data.partial);
     $("g-status").hidden = false;
     $("g-status").dataset.basis = word;
@@ -537,7 +550,7 @@
       title.textContent = data.partial ? `If ${sym} changes — ring ${data.rings_done || 0} so far` : `If ${sym} changes`;
       const rings = Object.keys(byRing).sort().map((r) => `${byRing[r]} at ${r} hop(s)`).join(", ")
         || (data.partial ? `no caller yet`
-          : basisWord(data) === "structural" ? `0 callers (structural): nothing in this repo calls ${sym} (new, unused, or only called from outside) — Focus shows what it calls`
+          : basisWord(data) === "structural" ? `0 callers (from the call graph): nothing in this repo calls ${sym} (new, unused, or only called from outside) — Focus shows what it calls`
           : `no caller of ${sym} found by name match — that is not a verified zero (no code graph answered)`);
       sum.textContent = data.partial ? `showing partial results — ${rings}. Edges so far: ${bases}.`
         : data.defs === 0
@@ -555,14 +568,14 @@
       }
     }
     // R25 — the summary says the same basis word as the status line and the legend
-    sum.textContent = `${sum.textContent.replace(/\s+$/, "")} Basis: ${basisWord(data)}.`;
+    sum.textContent = `${sum.textContent.replace(/\s+$/, "")} Basis: ${basisWord(data)} — ${plainBasis(data)}.`;
     const notes = [];
     // R25 — the status bar is told "degraded" only when THIS picture is not structural: the last
     // degrade any question saw must not contradict the basis this picture says.
     if (data.graph_note && basisWord(data) !== "structural") { notes.push(data.graph_note); if (MK.noteGraph) MK.noteGraph(data.graph_note); }
     if (data.more && data.more_note) notes.push(data.more_note);
-    if ((data.bases || {}).lexical) notes.push("dashed edges are lexical (a name match, not a graph edge): they never mark anything untested");
-    else if ((data.answer_bases || []).includes("lexical")) notes.push("at least one question had no structural answer (it fell to the lexical floor), so an empty part of this picture is not a verified zero");
+    if ((data.bases || {}).lexical) notes.push("dashed arrows are name matches only, not calls the graph proved: they never mark anything untested");
+    else if ((data.answer_bases || []).includes("lexical")) notes.push("at least one question was answered by name match only, so an empty part of this picture is not a proved zero");
     $("g-note").textContent = notes.join(" · ");
   }
 
@@ -585,7 +598,7 @@
     box.append(el("b", "mono", d.full || d.label));
     box.append(el("div", "small dim", `${d.pending ? "from the index, not yet confirmed · " : ""}${d.kind}${d.coverage ? " · " + d.coverage : ""}${d.path ? " · " + d.path + ":" + d.line : ""}`));
     const row = el("div", "row2");
-    const open = el("button", "btn", "Open in Navigate");
+    const open = el("button", "btn", "Open in Code");
     open.type = "button";
     open.onclick = async () => {
       if (d.path) { MK.openFile(d.path, d.line || 1, d.symbol); return; }
@@ -628,20 +641,25 @@
     }
     $("g-depth").onchange = () => show();
     $("g-untested").onchange = () => show($("g-untested").checked ? "untested" : "ripple");
-    for (const b of document.querySelectorAll("button[data-gview]")) b.classList.toggle("active", b.dataset.gview === G.view);
+    for (const b of document.querySelectorAll("button[data-gview]")) {
+      b.classList.toggle("active", b.dataset.gview === G.view);
+      b.setAttribute("aria-checked", String(b.dataset.gview === G.view));
+    }
     const guide = $("g-guide");
     $("g-help").onclick = () => {
       guide.open = !guide.open;
       G.guidePinned = guide.open;
       if (guide.open) guide.scrollIntoView({ block: "start" });
     };
+    // the ONE help (§5 #43): the ? button and the guide's own summary open the same text
+    guide.addEventListener("toggle", () => { $("g-help").setAttribute("aria-expanded", String(guide.open)); });
     guide.querySelector("summary").addEventListener("click", () => setTimeout(() => { G.guidePinned = guide.open; }, 0));
     hint();
   };
   MK.onModeGraph = (mode) => {
     if (mode !== "graph") return;
     loadLibs().catch(() => null);                  // P37: the canvas is ready before the first ring
-    const eng = ($("st-graph").textContent || "").trim();
+    const eng = ((MK.caps && MK.caps.graph) || $("st-graph").textContent || "").trim();
     const FULL = "install the code graph for proven, multi-language edges: mokata setup claude --mode full";
     $("g-engine").textContent = !eng || eng === "…" ? "checking…"
       : /code-review-graph|crg/i.test(eng) ? `${eng} — the full code graph`

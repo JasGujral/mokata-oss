@@ -161,6 +161,17 @@ def config_set(
             emit(msg)
             return ConfigSetResult(False, True, msg, key=key, old=_old, new=value)
 
+    # WATCH-FOLD — settings.ux.progress is an enum (where `mokata watch` shows the run). A value
+    # outside it is refused here, naming the set; it is never stored to be guessed at later.
+    if key in ("settings", "settings.ux", "settings.ux.progress"):
+        from .progress import UX_PROGRESS_VALUES
+        tier = _get(proposed, "settings.ux.progress", _MISSING)
+        if tier is not _MISSING and tier not in UX_PROGRESS_VALUES:
+            msg = (f"config set rejected — settings.ux.progress={json.dumps(tier)} is not a tier; "
+                   f"it is one of {' | '.join(UX_PROGRESS_VALUES)}")
+            emit(msg)
+            return ConfigSetResult(False, True, msg, key=key, old=_old, new=value)
+
     shown_old = "(unset)" if old is _MISSING else json.dumps(old)
     emit(f"mokata config set {key}: {shown_old} -> {json.dumps(value)}")
 

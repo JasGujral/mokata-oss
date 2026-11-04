@@ -211,7 +211,10 @@ class TheClaudeIsNamedNotAged(unittest.TestCase):
         self.assertIsNone(SA._writers_claude([(5, P(4, "a", 1.0, None))] + chain[1:]))
         deep = [(9, P(8, "x", 1.0, "sh")), (8, P(7, "y", 1.0, "bash")), (7, P(6, "z", 1.0, "sh")),
                 (6, P(5, "w", 1.0, "claude"))]
-        self.assertIsNone(SA._writers_claude(deep), "beyond HOOK_LAUNCH_DEPTH: no answer")
+        # R8 (MCP-RESTART-DEEP-CHAIN): beyond HOOK_LAUNCH_DEPTH the Claude must be named as one.
+        self.assertEqual(6, SA._writers_claude(deep), "deep, through launchers, to a named claude")
+        deep_host = deep[:3] + [(6, P(5, "w", 1.0, "tmux"))]
+        self.assertIsNone(SA._writers_claude(deep_host), "deep, to a non-Claude name: no answer")
 
 
 if __name__ == "__main__":

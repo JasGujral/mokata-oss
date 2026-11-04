@@ -10,6 +10,21 @@ hide:
   - toc
 ---
 
+## What makes mokata different
+
+Six things a plain coding agent does not give you. Each row names the command that proves it and
+the beat of [differentiators in action](tutorials/differentiators-in-action.md) that runs it in a
+fresh repo — no network, no API key.
+
+| # | Differentiator | Prove it | See it run |
+|---|---|---|---|
+| D1 | **A codebase graph, mandatory by default** — blast radius answered structurally (an embedded AST floor ships in the box), a stale graph rebuilt before it answers, a grep-grade answer refused as decision input | `mokata query callers process_payment` | [D1](tutorials/differentiators-in-action.md#d1-query-the-codebase-by-structure) |
+| D2 | **Memory that heals by asking** — a contradicting decision is surfaced old → new for you to decide, never silently overwritten; no memory is written without an approval you mint | `mokata memory` | [D2](tutorials/differentiators-in-action.md#d2-self-healing-a-contradiction-is-surfaced-never-silently-overwritten) |
+| D3 | **Shared with your team** — export your approved decisions and a teammate imports them (human-gated, secret-scanned, deduplicated), or point the team at a Postgres you own | `mokata memory export` | [D3](tutorials/differentiators-in-action.md#d3-share-it-with-the-team-one-developers-write-seen-by-another) |
+| D4 | **Your project's rules, captured once** — onboarding turns rules, guardrails and domain facts into typed memory; a later spec pulls in only what it touches | `mokata onboard` | [D4](tutorials/differentiators-in-action.md#d4-guided-capture-referenced-just-in-time-in-a-later-spec) |
+| D11 | **Review every decision** — every gate verdict, approval and durable write on one hash-chained ledger; reconstruct any run | `mokata audit` | [D11](tutorials/differentiators-in-action.md#d11-the-audit-ledger-reconstructs-the-whole-run) |
+| D13 | **Nothing leaves your machine** — no telemetry, no model inside, no API key; nothing is sent anywhere unless you wire it | `mokata init --profile minimal --preview` | [D13](tutorials/differentiators-in-action.md#d13-local-first-zero-telemetry) |
+
 ## About mokata
 
 mokata is an open-source framework for Claude Code that brings the strongest ideas in
@@ -92,19 +107,19 @@ This site follows the [Diátaxis](https://diataxis.fr/) model:
 | B | Knowledge | codebase graph **mandatory by default** — embedded stdlib-AST floor in the box, adopted graphs layered on top, grep beneath; a degraded blast radius is refused as decision input unless a ledgered escape is accepted; typed queries, incremental index + staleness, drift anchors |
 | C | Memory | typed persistent / decision / episodic memory, self-healing (surfacing), **no auto-writes — the poisoning defense**; in-database lexical recall (SQLite FTS5 + bm25, Postgres tsvector + ts_rank) with an optional consented semantic tier, `doctor` reporting which is live; **it ages** — usage signals + bi-temporal validity windows, and an over-budget scope gets a *proposed* archival sweep that closes a window rather than deleting a row; **it stays fast as it grows** — each tier nominates its shortlist in the database; **two people writing the same fact produce a proposal, not a lost fact**; summaries are *drafted* by the agent you are already talking to (no model embedded, no API key) and still gated; `memory export`/`import` backs it up to `.mokata/backups/` |
 | D | Engine | brainstorm → spec → test → develop → review → ship, each gated (brainstorm alone runs 7 gated phases); provable completeness gate, AC-mapper, pre-mortem, prior-art step, spec-compliance, dry-run; a deferred item needs a re-gated `spec amend` before it can be built |
-| E | TDD & execution | RED-before-GREEN, model routing, bug/debug/optimize engines, execution-mode selector; a run can take **its own worktree and branch** — always offered, never automatic — and `worktree list` joins your worktrees against their sessions with a staleness verdict per row; `worktree clean` and `worktree remove` tidy them — previewed, human-gated, and never touching a live session |
+| E | TDD & execution | RED-before-GREEN, model routing, bug/debug/optimize engines, execution-mode selector; each Claude session works in **its own git worktree** by default (`settings.sessions.worktree: always`: the hook refuses a session's first write to the main checkout until it enters one; `off` keeps it in the main checkout), and `worktree list` joins your worktrees against their sessions with a staleness verdict per row; `worktree clean` and `worktree remove` tidy them — previewed, human-gated, and never touching a live session; `worktree merge` lands one through the gated merge — the full suite and the review green at the branch's head, then your approval of exactly that merge |
 | F | Token governance | tracker, JIT retrieval, handback caps, output density, budget, cache-stable prefixes |
 | G | Rules & governance | 4-tier rules, taxonomy, sync/async hooks, Karpathy gates, rule-learning, skill authoring |
 | I | Safety & audit | secret protection, human-minted single-use approvals, **15 backed gates (six of them frontend/backend domain gates run by `mokata gate check`) — and the hook stops 6 things on your agent's native writes** (`self-protect`, the four run-state gates and the `fix-breaker`), audit ledger, lethal-trifecta gate, revert, resume |
 | J | Distribution | cross-harness boundary, shareable stack manifests, portable sessions (transport derived from the repo's mode); `release-notes-check` **refuses the cut** when the notes announce a different version than the tag, or quietly drop a fact the changelog declared as a known limitation |
 | K | Config | per-layer/tool toggles, profiles, local-first, committed config, trust dial, doctor (incl. the DSN deep-check and retrieval-stack line), reset |
 | L | Composability | standalone commands, mid-pipeline entry, direct skills, catalog, chaining, suggestions |
-| M | MCP surface | 70 tools (46 read · 23 write · 1 opt-in approve), every call answers within its budget (a long one says `running` and a same-argument re-call joins it — never run twice), typed annotations, structured `response_format`, cursor pagination, and a loud `AWAITING APPROVAL` head so waiting-on-a-human never reads as a hang |
+| M | MCP surface | 74 tools (47 read · 26 write · 1 opt-in approve), every call answers within its budget (a long one says `running` and a same-argument re-call joins it — never run twice), typed annotations, structured `response_format`, cursor pagination, and a loud `AWAITING APPROVAL` head so waiting-on-a-human never reads as a hang |
 | + | Sessions & subagents | each Claude session bound to its own run (parallel-safe); the gate state re-anchored after compaction; one context budget; subagent contracts (read-only, depth, a structured hand-back); shell writes meet the same gates as native edits; session notes drafted from the record and kept only on approval |
-| + | Review window | `mokata ide` + `/mokata:review-window` — a read-only, localhost-only page: what each session wrote, the diff at any point in time from mokata's own write snapshots, the live tree, branch compare and GitHub PRs by URL; re-focuses on the asking session; `--demo` sample data ([guide](how-to/review-agent-work.md)) |
+| + | Review window | `mokata ide` + `/mokata:review-window` — a read-only, localhost-only page: what each session wrote, the diff at any point in time from mokata's own write snapshots, the live tree, branch compare and GitHub PRs by URL; re-focuses on the asking session; split or unified diffs with intra-line marks, image diff, themes (incl. two high-contrast), Copy with Context and Find Usages, the Proof screen ([AC → test → code](how-to/see-the-proof.md)), next-step hints (`mokata suggest`) and a cited change explainer (`mokata explain`); `--demo` sample data ([guide](how-to/review-agent-work.md)) |
 
-Counts in the box today: **30 Agent Skills** (16 curated + 14 domain) · **39 slash commands** ·
-**71 CLI subcommands** · **70 MCP tools** · **15 backed gates** · **1 runtime dependency**.
+Counts in the box today: **30 Agent Skills** (16 curated + 14 domain) · **40 slash commands** ·
+**73 CLI subcommands** · **74 MCP tools** · **15 backed gates** · **1 runtime dependency**.
 
 Published docs: <https://mokata.ai/> · Source & issues:
 <https://github.com/JasGujral/mokata-oss>.

@@ -139,7 +139,10 @@ class TestWowDemo(unittest.TestCase):
         # The audit punchline. 7 → 8 at the 0.0.15 doc gate: KB.S1 (0.0.14) ledgered the CLI
         # one-shots, so `mokata init` now emits a `setup` row as #1 and the demo's ledger is 8
         # entries. The doc and this pin were stale together; verified against a real run.
-        self.assertIn("audit ledger — 8 entries", demo)
+        # 8 → 10 at 0.0.27 L11: `init --yes` now wires the harness (a second `setup` row) and an
+        # emitted spec carries a task plan (a `plan_approved` row). Verified against a real run;
+        # the doc had been unrunnable since the task plan became required.
+        self.assertIn("audit ledger — 10 entries", demo)
         # (the internal 60-second screencast shot-list was removed from this public tutorial)
 
     def test_demo_is_registered_in_the_nav(self):

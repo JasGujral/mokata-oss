@@ -1,0 +1,21 @@
+/* mokata ide — Intelligence: workspace trust + read-only language servers (0.0.27 P24). */
+#view-lsp { padding: 12px 16px; overflow: auto; }
+#view-lsp h3, #panel-lsp h3 { margin: 10px 0 6px; font-size: 13px; color: var(--text); }
+.lsp-trust, .lsp-servers-box { font-size: 12px; color: var(--text2); }
+.lsp-trust .row, .lsp-server .row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.lsp-trust input { font: inherit; width: 14em; padding: 2px 6px; background: var(--panel2); color: var(--text);
+  border: 1px solid var(--line2); border-radius: 5px; }
+.lsp-servers { list-style: none; margin: 0; padding: 0; }
+.lsp-server { padding: 6px 0; border-bottom: 1px solid var(--line); }
+.chip.ok { color: var(--accent-ink); border-color: var(--accent); }
+.chip.warn, .lsp-server .warn { color: var(--amber); }
+.chip.st-ready { color: var(--accent-ink); }
+.chip.st-indexing { color: var(--blue); }
+.chip.st-crashed, .chip.sev-error { color: var(--del); }
+.chip.sev-warning { color: var(--amber); }
+.lsp-answer { margin-top: 8px; }
+.lsp-edge { color: var(--text2); margin: 2px 0; }
+.lsp-hover { white-space: pre-wrap; padding: 8px; border: 1px solid var(--line); border-radius: 6px; }
+.lsp-results { list-style: none; margin: 8px 0 0; padding: 0; }
+.lsp-results .ref-card.is-test .ref-head { border-left: 2px solid var(--accent); }
+.lsp-cmd { color: var(--text2); padding-left: 10px; word-break: break-all; }

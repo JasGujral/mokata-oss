@@ -8,8 +8,9 @@
 //   >       commands — every IDE command in the registry AND every /mokata:* command and skill
 //   /       only the /mokata:* commands ("/spe", "/mokata:spe")
 //
-// Keys (all through the registry): ⌘P files (again: changed only) · ⌘K the palette · ⌘⇧P commands
-// · ⌘G go to line. Every command row shows its shortcut (which-key). A /mokata:* command is COPIED
+// Keys (all through the registry): ⌘P files (again: changed only) · ⌘K the palette (type `>` for
+// commands, `:` for a line — 0.0.27 UX-SIMPLIFY removed the ⌘⇧P / ⌘G openers that did only that).
+// Every command row shows its shortcut (which-key). A /mokata:* command is COPIED
 // for the human to paste into their Claude Code session — the IDE never types into a session by
 // itself (P2); the server's /api/context route carries references, never instructions.
 // SAFETY: repo text and command descriptions enter the page through textContent only.
@@ -32,6 +33,9 @@
 
   function parse(q) {
     const s = String(q || "");
+    // P11: an absolute `/path/in/workspace.py:3` is a location, not a /command (a command is one
+    // word after the slash; a path has another "/" or ends in :line[:col]).
+    if (s.charAt(0) === "/" && /\/.*\/|:\d+(:\d+)?:?$/.test(s)) return { mode: "files", needle: s };
     const mode = PREFIX[s.charAt(0)];
     if (!mode) return { mode: "files", needle: s };
     let needle = s.slice(1);
@@ -80,7 +84,7 @@
     return total ? Math.min(n, total) : n;
   }
 
-  // "Mod+Shift+P" -> "⌘⇧P" on a Mac, "Ctrl+Shift+P" elsewhere.
+  // "Mod+Shift+F" -> "⌘⇧F" on a Mac, "Ctrl+Shift+F" elsewhere.
   function keyLabel(combo, mac) {
     if (!mac) return combo.replace(/^Mod\b/, "Ctrl");
     const sym = { Mod: "⌘", Alt: "⌥", Shift: "⇧" };
@@ -108,7 +112,7 @@
   function openPalette(prefix) {
     const inp = $("qo-input");
     if (!inp) return;
-    if (!pal.open) { pal.open = true; pal.changedOnly = false; $("qo").hidden = false; }
+    if (!pal.open) { pal.opener = document.activeElement; pal.open = true; pal.changedOnly = false; $("qo").hidden = false; }
     inp.value = prefix || "";
     inp.focus();
     inp.setSelectionRange(inp.value.length, inp.value.length);
@@ -122,7 +126,13 @@
     openPalette("");
   };
   MK.openPalette = openPalette;
-  function close() { pal.open = false; $("qo").hidden = true; }
+  // P6: Escape and a run command hand the keyboard back to where it was (never to <body>), so a
+  // theme switch from the palette leaves focus on the editor; a jump to a file focuses its own view.
+  function close(restore) {
+    const back = pal.opener;
+    pal.open = false; pal.opener = null; $("qo").hidden = true;
+    if (restore && back && back.isConnected && back !== document.body && typeof back.focus === "function") back.focus({ preventScroll: true });
+  }
 
   // --------------------------------------------------------------------------- rows
   function hl(text, needle) {
@@ -212,6 +222,8 @@
     if (!res || !fresh()) return;
     const box = $("qo-results");
     if (pal.changedOnly) { res.files = []; res.symbols = []; }
+    await locatorRow(box, needle, gen);
+    if (gen !== pal.gen) return;
     if ((res.changed || []).length) {
       const ul = section(box, u.focus ? "Changed in this session" : "Changed", "always ranked first");
       for (const r of res.changed) {
@@ -248,6 +260,24 @@
     paint();
     $("qo-matcher").textContent = res.matcher ? `matcher: ${res.matcher}${res.matcher === "python-floor" ? " (pure-Python floor — pip install rapidfuzz)" : ""}${pal.changedOnly ? " · changed only" : ""}` : "";
     if (res.symbols_state === "building" && !pal.changedOnly) whenSymbols(gen);
+  }
+
+  // 0.0.27 P11 — a pasted `path:line:col` (src/a.py:42:7, /abs/in/workspace/a.py:3, C:\\x\\y.py:3:1)
+  // is a place, not a search: the server parses and contains it, and the row says where it goes —
+  // or why it will not (a path outside the workspace is refused, never opened).
+  async function locatorRow(box, needle, gen) {
+    if (!MK.locatorLooks || !MK.locatorLooks(needle)) return;
+    const r = await MK.api("/api/locate", { text: needle }).catch(() => null);
+    if (gen !== pal.gen || !r) return;
+    const ul = section(box, "Location");
+    const li = el("li", "qo-row");
+    if (r.error) {
+      li.append(el("span", "dim", `Not opened — ${r.note || r.error}`));
+      ul.append(li);
+      return;
+    }
+    li.append(el("span", "nm mono", `${r.path}:${r.line}${r.col ? ":" + r.col : ""}`), el("span", "dim small", "  ↵ open here"));
+    addRow(ul, li, () => { close(); MK.openLocator(needle); });
   }
 
   // P32 — the symbol index builds as an Activity job (n/N files there): the palette asks again when
@@ -336,7 +366,7 @@
         const nm = el("span", "nm"); nm.append(hl(r.c.title, needle)); li.append(nm);
         li.append(el("span", "dim small", r.c.feature));
         for (const k of keysOf(r.c)) li.append(el("kbd", "", k));
-        addRow(ulAll || ulIde, li, () => { close(); window.mokataIDE.run(r.c.id); });
+        addRow(ulAll || ulIde, li, () => { close(true); window.mokataIDE.run(r.c.id); });
       } else {
         const nm = el("span", "nm mono"); nm.append(hl(r.c.slash, needle)); li.append(nm);
         li.append(el("span", "dim small desc", r.c.description));
@@ -379,6 +409,7 @@
     clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, 6000);
   }
   MK.toast = toast;
+  MK.copyText = copyText;
 
   // --------------------------------------------------------------------------- wiring
   MK.wirePalette = function wirePalette() {
@@ -389,7 +420,7 @@
     // registry and app.js see them.
     $("qo-input").addEventListener("keydown", (ev) => {
       if (!pal.open) return;
-      if (ev.key === "Escape") { ev.preventDefault(); close(); }
+      if (ev.key === "Escape") { ev.preventDefault(); close(true); }
       else if (ev.key === "ArrowDown") { ev.preventDefault(); pal.idx = Math.min(pal.rows.length - 1, pal.idx + 1); paint(); }
       else if (ev.key === "ArrowUp") { ev.preventDefault(); pal.idx = Math.max(0, pal.idx - 1); paint(); }
       else if (ev.key === "Enter") { ev.preventDefault(); const r = pal.rows[pal.idx]; if (r) r.act(ev.altKey); }
@@ -401,9 +432,6 @@
     commands: [
       { id: "palette.open", title: "Palette: files, @symbols, #workspace, :line, >commands",
         keys: "Mod+K", inFields: true, run: () => openPalette("") },
-      { id: "palette.commands", title: "Palette: commands", keys: "Mod+Shift+P", inFields: true,
-        run: () => openPalette(">") },
-      { id: "palette.line", title: "Go to line…", keys: "Mod+G", inFields: true, run: () => openPalette(":") },
       { id: "palette.symbol", title: "Go to symbol in this file…", run: () => openPalette("@") },
       { id: "palette.workspace", title: "Go to symbol in the workspace…", run: () => openPalette("#") },
       { id: "palette.mokata", title: "mokata: run a /mokata: command…", run: () => openPalette("/") },

@@ -16,8 +16,15 @@ after the approval is refused, not merged.
   GET  /api/worktree/size?path=       disk size of one worktree — computed on request only
   POST /api/worktree/sync             {path, proposal_id?} — rebase onto the main checkout's branch
                                       (gated; required before merge when the branch is behind)
-  POST /api/worktree/merge            {path, proposal_id?} — merge back into the main checkout's
-                                      branch (conflicts shown first), then remove worktree + branch
+  POST /api/worktree/merge            0.0.27 P21 gated merge: {path, strategy?, message?} -> the
+                                      plan (evidence + blockers) or a proposal; {proposal_id} -> a
+                                      `git.merge` job (`merge_gate.run_merge`). The worktree is kept.
+  POST /api/worktree/suite            {path} — mokata's full-suite runner in that worktree (a
+                                      `tests.run` job): the merge's test evidence
+  POST /api/worktree/merge-override   {path, reason, proposal_id?} — a human's evidence override
+                                      for one worktree at one head (gated)
+  POST /api/worktree/merge-recover    {merge_id, unlock_proposal?} — finish or report an
+                                      interrupted merge from git truth
   POST /api/worktree/delete           {path, discard?, proposal_id?} — refuses a worktree with work
                                       unless the approved proposal says `discard`
   POST /api/worktree/clean            {proposal_id?} — remove every merged, clean, unlocked worktree
@@ -27,6 +34,7 @@ after the approval is refused, not merged.
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Any, Dict
 
@@ -70,7 +78,8 @@ def routes(reg, ctx) -> None:
         if state.demo:
             return {"ok": True, "sample": True, "main": "/sample/repo", "into": "main",
                     "into_head": "a" * 40, "note": "", "worktrees": SAMPLE_ROWS}
-        return {**OPS.rows(state.root), "sample": False}
+        from ... import merge_gate as MG
+        return {**OPS.rows(state.root), "interrupted": MG.journals(state.root), "sample": False}
 
     def diff(request) -> Dict[str, Any]:
         sid = ctx.q(request, "session")
@@ -107,24 +116,113 @@ def routes(reg, ctx) -> None:
                 pass                             # the write is licensed; a lost ledger line is said
         return c
 
-    def _merge(body: Dict[str, Any]) -> Dict[str, Any]:
-        plan = OPS.plan_merge(state.root, str(body.get("path") or ""))
-        if not plan.get("ok"):
-            return {"stage": "blocked", "plan": plan,
-                    "reason": "; ".join(plan.get("blocked") or [plan.get("reason") or "refused"])}
-        args = {k: plan[k] for k in ("path", "branch", "head", "into", "into_head")}
+    # ------------------------------------------------------------------ 0.0.27 P21: the gated merge
+    def _merge_plan(body: Dict[str, Any]) -> Dict[str, Any]:
+        """No proposal: the plan (evidence, blockers, the card). Unblocked: a proposal to approve."""
+        from ... import merge_gate as MG
+        strategy = str(body.get("strategy") or "merge-commit")
+        if strategy not in MG.STRATEGIES:
+            return {"stage": "blocked", "state": MG.BLOCKED, "blocked": [],
+                    "reason": f"strategy must be one of {', '.join(MG.STRATEGIES)}"}
+        msg = body.get("message")
+        plan = MG.plan_merge(state.root, str(body.get("path") or ""), strategy,
+                             msg if isinstance(msg, str) else None)
+        if not plan.ok:
+            return {"stage": "blocked", "state": plan.state, "blocked": plan.blocked,
+                    "reason": plan.reason(), "plan": plan.to_dict()}
+        return {"stage": "proposed", "state": plan.state, "plan": plan.to_dict(),
+                **MG.propose(state.root, plan)}
+
+    async def merge(request):
+        """POST /api/worktree/merge — {path, strategy?, message?} plans/proposes; {proposal_id}
+        starts the approved merge as a `git.merge` job (202-free: the job handle comes back)."""
+        from ... import merge_gate as MG
+        from .. import jobs as J
+        body = await ctx.body(request)
+        body = body if isinstance(body, dict) else {}
+        pid = str(body.get("proposal_id") or "")
+        if not pid and not str(body.get("path") or ""):
+            return JSONResponse({"error": "BadRequest", "note": "path is required"}, status_code=400)
+        if state.demo:
+            return JSONResponse({"stage": "sample", "sample": True,
+                                 "reason": "SAMPLE data — nothing is merged"})
+        if not pid:
+            out = await asyncio.to_thread(_merge_plan, body)
+            return JSONResponse({**out, "sample": False})
+        ok, code, reason = await asyncio.to_thread(MG.ready_to_run, state.root, pid)
+        if not ok:
+            return JSONResponse({"stage": "refused", "code": code, "reason": reason,
+                                 "sample": False})
+        state.attach_loop()
+        root = state.root
+        job = state.jobs.start("git.merge", {"route": "/api/worktree/merge", "proposal": pid},
+                               lambda: MG.run_merge(root, pid, seal=J.seal_current).to_dict(),
+                               label=f"merge · {pid[:12]}", scope="main checkout",
+                               client=request.headers.get("x-mokata-client") or None)
+        return JSONResponse({"stage": "started", "id": job.id, "job": job.snapshot(),
+                             "sample": False})
+
+    async def suite(request):
+        """POST /api/worktree/suite {path} — mokata's full-suite runner in that worktree, as a
+        `tests.run` job; what it records is the merge's test evidence (P2)."""
+        from ... import merge_suite as MS
+        body = await ctx.body(request)
+        body = body if isinstance(body, dict) else {}
+        path = str(body.get("path") or "")
+        if not path:
+            return JSONResponse({"error": "BadRequest", "note": "path is required"}, status_code=400)
+        if state.demo:
+            return JSONResponse({"stage": "sample", "sample": True,
+                                 "reason": "SAMPLE data — nothing runs"})
+        root = state.root
+        state.attach_loop()
+        # a suite that cannot run (no command, no bound run) FAILS as a job, saying why
+        job = state.jobs.start("tests.run", {"route": "/api/worktree/suite", "path": path},
+                               lambda: MS.run_full_suite(root, path),
+                               label=f"full suite · {os.path.basename(path)[:40]}",
+                               scope=os.path.basename(path),
+                               client=request.headers.get("x-mokata-client") or None)
+        return JSONResponse({"stage": "started", "id": job.id, "job": job.snapshot(),
+                             "sample": False})
+
+    def _override(body: Dict[str, Any]) -> Dict[str, Any]:
+        """Evidence override for ONE worktree at ONE head — a human's, through the approval
+        channel (the terminal command or the P38 code card); waives only "no run bound"."""
+        from ... import merge_gate as MG
+        reason = str(body.get("reason") or "")
+        try:
+            args = MG.override_args(state.root, str(body.get("path") or ""), reason)
+        except MG.MergeGateError as exc:
+            return {"stage": "blocked", "reason": str(exc)}
+        if len(args["reason"]) < 8:
+            return {"stage": "blocked", "reason": "an override needs a real reason (8+ characters)"}
         pid = str(body.get("proposal_id") or "")
         if not pid:
-            return {"stage": "proposed", "plan": plan, **_propose(
-                OPS.TOOL_MERGE, args, plan["path"],
-                f"merge {plan['branch']} ({plan['ahead']} commit(s)) into {plan['into']}, then "
-                f"remove the worktree and its branch",
-                f"worktree : {plan['path']}\nbranch   : {plan['branch']} @ {plan['head'][:12]}\n"
-                f"into     : {plan['into']} @ {plan['into_head'][:12]}\nconflicts: none found")}
-        c = _redeem(pid, OPS.TOOL_MERGE, args)
+            return {"stage": "proposed", **_propose(
+                MG.TOOL_OVERRIDE, args, args["worktree"],
+                f"merge {args['worktree']} WITHOUT run evidence (at {args['head'][:12]})",
+                f"worktree : {args['worktree']}\nhead     : {args['head']}\n"
+                f"waives   : no mokata run is bound — tests and review are NOT checked\n"
+                f"reason   : {args['reason']}\ndies when the branch moves")}
+        c = _redeem(pid, MG.TOOL_OVERRIDE, args)
         if not c.granted:
-            return {"stage": "refused", "code": c.code, "reason": c.reason, "plan": plan}
-        return {"stage": "done", "result": OPS.merge(state.root, args), "plan": plan}
+            return {"stage": "refused", "code": c.code, "reason": c.reason}
+        if c.proposal is not None and c.proposal.approved_by == MG.CHAT_ACTOR:
+            return {"stage": "refused", "code": "chat-relayed",
+                    "reason": "an override needs a human's own approval, not an in-chat one"}
+        rec = MG.file_override(state.root, args["worktree"], args["reason"],
+                               actor=(c.proposal.approved_by if c.proposal else "") or "human")
+        return {"stage": "done", "result": rec}
+
+    def _recover(body: Dict[str, Any]) -> Dict[str, Any]:
+        """Recover an interrupted merge from git truth; removing mokata's own stale index lock
+        needs its own approval (`unlock_proposal`)."""
+        from ... import merge_gate as MG
+        mid = str(body.get("merge_id") or "")
+        if not mid:
+            return {"stage": "blocked", "reason": "merge_id is required"}
+        out = MG.recover(state.root, mid, unlock_proposal=str(body.get("unlock_proposal") or ""))
+        return {"stage": "done", "result": out.to_dict()}
 
     def _sync(body: Dict[str, Any]) -> Dict[str, Any]:
         """SYNC-BEFORE-SHIP — rebase the worktree onto the main checkout's branch, gated like merge."""
@@ -207,7 +305,12 @@ def routes(reg, ctx) -> None:
     reg.register("/api/worktrees", read, kind="json", feature="worktrees")
     reg.register("/api/worktree/diff", diff, kind="json", feature="worktrees")
     reg.register("/api/worktree/size", size, kind="json", feature="worktrees")
-    reg.register("/api/worktree/merge", _action(_merge, True), kind="action", feature="worktrees")
+    reg.register("/api/worktree/merge", merge, kind="action", feature="worktrees")
+    reg.register("/api/worktree/suite", suite, kind="action", feature="worktrees")
+    reg.register("/api/worktree/merge-override", _action(_override, True), kind="action",
+                 feature="worktrees")
+    reg.register("/api/worktree/merge-recover", _action(_recover, False), kind="action",
+                 feature="worktrees")
     reg.register("/api/worktree/sync", _action(_sync, True), kind="action", feature="worktrees")
     reg.register("/api/worktree/delete", _action(_delete, True), kind="action", feature="worktrees")
     reg.register("/api/worktree/clean", _action(_clean, False), kind="action", feature="worktrees")

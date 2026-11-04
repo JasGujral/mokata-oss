@@ -108,6 +108,32 @@ def _shell() -> List[str]:
     return ["/bin/sh"]
 
 
+def explain_re(cmd: str):
+    """The safe set for the hand-off: EXACTLY `<cmd> <ids/SHAs/words>` for this route's `cmd` —
+    the other route's spelling is not accepted."""
+    return re.compile(re.escape(cmd) + r" [A-Za-z0-9_ -]+\Z")
+
+
+def explain_prompt(target: Any, root: Optional[str] = None) -> str:
+    """`<slash explain> <target>` (`/mokata:explain` on the plugin route, `/explain` after init) for the embedded `claude` (0.0.27 P46). The target is re-parsed
+    here and a range must already be two commit SHAs (the route resolved them), so the one argument
+    carries only `[A-Za-z0-9_ -]`, `/` and `:` — nothing cmd.exe (`^ & | % < >`), PowerShell or a
+    POSIX shell reads as syntax, which is what makes the `cmd /c claude.cmd` path safe."""
+    from ..explain.bundle import SHA_RE, BundleRefused, parse_target, target_text
+    try:
+        spec = parse_target(target)
+    except BundleRefused as exc:
+        raise TerminalRefused(str(exc))
+    if spec["kind"] == "range" and not (SHA_RE.match(spec["base"]) and SHA_RE.match(spec["head"])):
+        raise TerminalRefused("an explain range is two commit SHAs (resolved before the hand-off)")
+    from ..plugin_runtime import slash_command
+    cmd = slash_command("explain", root)    # the form THIS route installed — never the other one
+    out = f"{cmd} {target_text(spec)}"
+    if not explain_re(cmd).match(out):
+        raise TerminalRefused("the explain argument has characters outside the safe set")
+    return out
+
+
 def default_programs() -> Dict[str, Callable[[Optional[str]], Optional[List[str]]]]:
     """program name → argv builder (`resume` is a session id already validated by the caller)."""
     def claude(resume: Optional[str]) -> Optional[List[str]]:
@@ -436,7 +462,7 @@ class TerminalHost:
                      "started": t.started} for t in self._terms.values()]
 
     def open(self, program: Any, cols: Any = 100, rows: Any = 30,
-             resume: Optional[str] = None) -> Terminal:
+             resume: Optional[str] = None, explain: Optional[str] = None) -> Terminal:
         ok, why = self.enabled
         if not ok:
             raise TerminalRefused(why)
@@ -445,9 +471,16 @@ class TerminalHost:
         if resume is not None and (program != "claude" or not isinstance(resume, str)
                                    or not _SID.match(resume)):
             raise TerminalRefused("resume takes a session id, and only with claude")
+        prompt = explain_prompt(explain, self.root) if explain is not None else None
+        if prompt is not None and (program != "claude" or resume is not None):
+            raise TerminalRefused("an explain request starts a fresh claude, never a resume")
         argv = self.programs[program](resume)
         if not argv:
             raise TerminalRefused(f"{program} is not on PATH")
+        if prompt is not None:
+            # P46: the SAME `claude` program (so the billing notice always fires), interactive,
+            # with ONE server-built argument — never `-p`, never anything the page sent.
+            argv = [*argv, prompt]
         with self._lock:
             if sum(1 for t in self._terms.values() if t.alive) >= MAX_TERMINALS:
                 raise TerminalRefused(f"at most {MAX_TERMINALS} terminals are open at once — "

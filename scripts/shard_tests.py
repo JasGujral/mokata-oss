@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import platform
 import statistics
@@ -109,6 +110,31 @@ def plan(modules: Iterable[str], record: dict, n: int) -> Tuple[List[List[str]],
     predicted = [sum(costs[m] for m in s) + (fixed if i == 0 else 0.0)
                  for i, s in enumerate(shards)]
     return shards, predicted
+
+
+#: A workflow's `runs-on` label prefix -> its key in `ci_scale.per_os`.
+RUNNER_OS = {"ubuntu": "Linux", "windows": "Windows", "macos": "macOS"}
+
+
+def runner_os(runs_on: str) -> str:
+    """`ubuntu-latest` -> `Linux`: the `ci_scale.per_os` key a runner label is costed at."""
+    for prefix, key in RUNNER_OS.items():
+        if str(runs_on).startswith(prefix):
+            return key
+    raise ValueError("no ci_scale OS for runner %r" % runs_on)
+
+
+def worst_shard_ci_seconds(modules: Iterable[str], record: dict, n: int,
+                           oses: Iterable[str]) -> float:
+    """THE CEILING FROM THE RECORD, as one number: the worst shard's predicted seconds on the
+    slowest of `oses` (`ci_scale.per_os` keys), with the provisional imbalance allowance while it
+    stands, plus the leg's overhead. A job's `timeout-minutes` is this through `ci_ceiling.py`'s
+    1.5x rule — one derivation for every sharded job, so two gates cannot derive two ways."""
+    _s, predicted = plan(modules, record, n)
+    scale = record["ci_scale"]
+    imbalance = float(scale.get("provisional_imbalance", 1.0))
+    per_os = max(float(scale["per_os"][o]) for o in oses)
+    return max(predicted) * imbalance * per_os + float(scale["leg_overhead_seconds"])
 
 
 def list_modules(start: str) -> List[str]:
@@ -202,6 +228,16 @@ def cmd_plan(a) -> int:
         print("shard %d/%d  %3d modules  predicted %6.0fs (%s)" % (i, a.of, len(s), p, record.get(
             "measured_on", "?")))
     print("unrecorded modules (costed at the median): %d" % len(unknown))
+    for os_key in a.os or ():
+        try:
+            worst = worst_shard_ci_seconds(list_modules(a.start), record, a.of, [os_key])
+        except (KeyError, ValueError) as exc:
+            print("shard_tests: the record cannot cost a %s runner: %s" % (os_key, exc),
+                  file=sys.stderr)
+            return CANNOT
+        print("worst shard on a %s runner: %.0fs (imbalance allowance %s) -> x1.5 = %d min"
+              % (os_key, worst, record["ci_scale"].get("provisional_imbalance", "absorbed"),
+                 math.ceil(worst * 1.5 / 60.0)))
     return GREEN
 
 
@@ -375,6 +411,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         p.add_argument("--durations", default=DURATIONS, help=argparse.SUPPRESS)
         if name in ("plan", "run"):
             p.add_argument("--of", type=int, required=True, help="number of shards")
+        if name == "plan":
+            p.add_argument("--os", action="append", default=[],
+                           help="also print the worst shard on this runner OS (Linux/Windows/"
+                                "macOS) and the ceiling the 1.5x rule derives; repeatable")
         if name == "run":
             p.add_argument("--shard", type=int, required=True, help="this shard, 1-based")
             p.add_argument("--record", default=None, help="write this shard's measured time here")

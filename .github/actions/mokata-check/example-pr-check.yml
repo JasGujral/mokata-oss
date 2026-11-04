@@ -33,9 +33,9 @@ jobs:
         run: python -m pip install --quiet mokata
 
       # Run the completeness gate + spec-awareness over the PR's changed files.
-      # `fail-on-block: true` makes a real block fail the check (set false for report-only).
+      # `fail-on-block: true` makes a real block fail the check (set false for report-only; a check that could not run, e.g. a shallow checkout, still fails with `refused=true` - use `fetch-depth: 0`).
       - id: check
-        uses: JasGujral/mokata-oss/.github/actions/mokata-check@v0.0.26
+        uses: JasGujral/mokata-oss/.github/actions/mokata-check@v0.0.27
         with:
           base: ${{ github.event.pull_request.base.sha }}
           fail-on-block: "true"

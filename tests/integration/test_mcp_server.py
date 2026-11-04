@@ -27,7 +27,7 @@ from mokata.share import export_manifest
 
 EXPECTED_READ = {"query", "recall", "doctor", "coverage", "budget", "audit",
                  "status", "preview", "progress",
-                 "lanes", "watch", "govern",          # Stage 54d — parallel-agent observability
+                 "lanes", "govern",                   # Stage 54d — parallel-agent observability
                  "vault_list", "vault_search", "vault_pull",
                  # Stage 54e — command-parity read tools
                  "rules", "skills", "suggest", "lat_check", "index_status",
@@ -55,7 +55,11 @@ EXPECTED_READ = {"query", "recall", "doctor", "coverage", "budget", "audit",
                  # M-4/R5 — PHASE 1 of the drafted-summary flow: which episodic clusters want a
                  # summary, and the turns to draft one from. Read-kind because asking what to
                  # draft proposes nothing and writes nothing; the SUBMIT is the gated write below.
-                 "consolidate_proposals"}
+                 "consolidate_proposals",
+                 # 0.0.27 P46 — the change explainer: the fact bundle (a job, paged) and the
+                 # grounded save of Claude's page under gitignored temp_local/. Read-kind: the
+                 # save is observability-tier scratch, the `review_record` precedent.
+                 "explain_bundle", "explain_save"}
 EXPECTED_WRITE = {"remember", "import_stack", "reset", "apply_proposal", "init",
                   "memory_export", "memory_import", "vault_push", "spec_check",
                   "config_set", "export_stack",       # Stage 54e — command-parity write tools
@@ -76,7 +80,15 @@ EXPECTED_WRITE = {"remember", "import_stack", "reset", "apply_proposal", "init",
                   # (`THE-PRECUT-PATH-MASKED-THE-RELEASE-PATH`): the list went stale unread.
                   "events_share",
                   # WT.S3 (0.0.23 E3) — the gated destructive half of the worktree surface.
-                  "worktree_clean", "worktree_remove"}
+                  "worktree_clean", "worktree_remove",
+                  # 0.0.27 P46 — commit a saved explainer page into the repo (P2-gated durable write).
+                  "explain_commit",
+
+                  # 0.0.27 P21 — the gated merge of a session worktree.
+                  "worktree_merge",
+
+                  # 0.0.27 G3-EVIDENCE — commit a run's ledger + evidence record (P2-gated).
+                  "evidence_commit"}
 # AP-MCP (doc 85 §5 D26 amendment): the in-chat approve tool is its OWN kind — neither a read nor
 # a propose-only write — so it is excluded from both name lists (and from the SI.3 write-tool
 # sweeps). Default-OFF opt-in; see test_ap_mcp_in_chat_approval.py for its behaviour.

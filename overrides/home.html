@@ -89,6 +89,54 @@
     </div>
   </section>
 
+  <!-- ===================================================== what makes it different (the docs-home rule: lead with D1, D2–D4, D11, D13;
+       each card names the command that proves it and the tutorial beat that runs it — pinned by tests/test_l11_docs_home_dlist.py) -->
+  <section class="lp-section lp-section--alt" id="different">
+    <div class="lp-wrap">
+      <p class="lp-kicker">// what makes it different</p>
+      <h2 class="lp-h2">A graph, a memory, and a record — <em>on your machine.</em></h2>
+      <p class="lp-lede">Six things a plain coding agent does not give you. Each one names the command that proves it; every one runs in a fresh repo with no network and no API key.</p>
+      <div class="lp-diff__grid">
+        <article class="lp-diff__card" data-d="D1" data-proof="mokata query callers process_payment" data-demo="tutorials/differentiators-in-action/#d1-query-the-codebase-by-structure">
+          <span class="lp-diff__tag">D1 · understand</span>
+          <h3>A codebase graph, mandatory by default</h3>
+          <p>Blast radius is answered structurally, not by grep. An embedded AST floor ships in the box, a stale graph rebuilds before it answers, and a grep-grade answer is refused as decision input.</p>
+          <p class="lp-diff__proof"><span class="lp-dim">prove it:</span> <code>mokata query callers process_payment</code> · <a href="tutorials/differentiators-in-action/#d1-query-the-codebase-by-structure">see it run →</a></p>
+        </article>
+        <article class="lp-diff__card" data-d="D2" data-proof="mokata memory" data-demo="tutorials/differentiators-in-action/#d2-self-healing-a-contradiction-is-surfaced-never-silently-overwritten">
+          <span class="lp-diff__tag">D2 · remember</span>
+          <h3>Memory that heals by asking</h3>
+          <p>Record a decision, then a contradicting one: mokata surfaces the old → new change for you to decide and overwrites nothing. No memory is written without an approval you mint.</p>
+          <p class="lp-diff__proof"><span class="lp-dim">prove it:</span> <code>mokata memory</code> · <a href="tutorials/differentiators-in-action/#d2-self-healing-a-contradiction-is-surfaced-never-silently-overwritten">see it run →</a></p>
+        </article>
+        <article class="lp-diff__card" data-d="D3" data-proof="mokata memory export" data-demo="tutorials/differentiators-in-action/#d3-share-it-with-the-team-one-developers-write-seen-by-another">
+          <span class="lp-diff__tag">D3 · remember</span>
+          <h3>Shared with your team</h3>
+          <p>Export your approved decisions and a teammate imports them — human-gated, secret-scanned, deduplicated. Or point the whole team at a Postgres you own.</p>
+          <p class="lp-diff__proof"><span class="lp-dim">prove it:</span> <code>mokata memory export</code> · <a href="tutorials/differentiators-in-action/#d3-share-it-with-the-team-one-developers-write-seen-by-another">see it run →</a></p>
+        </article>
+        <article class="lp-diff__card" data-d="D4" data-proof="mokata onboard" data-demo="tutorials/differentiators-in-action/#d4-guided-capture-referenced-just-in-time-in-a-later-spec">
+          <span class="lp-diff__tag">D4 · remember</span>
+          <h3>Your project's rules, captured once</h3>
+          <p>Onboarding turns your rules, guardrails and domain facts into typed memory, and a later spec pulls in only the facts it touches.</p>
+          <p class="lp-diff__proof"><span class="lp-dim">prove it:</span> <code>mokata onboard</code> · <a href="tutorials/differentiators-in-action/#d4-guided-capture-referenced-just-in-time-in-a-later-spec">see it run →</a></p>
+        </article>
+        <article class="lp-diff__card" data-d="D11" data-proof="mokata audit" data-demo="tutorials/differentiators-in-action/#d11-the-audit-ledger-reconstructs-the-whole-run">
+          <span class="lp-diff__tag">D11 · account</span>
+          <h3>Review every decision</h3>
+          <p>Every gate verdict, approval and durable write lands on one hash-chained ledger, so you can reconstruct any run: what changed, why, and who approved it.</p>
+          <p class="lp-diff__proof"><span class="lp-dim">prove it:</span> <code>mokata audit</code> · <a href="tutorials/differentiators-in-action/#d11-the-audit-ledger-reconstructs-the-whole-run">see it run →</a></p>
+        </article>
+        <article class="lp-diff__card" data-d="D13" data-proof="mokata init --profile minimal --preview" data-demo="tutorials/differentiators-in-action/#d13-local-first-zero-telemetry">
+          <span class="lp-diff__tag">D13 · local-first</span>
+          <h3>Nothing leaves your machine</h3>
+          <p>No telemetry, no model inside and no API key. Project state lives under .mokata/ in your repo, and nothing is sent anywhere unless you wire it.</p>
+          <p class="lp-diff__proof"><span class="lp-dim">prove it:</span> <code>mokata init --profile minimal --preview</code> · <a href="tutorials/differentiators-in-action/#d13-local-first-zero-telemetry">see it run →</a></p>
+        </article>
+      </div>
+    </div>
+  </section>
+
   <!-- ===================================================== the problem -->
   <section class="lp-section">
     <div class="lp-wrap">
@@ -292,9 +340,9 @@
       <h2 class="lp-h2">At a glance</h2>
       <div class="lp-stats">
         <div class="lp-stat"><span class="lp-stat__n">30</span><span class="lp-stat__l">Agent Skills<br><em>16 curated · 14 domain</em></span></div>
-        <div class="lp-stat"><span class="lp-stat__n">39</span><span class="lp-stat__l">slash commands<br><em>wired into Claude Code</em></span></div>
-        <div class="lp-stat"><span class="lp-stat__n">71</span><span class="lp-stat__l">CLI subcommands<br><em>harness-independent</em></span></div>
-        <div class="lp-stat"><span class="lp-stat__n">70</span><span class="lp-stat__l">MCP tools<br><em>46 read · 23 write · 1 approve</em></span></div>
+        <div class="lp-stat"><span class="lp-stat__n">40</span><span class="lp-stat__l">slash commands<br><em>wired into Claude Code</em></span></div>
+        <div class="lp-stat"><span class="lp-stat__n">73</span><span class="lp-stat__l">CLI subcommands<br><em>harness-independent</em></span></div>
+        <div class="lp-stat"><span class="lp-stat__n">74</span><span class="lp-stat__l">MCP tools<br><em>47 read · 26 write · 1 approve</em></span></div>
         <div class="lp-stat"><span class="lp-stat__n">15</span><span class="lp-stat__l">backed gates<br><em>6 enforced on native writes</em></span></div>
         <div class="lp-stat"><span class="lp-stat__n">1</span><span class="lp-stat__l">runtime dependency<br><em>the MCP SDK</em></span></div>
       </div>
@@ -313,9 +361,10 @@
           <h3 class="lp-track__title"><span class="lp-track__mark"></span>mokata ide</h3>
           <ol class="lp-track__list">
             <li class="lp-track__item lp-track__item--now"><span class="lp-pill lp-pill--now">shipped</span><div><strong>The review window</strong><p>Per session, any point in time, live, branches and PRs.</p></div></li>
-            <li class="lp-track__item"><span class="lp-pill lp-pill--next">next</span><div><strong>Navigate and search the code</strong><p>Definitions, references, callers and callees; word and semantic code search — local, no API key, and an honest note when the semantic model isn't installed.</p></div></li>
+            <li class="lp-track__item lp-track__item--now"><span class="lp-pill lp-pill--now">shipped</span><div><strong>Navigate and search the code</strong><p>Definitions and references from your project's own language servers, Find Usages, and search by word, regex or meaning — local, no API key, and an honest note when the semantic model isn't installed.</p></div></li>
+            <li class="lp-track__item lp-track__item--now"><span class="lp-pill lp-pill--now">shipped</span><div><strong>Criterion → test → code, drawn</strong><p>The Proof screen: every acceptance criterion, its tests with their RED-then-GREEN history, and the code they reach. A criterion with no test, or a change no test reaches, is flagged.</p></div></li>
+            <li class="lp-track__item lp-track__item--now"><span class="lp-pill lp-pill--now">shipped</span><div><strong>Read a change your way</strong><p>Split or unified diff with intra-line marks, image diff, high-contrast themes, opt-in Vim navigation, next-step hints, and a change explainer whose every claim cites a fact or a line.</p></div></li>
             <li class="lp-track__item"><span class="lp-pill lp-pill--design">in design</span><div><strong>Blast-radius map</strong><p>The changed symbol at the centre, rings by hop, covering tests on the outside — untested paths flagged before you approve.</p></div></li>
-            <li class="lp-track__item"><span class="lp-pill lp-pill--design">in design</span><div><strong>Criterion → test → code, drawn</strong><p>Every acceptance criterion traced to its tests and the code they cover. A criterion with no test, or code with no criterion, shows in red.</p></div></li>
             <li class="lp-track__item"><span class="lp-pill lp-pill--design">in design</span><div><strong>Review and approve in the window</strong><p>Findings per hunk, tied to the criterion they serve, and human-minted approvals without going back to the terminal.</p></div></li>
             <li class="lp-track__item"><span class="lp-pill lp-pill--design">in design</span><div><strong>Session browser and replay</strong><p>Every agent session — what it read and wrote, which gates fired, what it cost — replayable, with a marker on any session that is waiting for you.</p></div></li>
             <li class="lp-track__item"><span class="lp-pill lp-pill--explore">exploring</span><div><strong>Quick edits, still gated</strong><p>Small human fixes on agent output, written through the same human-write channel: secret scan, conflict check, ledger entry.</p></div></li>
@@ -326,7 +375,7 @@
           <h3 class="lp-track__title"><span class="lp-track__mark lp-track__mark--dim"></span>the engine</h3>
           <ol class="lp-track__list">
             <li class="lp-track__item"><span class="lp-pill lp-pill--next">next</span><div><strong>Cheaper long sessions</strong><p>A context prefix that stays byte-stable across turns, so the harness's prompt cache keeps paying off.</p></div></li>
-            <li class="lp-track__item"><span class="lp-pill lp-pill--design">in design</span><div><strong>Worktree and session management</strong><p>Tools to list, switch and clean up the worktrees and sessions that parallel runs leave behind.</p></div></li>
+            <li class="lp-track__item lp-track__item--now"><span class="lp-pill lp-pill--now">shipped</span><div><strong>Worktree and session management</strong><p>Each Claude session works in its own git worktree by default; <code>mokata worktree list</code> joins worktrees to their sessions, and <code>clean</code>/<code>remove</code> tidy them — previewed and human-gated.</p></div></li>
             <li class="lp-track__item"><span class="lp-pill lp-pill--design">in design</span><div><strong>Clearer output, never stuck</strong><p>Every command answers with what happened and what to do next, and nothing waits without saying why.</p></div></li>
             <li class="lp-track__item"><span class="lp-pill lp-pill--explore">pending</span><div><strong>One-click plugin install</strong><p>mokata in the Claude Code plugin directory, once approved. The pip-first path works today.</p></div></li>
           </ol>

@@ -318,6 +318,36 @@ def _own_mokata() -> None:
         sys.path.insert(0, _OWN_SRC)
 
 
+#: The IDE's vendored third-party files and their pins (0.0.23 C3, 0.0.26 P7).
+VENDOR_DIR = "src/mokata/ide/static/vendor"
+
+
+def pinned_vendor_files(root: str) -> Dict[str, str]:
+    """{rel path: why} for each vendored file whose bytes match the sha256 pinned in
+    `VERSIONS.json` — upstream bytes, fetched from the npm registry and integrity-checked
+    (`scripts/vendor_ide_graph_libs.py`). A minified library is dense with credential-SHAPED
+    strings (lookup tables, base64 fonts); scanning upstream bytes we may not edit would only be
+    exempted finding by finding. The exemption is keyed to the exact BYTES: change one byte of
+    the file and its pin no longer matches, so it is linted like any other shipped file."""
+    out: Dict[str, str] = {}
+    pins = os.path.join(root, *VENDOR_DIR.split("/"), "VERSIONS.json")
+    try:
+        with open(pins, encoding="utf-8") as fh:
+            rows = json.load(fh).get("files", [])
+    except (OSError, ValueError):
+        return out
+    for row in rows:
+        rel = f"{VENDOR_DIR}/{row.get('file', '')}"
+        try:
+            with open(os.path.join(root, *rel.split("/")), "rb") as fh:
+                ok = hashlib.sha256(fh.read()).hexdigest() == row.get("sha256")
+        except OSError:
+            continue
+        if ok:
+            out[rel] = f"{row.get('package')}@{row.get('version')} — pinned upstream bytes"
+    return out
+
+
 def lint_shipped_secrets(root: str) -> List[Finding]:
     _own_mokata()
     try:
@@ -325,8 +355,9 @@ def lint_shipped_secrets(root: str) -> List[Finding]:
     except ImportError as exc:
         raise CannotRun(f"mokata's secret scanner is not importable: {exc}") from exc
     found = []
+    vendored = pinned_vendor_files(root)
     for rel in _tracked(root, *_SHIPPED):
-        if rel.endswith(_BINARY):
+        if rel.endswith(_BINARY) or rel in vendored:
             continue
         text = _read(root, rel)
         if text is None:

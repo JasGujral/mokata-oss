@@ -127,7 +127,11 @@ def make_repo(kind, base):
     shop  a `mokata init`ed project: committed, ONE uncommitted change (the review view's diff),
           a 1,500-hit word for search paging, and a session worktree one commit ahead.
     bare  the same code in a plain git repo `mokata init` never ran in (what a stranger opens).
+
+    A flow that needs its own repo sets `FIXTURE = staticmethod(build)`: `build(base)` -> path.
     """
+    if callable(kind):
+        return kind(base)
     if kind == "bare":
         files = {k: v for k, v in SHOP.items() if k != "data/words.txt"}
         repo = _git_repo(base, "bare-shop", files)
@@ -340,8 +344,34 @@ class IdeFlow(unittest.TestCase):
     def press(self, keys):
         self.page.keyboard.press(keys)
 
-    def rail(self, panel):
-        self.page.click("button.rail-btn[data-screen='%s']" % panel)
+    def go(self, view):
+        """Reach a view the way a person does (UX-SIMPLIFY: three top tabs, views as sub-tabs).
+        `graph` is Review's "Expand graph"; `search` is Code's Search side tab; `welcome` is the
+        Get started section of the Health dialog."""
+        p = self.page
+        if view == "welcome":
+            p.click("#health-chip")
+            p.wait_for_selector("#hp-welcome li.wl-row")
+            return
+        if view == "graph":                  # Impact → Expand graph, from a changed file's symbol
+            self.go("review")
+            if p.is_disabled("#insp-ripple"):
+                p.wait_for_selector("#nav-list li", state="attached")
+                p.locator("#nav-list li", has_text=".py").first.click()
+            self.until("!document.getElementById('insp-ripple').disabled", "a symbol in the inspector")
+            p.click("#insp-ripple")
+            p.wait_for_selector("#view-graph:not([hidden])")
+            return
+        if view == "search":
+            self.go("navigate")
+            p.click("#ltab-search")
+            p.wait_for_selector("#lt-search:not([hidden])")
+            return
+        tab = p.evaluate("(v) => (MK.VIEWS.find((x) => x.id === v) || {tab: v}).tab", view)
+        p.click("#tab-%s" % tab)
+        if p.is_visible("#subtab-%s" % view):
+            p.click("#subtab-%s" % view)
+        self.until("MK.ui.mode === %r" % view, "the %s view" % view)
 
     def open_file(self, path):
         """Quick-open (⌘P) `path` and wait for its source in the navigate view."""

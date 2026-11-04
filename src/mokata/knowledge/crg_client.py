@@ -420,13 +420,27 @@ class CodeReviewGraphClient:
                 f"code-review-graph {pattern}({target}) failed: {payload.get('error')}")
         return payload
 
-    def _blast_radius(self, target: str, root: str, depth: int) -> "CrgRows":
+    def blast_radius_full(self, target: str, root: str, depth: int = 1) -> "CrgRows":
+        """0.0.27 P4 (R2-1) — the blast radius with the FULL budget, asked for by a human (it runs
+        in an IDE job with Cancel, or the CLI's `--full` with Ctrl-C). The 20,000-reference cap,
+        the 256-expansion cap and the 10 s budget are LIFTED; the shared count ceiling
+        (`ast_backend.BLAST_RADIUS_FULL_MAX_REFS`) and the tool's own per-question row cap
+        (`CRG_MAX_RESULTS`, disclosed when it bites) remain. Cancel is checked before every
+        expansion; one expansion is one MCP round trip, so Cancel waits at most for the one in
+        flight (bounded by the client's read timeout)."""
+        self._require_index(root)
+        return self._blast_radius(target, root, depth, full=True)
+
+    def _blast_radius(self, target: str, root: str, depth: int,
+                      full: bool = False) -> "CrgRows":
         """0.0.26 O2 — transitive CALLERS of `target` up to `depth` hops, over `callers_of`.
 
         Hop 1 asks for `target` as the user spelled it; every deeper hop asks for the caller's
         own `qualified_name` (exact node — never a fuzzy re-resolution). One row per call site,
         de-duplicated on (path, line). See the module comment above `CRG_BLAST_MAX_REFS` for why
         this op and not `traverse_graph_tool` / `importers_of`."""
+        from .ast_backend import BLAST_RADIUS_FULL_MAX_REFS
+        from .cancel import checkpoint, report
         hops = max(1, int(depth))
         rows = CrgRows()
         seen_sites: set = set()
@@ -434,12 +448,18 @@ class CodeReviewGraphClient:
         frontier = [target]
         asked = 0
         deadline: Optional[float] = None
+        # P4 (R2-1): the full walk has no expansion cap and no clock; its count ceiling is shared.
+        max_exp = None if full else CRG_BLAST_MAX_EXPANSIONS
+        max_refs = BLAST_RADIUS_FULL_MAX_REFS if full else CRG_BLAST_MAX_REFS
         for hop in range(1, hops + 1):
             nxt: List[str] = []
             for sym in frontier:
-                from .cancel import checkpoint
                 checkpoint()                 # P32: a cancelled job stops between expansions
-                if asked >= CRG_BLAST_MAX_EXPANSIONS or (
+                if full:
+                    report(done=len(rows), unit="references found",
+                           note=f"blast radius of {target}: hop {hop} of {hops}, {asked} symbols "
+                                f"expanded, {len(nxt)} queued")
+                if (max_exp is not None and asked >= max_exp) or (
                         deadline is not None and time.monotonic() > deadline):
                     rows.truncated = True
                     rows.cut_why = (
@@ -454,7 +474,7 @@ class CodeReviewGraphClient:
                                "pattern": "callers_of", "target": sym, "repo_root": root,
                                "max_results": CRG_MAX_RESULTS}))
                 asked += 1
-                if deadline is None:
+                if deadline is None and not full:
                     # The budget starts AFTER the first answer: that one pays the serve cold start.
                     deadline = time.monotonic() + CRG_BLAST_TIME_BUDGET_S
                 payload = payload if isinstance(payload, dict) else {}
@@ -478,9 +498,9 @@ class CodeReviewGraphClient:
                     key = (row["path"], row["line"])
                     if key in seen_sites:
                         continue
-                    if len(rows) >= CRG_BLAST_MAX_REFS:
+                    if len(rows) >= max_refs:
                         rows.truncated = True
-                        rows.cut_why = (f"blast radius stopped at the {CRG_BLAST_MAX_REFS}-"
+                        rows.cut_why = (f"blast radius stopped at the {max_refs}-"
                                         f"reference cap during hop {hop} of {hops}; more callers "
                                         "exist and were not walked")
                         return rows

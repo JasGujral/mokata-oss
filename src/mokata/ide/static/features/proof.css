@@ -1,0 +1,77 @@
+/* 0.0.27 P13 — Proof: the AC → test → code trace and its risk overlay. Brand tokens only. */
+.pf-note { color: var(--muted); font-size: 12px; margin: 4px 0; }
+
+.pf-list { list-style: none; margin: 0; padding: 0; }
+.pf-li { padding: 4px 6px; cursor: pointer; border-radius: 4px; font-family: var(--mono); font-size: 12px;
+         white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pf-li:hover { background: var(--sel); }
+.pf-li.active { background: var(--sel); color: var(--accent-ink); }
+.pf-range { display: flex; flex-direction: column; gap: 4px; }
+.pf-in { background: var(--panel2); color: var(--text); border: 1px solid var(--line2); border-radius: 4px;
+         padding: 4px 6px; font-family: var(--mono); font-size: 12px; }
+.pf-btn, .pf-link { background: var(--panel2); color: var(--text2); border: 1px solid var(--line2); border-radius: 4px;
+                    padding: 2px 8px; font-size: 12px; cursor: pointer; }
+.pf-btn:hover, .pf-link:hover { border-color: var(--accent); color: var(--accent-ink); }
+.pf-link { background: none; border: none; text-decoration: underline; padding: 0 2px; }
+
+.pf-summary h2 { margin: 8px 12px 2px; font-size: 16px; }
+.pf-facts { margin: 0 12px 6px; color: var(--muted); font-size: 12px; }
+.pf-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 12px 8px; }
+.pf-chip { font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--line2); color: var(--text2); }
+.pf-chip.pf-ok { border-color: var(--edge); color: var(--add); }
+.pf-chip.pf-warn { border-color: var(--amber-line); color: var(--amber); }
+.pf-chip.pf-bad { border-color: var(--del); color: var(--del); }
+.pf-chip.pf-info { color: var(--blue); }
+.pf-risk, .pf-legend, .pf-pager { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 4px 12px; font-size: 12px; }
+.pf-lbl { color: var(--muted); }
+.pf-toggle { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.pf-reduced { margin: 0; color: var(--amber); }
+
+.pf-flow { overflow: auto; margin: 6px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+.pf-svg { display: block; font-family: var(--mono); font-size: 11px; }
+.pf-head { fill: var(--muted); font-family: var(--sans); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+.pf-node rect { fill: var(--panel2); stroke: var(--line2); }
+.pf-node.pf-ac rect { stroke: var(--blue); }
+.pf-node.pf-test rect { stroke: var(--edge); }
+.pf-node.pf-code rect { stroke: var(--line2); }
+.pf-node .pf-txt { fill: var(--text); }
+.pf-node.pf-clickable { cursor: pointer; }
+.pf-node.pf-clickable:hover rect { stroke: var(--accent); stroke-width: 2; }
+.pf-node:focus rect { stroke: var(--focus); stroke-width: 2; }
+.pf-node.pf-risk-untested rect { fill: var(--del-bg); stroke: var(--del); }
+.pf-node.pf-risk-red rect { fill: var(--del-bg); stroke: var(--del); stroke-dasharray: 4 2; }
+.pf-node.pf-risk-tdd rect { fill: var(--amber-bg); stroke: var(--amber); }
+.pf-node.pf-risk-unknown rect { stroke: var(--amber-line); stroke-dasharray: 2 2; }
+.pf-edge { fill: none; stroke: var(--edge); stroke-width: 1.5; opacity: .9; }
+.pf-edge.pf-edge-anchors { stroke: var(--blue); }
+.pf-edge.pf-basis-planned, .pf-edge.pf-basis-lexical { stroke-dasharray: 5 3; opacity: .7; }
+.pf-leg { padding: 1px 6px; border-radius: 3px; border: 1px solid var(--edge); color: var(--text2); }
+.pf-leg.pf-basis-planned, .pf-leg.pf-basis-lexical { border-style: dashed; }
+.pf-leg.pf-basis-anchor { border-color: var(--blue); }
+
+.pf-tables { margin: 6px 12px 20px; }
+.pf-tables h3 { font-size: 12px; color: var(--muted); margin: 10px 0 4px; text-transform: uppercase; letter-spacing: .06em; }
+.pf-table { border-collapse: collapse; width: 100%; font-size: 12px; }
+.pf-table th { text-align: left; color: var(--muted); font-weight: 500; padding: 3px 6px; border-bottom: 1px solid var(--line2); }
+.pf-table td { padding: 3px 6px; border-bottom: 1px solid var(--line); vertical-align: top; font-family: var(--mono); }
+.pf-kind { color: var(--muted); font-family: var(--sans) !important; }
+.pf-row.pf-risk-untested td { background: var(--del-bg); }
+.pf-row.pf-risk-tdd td { background: var(--amber-bg); }
+.pf-row.pf-gate-red td { background: var(--del-bg); }
+.pf-row.pf-gate-skipped td { background: var(--amber-bg); }
+.pf-row.pf-gate-unknown td { color: var(--muted); font-style: italic; }
+.pf-acts { white-space: nowrap; }
+
+/* 0.0.27 UX-SIMPLIFY — Proof is a full-width view of Review: the view scrolls as one page, and the
+   trace keeps a real height (it drew as a ~30 px strip when the flex column squeezed it, §6 P1). */
+#view-proof { overflow: auto; }
+#view-proof > * { flex: none; }
+.pf-flow { min-height: min(62vh, 560px); }
+.pf-pickbox { margin: 8px 12px 0; border: 1px solid var(--line); border-radius: 6px; background: var(--panel2); padding: 4px 10px; }
+.pf-pickbox > summary { cursor: pointer; padding: 4px 0; min-height: 24px; }
+.pf-pick { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 4px 16px; padding-bottom: 8px; }
+.pf-pick h3 { margin: 10px 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.pf-toggle input { width: 18px; height: 18px; margin: 3px; }
+.pf-toggle { min-height: 24px; }
+.pf-tests { margin: 10px 12px 24px; }
+.pf-tests > h2 { font-size: 14px; margin: 8px 0; }

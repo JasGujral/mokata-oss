@@ -46,7 +46,11 @@ from ..knowledge import cancel as C
 # --------------------------------------------------------------------------- the vocabulary
 QUEUED, RUNNING, PARTIAL, DONE, FAILED, CANCELLED = (
     "queued", "running", "partial", "done", "failed", "cancelled")
-STATES = (QUEUED, RUNNING, PARTIAL, DONE, FAILED, CANCELLED)
+#: 0.0.27 P21 — a Cancel was ASKED of a job whose work decides for itself whether it is too late
+#: (`SEALING_KINDS`): not finished until the work says so — it either stops (cancelled) or had
+#: already passed its commit point (`seal_current`) and finishes as it would have.
+CANCELLING = "cancelling"
+STATES = (QUEUED, RUNNING, PARTIAL, CANCELLING, DONE, FAILED, CANCELLED)
 FINISHED = (DONE, FAILED, CANCELLED)
 
 #: kind -> lane. A lane is a few daemon threads of its own, so one kind of slow work never queues
@@ -54,6 +58,8 @@ FINISHED = (DONE, FAILED, CANCELLED)
 KINDS: Dict[str, str] = {
     "graph.view": "query", "graph.query": "query", "impact": "query", "health.check": "query",
     "sessions.stats": "query", "welcome.scan": "query",
+    # 0.0.27 P13 — the AC → test → code trace: a graph question per changed definition.
+    "proof.trace": "query",
     "search.text": "search", "search.meaning": "search", "tree.walk": "search",
     "index.crg": "maintenance", "index.ast": "maintenance", "mokata.update": "maintenance",
     "model.fetch": "maintenance", "mokata.init": "maintenance",
@@ -61,12 +67,42 @@ KINDS: Dict[str, str] = {
     # P37 (R39): the read-path freshness reconcile — its own lane, so an index update never queues
     # behind a rebuild on `maintenance`, nor holds a query worker.
     "index.fresh": "fresh",
+    # P7 (ID-REVIEW-CONTEXT): a test re-run is the project's own command — its own lane, one at a
+    # time, so it never holds a query worker nor races another run over the same files; the
+    # blame/line history of one hunk is a query.
+    "tests.run": "tests", "review.blame": "query",
+    # 0.0.27 P24 (read-only LSP): a question to a language server (no deadline — pending with
+    # Cancel) and a server's first indexing pass (progress from `$/progress`); their own lane, so
+    # a slow server never holds a graph worker.
+    "lsp.query": "lsp", "lsp.index": "lsp",
+    # P8 (ID-CSV-VIEW): counting the rows of a huge delimited file, and diffing two versions of
+    # one, are walks of the whole input — their own lane, so neither queues a graph question.
+    "table.count": "table", "table.diff": "table", "table.view": "table",
+    # 0.0.27 P46 (CHANGE-EXPLAINER): the fact bundle of one change set (both trees read, every
+    # reference grepped) — its own lane, so it never holds a graph worker. NOT a keep kind: a
+    # bundle nobody is watching is cancelled like any other read.
+    "explain.bundle": "explain",
+    # 0.0.27 P5 (ID-DIFF-INTRALINE): the token diff of the line pairs in view when their cost is
+    # past the sync bound (a minified line), and a context page deep in a big file — their own
+    # lane, so a 5 MB line never queues a graph question.
+    "diff.intraline": "diff", "diff.context": "diff",
+    # 0.0.27 P4 (ID-COPY-CONTEXT): Find Usages on a hub and Copy with Context's full blast radius
+    # walk long (no clock, Cancel instead) — their own lane, so neither holds a graph worker.
+    "usages.find": "usages", "copy.context": "usages",
+    # 0.0.27 P21 (ID-MERGE-GATED): the gated merge — one at a time per server (its own lane), and
+    # the full-suite run that produces its evidence is a `tests.run`.
+    "git.merge": "git",
 }
-LANE_WORKERS = {"query": 2, "search": 2, "maintenance": 1, "meaning": 1, "symbols": 1, "fresh": 1}
+LANE_WORKERS = {"query": 2, "search": 2, "maintenance": 1, "meaning": 1, "symbols": 1, "fresh": 1,
+                "tests": 1, "lsp": 2, "table": 2, "explain": 1, "diff": 2, "usages": 2, "git": 1}
 #: Kinds that keep running with nobody watching (PRD §5.3: "closing every view of a job's result
 #: keeps it running only for index builds").
 KEEP_KINDS = frozenset({"index.crg", "index.ast", "index.meaning", "index.symbols", "index.fresh",
-                        "mokata.update", "model.fetch", "mokata.init"})
+                        "mokata.update", "model.fetch", "mokata.init", "tests.run", "lsp.index",
+                        "git.merge"})
+#: 0.0.27 P21 — kinds whose Cancel is a REQUEST the work answers (`CANCELLING`), because past a
+#: commit point the honest answer is "too late", not "cancelled".
+SEALING_KINDS = frozenset({"git.merge"})
 #: Kinds whose failure means the code graph is failing AT USE (R35).
 GRAPH_KINDS = frozenset({"graph.view", "graph.query", "impact"})
 #: 0.0.26 P39 (R35, G18) — every job whose outcome says whether a CAPABILITY works, and which one:
@@ -371,6 +407,19 @@ class JobRegistry:
             if job.state in FINISHED or not job.cancellable:
                 return
             job.cancel.set()
+            if job.kind in SEALING_KINDS and job.state in (RUNNING, PARTIAL, CANCELLING):
+                # P21: the work answers — it stops before its commit point, or it already sealed.
+                job.state = CANCELLING
+                job.note = "cancelling — stopping before the commit point"
+                defer = True
+            else:
+                defer = False
+        if defer:
+            self._emit(job)
+            return
+        with self._lock:
+            if job.state in FINISHED:
+                return
             # The work stops at its next checkpoint (per file / per wait slice); the job is said
             # cancelled NOW so the page never waits on a walk's last file to be told.
             self._finish(job, CANCELLED, error="" if why == "cancelled" else why)
@@ -399,10 +448,12 @@ class JobRegistry:
 
     def _run_work(self, job: Job) -> None:
         state, result, error, exc = DONE, None, "", None
+        prev = getattr(_CURRENT, "job", None)
+        _CURRENT.job = job
         try:
             with C.scope(job.cancel), C.reporting(job._report):
                 result = job.fn()
-            if job.cancel.is_set():
+            if job.cancel.is_set() and job.cancellable:
                 state = CANCELLED
         except C.Cancelled:
             state = CANCELLED
@@ -416,6 +467,8 @@ class JobRegistry:
                                      type(e), e, e.__traceback__)))
             except (OSError, ValueError):          # pragma: no cover — no stderr
                 pass
+        finally:
+            _CURRENT.job = prev
         with self._lock:
             if job.state not in FINISHED:
                 job.result, job.exc = result, exc
@@ -487,12 +540,19 @@ class JobRegistry:
 
     def close(self, wait: float = 0.0) -> None:
         """Cancel everything; with `wait`, give the running work that long to reach its next
-        checkpoint (a build kills its subprocess there — none outlives the server)."""
+        checkpoint (a build kills its subprocess there — none outlives the server). A job SEALED
+        past its commit point (P21: a merge writing the main checkout) is waited for in full — a
+        shutdown never abandons a half-written checkout."""
         with self._lock:
             self._closed = True
             jobs = list(self._active.values())
         for j in jobs:
-            j.cancel.set()
+            with self._lock:
+                if j.cancellable:
+                    j.cancel.set()
+        for j in jobs:
+            if not j.cancellable:
+                j.stopped.wait(SEALED_WAIT_S)
         for lane in self._lanes.values():
             lane.close()
         end = time.monotonic() + wait
@@ -502,6 +562,28 @@ class JobRegistry:
                 if left <= 0:
                     return
                 t.join(left)
+
+
+# --------------------------------------------------------------------------- sealing (P21)
+_CURRENT = threading.local()
+#: How long a shutdown waits for a sealed job (a merge's checkout write) — long, never forever.
+SEALED_WAIT_S = 300.0
+
+
+def seal_current() -> bool:
+    """0.0.27 P21 — called by work at its commit point. Atomically, under the registry lock: False
+    when a Cancel already won (the work must stop, unchanged); otherwise the job becomes
+    uncancellable and True. Outside a job (the CLI, a test) there is nothing to race: True."""
+    job = getattr(_CURRENT, "job", None)
+    if job is None:
+        return not (C.current() is not None and C.current().is_set())
+    with job.reg._lock:
+        if job.cancel.is_set():
+            return False
+        job.cancellable = False
+        job.note = "past the commit point — cannot be cancelled"
+    job.reg._emit(job)
+    return True
 
 
 # --------------------------------------------------------------------------- module-level door
@@ -531,5 +613,5 @@ def background(kind: str, args: Dict[str, Any], fn: Callable[[], Any], *, label:
     return None
 
 
-__all__ = ["CAPABILITY_OF", "Job", "JobRegistry", "KINDS", "STATES", "SYNC_WINDOW_S", "TICK_S", "install",
-           "installed", "background"]
+__all__ = ["CANCELLING", "CAPABILITY_OF", "Job", "JobRegistry", "KINDS", "SEALING_KINDS", "STATES", "SYNC_WINDOW_S", "TICK_S", "install",
+           "installed", "background", "seal_current"]

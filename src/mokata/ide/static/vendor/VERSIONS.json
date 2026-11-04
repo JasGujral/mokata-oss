@@ -1,5 +1,5 @@
 {
-  "_what": "mokata ide graph views (0.0.23 C3, ruling R3): Cytoscape.js + fcose + dagre, MIT, vendored. Served from /static/vendor/ — never a CDN at runtime. Re-fetch and verify with: python scripts/vendor_ide_graph_libs.py (--check verifies the files here offline).",
+  "_what": "mokata ide graph views (0.0.23 C3, ruling R3): Cytoscape.js + fcose + dagre, MIT, vendored; and (0.0.26 P7, group \"render\") the Markdown + Mermaid renderers: markdown-it and mermaid, MIT. Served from /static/vendor/ — never a CDN at runtime. Re-fetch and verify with: python scripts/vendor_ide_graph_libs.py (--check verifies the files here offline).",
   "files": [
     {"file": "cytoscape.min.js", "package": "cytoscape", "version": "3.34.3", "member": "package/dist/cytoscape.min.js", "license": "MIT", "license_file": "LICENSE.cytoscape.txt",
      "tarball": "https://registry.npmjs.org/cytoscape/-/cytoscape-3.34.3.tgz", "integrity": "sha512-yfYGhRcGAntq6YBD583j4n0Eg3jIxvWmZtz/5uz9UYkeIStSlMxuUja+ec5j3iBD8nv1rwaOAYMW09tBdkSeaQ==",
@@ -17,8 +17,20 @@
      "tarball": "https://registry.npmjs.org/cytoscape-dagre/-/cytoscape-dagre-4.0.1.tgz", "integrity": "sha512-hyNdh8Vp1nwzBcjHnM4c71G81bFhPmQYLXD2HM9AZIvl+8TrMzWEOPW45hF/XOBQiEguPcDQzi6VrXR1XBcXOA==",
      "sha256": "ec671a41d2bfcac580352e2997797793949e3489cecaf347fc48670d4bd456b0",
      "bundles": "@dagrejs/dagre 3.0.0 (MIT, Chris Pettitt — LICENSE.dagre.txt): cytoscape-dagre 4.x ships dagre INSIDE its build, so no separate dagre file is loaded"}
+    ,
+    {"file": "markdown-it.min.js", "group": "render", "package": "markdown-it", "version": "15.0.3", "member": "package/dist/browser/markdown-it.umd.min.js", "license": "MIT", "license_file": "LICENSE.markdown-it.txt",
+     "tarball": "https://registry.npmjs.org/markdown-it/-/markdown-it-15.0.3.tgz", "integrity": "sha512-+Az7Ojz3iRGu8KYMvJ6xVhvrxP3eE+vEtJX75Ow88XBpcQNV/0lGX5ZynIIBftREo4DC2jsveAMDaeltmm8QvQ==",
+     "sha256": "391f2aa638e75e6c7859d0a5c5650ef0956722a45998f17e05b83bc655778e1e",
+     "bundles": "its UMD build inlines linkify-it, mdurl, uc.micro, punycode.js (MIT, the same authors' licence above) and entities (BSD-2-Clause, Felix Böhm — LICENSE.entities.txt); the build keeps no licence comments, so the files here carry them. 15.0.3, not 15.0.2: GHSA-gfr2-rv44-r23c (HIGH, quadratic render of an unclosed reference title) is fixed in 15.0.3"},
+    {"file": "mermaid.min.js", "group": "render", "package": "mermaid", "version": "11.17.2", "member": "package/dist/mermaid.min.js", "license": "MIT", "license_file": "LICENSE.mermaid.txt",
+     "tarball": "https://registry.npmjs.org/mermaid/-/mermaid-11.17.2.tgz", "integrity": "sha512-V6K3C8EBdEsPFZXSKMJe6ppQOENxuHARr9GvHX4hh47lAbhMRD9qf4oEK7LoaRQxULMa80/qt5gHO73aCleBBg==",
+     "sha256": "581ed7d74bd9048d0e3a91363927d72ef22942d7722546b27f7cc29e35390eb8",
+     "bundles": "esbuild bundle of its dependencies (d3, dagre-d3-es, dompurify, khroma, katex, lodash-es, cytoscape, …); their licence comments are kept at the end of the file. Loaded ONLY by static/mermaid-frame.html, and only when a document has a mermaid block"}
   ],
+  "render_load_order": ["markdown-it.min.js"],
   "licenses_only": [
+    {"file": "LICENSE.entities.txt", "package": "entities", "version": "8.1.0", "member": "package/LICENSE",
+     "tarball": "https://registry.npmjs.org/entities/-/entities-8.1.0.tgz", "integrity": "sha512-kxL7msIffSuh9aaFAMD7rxAIuTRMAHMeBtgHW2yUdWw732ZNh4MehkF2gdjvtdmikkaIP9bFDDJOPlsvm7avrA=="},
     {"file": "LICENSE.dagre.txt", "package": "@dagrejs/dagre", "version": "3.1.1", "member": "package/LICENSE",
      "tarball": "https://registry.npmjs.org/@dagrejs/dagre/-/dagre-3.1.1.tgz", "integrity": "sha512-zroZB1dFOFiGgv4Xcrn1DckB1o4aOikPqD2NDQPV0WM//CXGcS6xiD0rNkqHmw6FEg4tabt4nxPLwgCWT+Vb2A=="}
   ],

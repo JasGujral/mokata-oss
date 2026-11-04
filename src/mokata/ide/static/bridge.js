@@ -1,5 +1,6 @@
 // mokata ide — the IDE → session half of the bridge (ID.S3, doc 109 §4):
-//   * Join: attach to a live session from the registry `mokata windows` reads — focus + follow it;
+//   * Follow (was Join; UX-SIMPLIFY §5 #15 — in the Viewing popover): attach to a live session from
+//     the registry `mokata windows` reads — focus + follow it;
 //   * Send to session: the human's explicit "send this to Claude" (selection / file / diff). The
 //     page sends NAMES only (path + lines); the server reads, bounds and redacts the text, and the
 //     session's next turn carries it through mokata's existing per-turn injection;
@@ -23,8 +24,8 @@
   // ------------------------------------------------------------------ join
   function setJoined(sid) {
     B.joined = sid;
-    $("join-btn").textContent = sid ? `joined ${sid.slice(0, 8)}` : "Join";
-    $("join-btn").setAttribute("aria-pressed", String(!!sid));
+    $("join-leave").hidden = !sid;
+    for (const li of document.querySelectorAll("#join-list li[data-sid]")) li.classList.toggle("active", li.dataset.sid === sid);
     if (sid && MK.setFollow) MK.setFollow(true);
   }
   async function loadJoin() {
@@ -39,20 +40,27 @@
     }
     for (const s of r.sessions) {
       const li = el("li", "join-row");
+      li.dataset.sid = s.id;
       const dot = el("span", "jdot " + (s.alive === true ? "on" : s.alive === false ? "off" : ""), "●");
       dot.title = s.alive === true ? "live (its process is running)" : s.alive === false ? "not running" : "seen in snapshots";
-      const b = el("button", "link mono", s.short);
-      b.type = "button";
-      b.title = "join: focus and follow this session; context you send goes to it";
-      b.onclick = () => join(s.id);
-      const meta = el("span", "dim small",
-        [s.phase, s.scope, s.branch, s.writes ? `${s.writes} write(s)` : "", s.last_seen].filter(Boolean).join(" · "));
-      li.append(dot, b, meta);
-      if (s.alive !== true) {
-        const rb = el("button", "pill-link small", "resume in terminal");
+      dot.setAttribute("aria-hidden", "true");
+      const meta = el("span", "small", "");
+      meta.append(el("b", "mono", s.short), el("span", "dim", " " +
+        [s.alive === true ? "live" : "not running", s.phase, s.scope, s.branch, s.writes ? `${s.writes} write(s)` : "", s.last_seen].filter(Boolean).join(" · ")));
+      li.append(dot, meta);
+      if (s.alive === true) {
+        const b = el("button", "btn small", "Follow");
+        b.type = "button";
+        b.setAttribute("aria-label", `Follow session ${s.short}`);
+        b.title = "focus and follow this session; context you send goes to it";
+        b.onclick = () => join(s.id);
+        li.append(b);
+      } else {
+        const rb = el("button", "btn ghost small", "Resume in terminal");
         rb.type = "button";
+        rb.setAttribute("aria-label", `Resume session ${s.short} in the terminal`);
         rb.title = "claude --resume " + s.id;
-        rb.onclick = () => { $("join-pop").hidden = true; if (MK.termStart) MK.termStart("claude", s.id); };
+        rb.onclick = () => { if (MK.openViewing) MK.openViewing(false); if (MK.termStart) MK.termStart("claude", s.id); };
         li.append(rb);
       }
       if (s.id === B.joined) li.classList.add("active");
@@ -62,9 +70,9 @@
   async function join(sid) {
     const r = await MK.api("/api/join", { session: sid }).catch(() => null);
     if (!r || r.error) { toast((r && r.note) || "could not join", true); return; }
-    $("join-pop").hidden = true;
+    if (MK.openViewing) MK.openViewing(false);
     setJoined(r.joined);
-    toast(r.joined ? `joined ${r.joined.slice(0, 8)} — following its edits` : "left the session");
+    toast(r.joined ? `following ${r.joined.slice(0, 8)} — its edits open as it writes them` : "stopped following the session");
   }
   function onJoinEvent(ev) {
     let e;
@@ -105,12 +113,8 @@
 
   // ------------------------------------------------------------------ wiring
   MK.wireBridge = function wireBridge() {
-    if (!$("join-btn")) return;
-    $("join-btn").onclick = async () => {
-      const p = $("join-pop");
-      p.hidden = !p.hidden;
-      if (!p.hidden) await loadJoin();
-    };
+    // the live sessions are listed when the Viewing popover opens (its click toggles it first)
+    $("session-chip").addEventListener("click", () => { if (!$("viewing-pop").hidden) loadJoin(); });
     $("join-leave").onclick = () => join(null);
     $("send-ctx").onclick = sendNav;
     $("send-diff").onclick = sendDiff;
@@ -124,8 +128,9 @@
     const path = u.searchParams.get("open");
     if (!path || !MK.openFile) return false;
     const line = parseInt(u.searchParams.get("line") || "1", 10) || 1;
+    const col = parseInt(u.searchParams.get("col") || "0", 10) || 0;
     history.replaceState(null, "", "/");
-    MK.openFile(path, line, null);
+    MK.openFile(path, line, null, { col });
     return true;
   };
 })();

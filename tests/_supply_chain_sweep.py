@@ -52,7 +52,7 @@ THE PROPERTY, in three classes, and the third must be EMPTY:
                    `-r requirements.txt` that does not require hashes.
 
 ⚠ THE HONEST RESIDUAL, STATED RATHER THAN WAVED THROUGH. `LOCAL_SOURCE` means the PACKAGE is not
-fetched. Its DECLARED DEPENDENCIES still are, unpinned: `pyproject.toml` requires `mcp>=1.2,<2`,
+fetched. Its DECLARED DEPENDENCIES still are, unpinned: `pyproject.toml` requires `mcp>=1.30,<2`,
 whose resolved closure is THIRTY packages (measured 2026-08-13 against an installed 3.12 venv), on
 top of the `setuptools>=61.0` build backend pip fetches under build isolation, plus each extra's
 own tree at the `[postgres]` / `[embeddings]` sites. The backlog row calls that "the

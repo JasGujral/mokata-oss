@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 
 from .brainstorm import PIPELINE_PHASES
 
@@ -541,6 +541,28 @@ def badge_verbosity(surface: Any) -> str:
         return BADGE_FULL
 
 
+# WATCH-FOLD — settings.ux.progress: where `mokata watch` shows the run. `terminal` (the
+# default, the floor) prints the lanes; `ide` opens the IDE on its Sessions screen; `both` does
+# both. The self-contained HTML dashboard this setting used to switch on is gone (folded into the
+# IDE), and so is its `dashboard` value. The manifest is the user's data: a stored value outside
+# the set is REFUSED by `mokata watch` with the command that fixes it — never read as a tier.
+UX_TERMINAL, UX_IDE, UX_BOTH = "terminal", "ide", "both"
+UX_PROGRESS_VALUES = (UX_TERMINAL, UX_IDE, UX_BOTH)
+
+
+def ux_progress(surface: Any) -> Tuple[Optional[str], Optional[str]]:
+    """`(tier, refused)` — the tier `mokata watch` uses, or `(None, <stored value>)` when the stored
+    value is not one of `UX_PROGRESS_VALUES`. There is no fallback tier: the caller refuses."""
+    from .manifest import ManifestError
+    try:
+        val = (surface.manifest.setting("ux", {}) or {}).get("progress")
+    except (AttributeError, ManifestError):
+        val = None
+    if val is None or val in UX_PROGRESS_VALUES:
+        return (val or UX_TERMINAL), None
+    return None, str(val)
+
+
 def _badge_state(surface: Any, *, run_id: Optional[str] = None, session_mode: bool = False):
     """(active_user_stage, counter) derived read-only from run-state + the Stage-6b progress
     log — (None, "") with no run and no log. `counter` is the pipeline phase fraction shown
@@ -809,7 +831,7 @@ class Lane:
     name: str
     state: str                       # running | done | blocked | degraded
     note: str = ""
-    at: str = ""                     # last ledger timestamp for this lane (dashboard use)
+    at: str = ""                     # last ledger timestamp for this lane (the `lanes` tool's data)
     simulated: bool = False          # B3: nothing executed this lane's work — it is not real
 
     def to_dict(self) -> dict:

@@ -12,7 +12,7 @@ diff of the governed state against a lightweight **last-session snapshot**:
     PURE + read-only — it DERIVES, it never writes. Degrade-clean: no prior snapshot ⇒ a
     friendly "first session" diff.
   * `capture_session_snapshot(surface)` — writes the fingerprint to the gitignored, transient
-    `temp_local/` (the same place the dashboards + ledger live — NOT the committed governed
+    `temp_local/` (the same place the govern view + ledger live — NOT the committed governed
     state). This is the ONLY writer here, and it is read-only on the governed state itself; it
     is invoked at the session boundary (the SessionStart hook), separately from the diff.
 

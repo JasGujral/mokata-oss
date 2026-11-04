@@ -5,8 +5,9 @@ This stage exposes them as MCP read tools + slash commands, and adds a compact a
 to the 54b badge during a fan-out — all REUSING the existing read-only engines.
 
   * `lanes` MCP tool → the per-subagent parallel lanes (running/done/blocked) via
-    build_run_lanes/render_lanes; `watch` → the self-contained dashboard (honoring
-    settings.ux.progress); `govern` → the governance view. All declared "read".
+    build_run_lanes/render_lanes; `govern` → the governance view. All declared "read". (The
+    `watch` tool that wrote the HTML dashboard is gone — 0.0.27 WATCH-FOLD: /mokata:watch opens
+    the IDE's Sessions screen.)
   * /mokata:progress, /mokata:watch, /mokata:govern slash templates exist + are namespaced.
   * build_stage_badge gains a compact agents summary during a parallel batch, omitted when
     sequential / no parallel run.
@@ -64,16 +65,6 @@ def _state_snapshot(surface):
     return sorted(os.listdir(root)) if os.path.isdir(root) else []
 
 
-def _set_progress_tier(d, tier):
-    import json
-    from mokata import MOKATA_DIR
-    from pathlib import Path
-    p = Path(d) / MOKATA_DIR / "manifest.json"
-    data = json.loads(p.read_text(encoding="utf-8"))
-    data.setdefault("settings", {}).setdefault("ux", {})["progress"] = tier
-    p.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-
-
 # ===================================================================== MCP: lanes
 class TestLanesTool(unittest.TestCase):
     def test_registered_read_only(self):
@@ -105,41 +96,6 @@ class TestLanesTool(unittest.TestCase):
             _parallel_batch(surface)
             before = _state_snapshot(surface)
             M.lanes(path=d)
-            self.assertEqual(before, _state_snapshot(surface))
-
-
-# ===================================================================== MCP: watch
-class TestWatchTool(unittest.TestCase):
-    def test_registered_read_only(self):
-        self.assertIn("watch", M.read_tool_names())
-        self.assertNotIn("watch", M.write_tool_names())
-
-    def test_writes_dashboard_when_enabled(self):
-        with tempfile.TemporaryDirectory() as d:
-            surface = _repo(d)
-            _set_progress_tier(d, "dashboard")
-            _active_run(surface)
-            _parallel_batch(surface)
-            res = M.watch(path=d)
-            self.assertTrue(res["enabled"])
-            self.assertTrue(os.path.exists(res["path"]))         # the self-contained HTML
-            with open(res["path"], encoding="utf-8") as fh:
-                self.assertIn("<html", fh.read().lower())
-
-    def test_off_under_terminal_tier(self):
-        with tempfile.TemporaryDirectory() as d:
-            _repo(d)                                             # default tier = terminal
-            res = M.watch(path=d)
-            self.assertFalse(res["enabled"])
-            self.assertIn("settings.ux.progress", res["note"])
-
-    def test_does_not_mutate_run_state(self):
-        with tempfile.TemporaryDirectory() as d:
-            surface = _repo(d)
-            _set_progress_tier(d, "dashboard")
-            _active_run(surface)
-            before = _state_snapshot(surface)
-            M.watch(path=d)
             self.assertEqual(before, _state_snapshot(surface))
 
 
@@ -189,7 +145,7 @@ class TestSlashTemplates(unittest.TestCase):
     def test_instruct_calling_the_mcp_tool(self):
         # the body points Claude at the matching read tool
         self.assertIn("lanes", self._read("progress").lower())
-        self.assertIn("watch", self._read("watch").lower())
+        self.assertIn("mokata watch --open", self._read("watch"))      # the IDE, not a tool
         self.assertIn("govern", self._read("govern").lower())
 
 

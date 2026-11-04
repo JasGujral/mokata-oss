@@ -76,6 +76,7 @@ class TestToolsWriteAggregatorShim(unittest.TestCase):
             "events_share",    # CM.S5 (0.0.21) — APPENDED, same discipline
             "worktree_clean",  # WT.S3 (0.0.23 E3) — APPENDED, same discipline
             "worktree_remove",
+            "worktree_merge",  # 0.0.27 P21 — APPENDED, same discipline
         ])
 
     def test_spec_emit_amend_are_attributes_even_though_not_in_all(self):

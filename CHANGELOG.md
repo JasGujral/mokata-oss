@@ -10,6 +10,154 @@ All notable changes to mokata are documented here. The format is based on
 > early-stage, fast-moving project. The detailed build history lives in the repository's internal
 > build log.
 
+## [0.0.27] — 2026-11-04
+
+**Read a change your way, check that it is proven, merge with evidence — in an IDE with three
+tabs.** The review window gains split and unified diffs, image, CSV and theme support, Copy with
+Context, a proof screen and a read-only language server; the PR check carries evidence; and a
+visible write to `.git/hooks` or `.git/config` now asks for your approval.
+
+### ⚠ Upgrade notes
+- **Removed:** the HTML `mokata watch` dashboard (a manifest with `settings.ux.progress: dashboard`
+  is refused with a message that names the fix), Vim navigation, the change treemap, the Replay
+  scrubber, the rail and status footer, the extra palette openers, Close Others/Left/Right, and Copy
+  Ref as a separate action (use Copy with Context).
+- **Specs without a `tests[]` map must be re-emitted** to be graded by the PR check; there is no
+  migration.
+- **`mokata ci-check` now exits 2 when it cannot resolve the base to compare against** (for example
+  a shallow checkout with `fetch-depth: 1`), and `--no-fail` does not soften it. The GitHub Action
+  has a new `refused` output. A report-only job on a shallow checkout will now fail until it fetches
+  the base.
+- The default worktree policy (`always`) is now documented in the CLI reference.
+
+### Added / Changed — reading a change (`mokata ide`)
+- **Split or unified diff**, with the changed words inside a line marked, an ignore-whitespace
+  switch that says how many lines it hid, and expandable context.
+- **Image diff:** side by side, swipe, onion skin or pixel difference. An SVG is shown inert.
+- **CSV and TSV as a table**, and a comparison of two versions by row position or by a key column. A
+  file whose rows cannot be counted says why instead of "reload to count again"; a table no longer
+  sticks on "loading..." after a sort or filter change.
+- **Copy with Context** puts a symbol reference or a fenced excerpt on your clipboard, secret-scanned
+  first. **Find Usages** lists where a symbol is used, from the code graph.
+- **Themes:** dark, light, two high-contrast themes, or follow your OS. The find and palette boxes
+  show a visible focus ring in every theme (they showed none in the high-contrast themes or in the
+  palette); a test checks every focusable control in all four.
+- **The explorer copes with very large repositories:** Expand all opens one visible level at a time,
+  the tree paints only what is on screen, and Cancel stays in reach.
+- **Read-only code intelligence from a language server** (go-to-definition, references, hover and
+  document symbols), only after you trust the workspace (`mokata ide --trust`); the trust status says
+  what will run. This is part of what the 0.0.26 notes promised for this release
+  (`ID-LSP-READONLY-EARLIER`); call hierarchy is re-scheduled — see Re-scheduled.
+- **A change explainer:** `mokata explain live` prints the Claude Code command; Claude writes the
+  explanation on your own login and mokata keeps only the claims that cite a fact or a line range.
+  mokata calls no model itself.
+- **Three tabs: Review · Sessions · Code.** One "waiting on you" bar and an end-of-review state;
+  Health holds the first-run help. Proof is a full-width view under Review; impact is in the
+  inspector with an **Expand graph** view. Keyboard and screen-reader fixes ship with it.
+- **`mokata watch --open` opens the IDE on the Sessions screen** (one window, reused). The terminal
+  lanes (`mokata progress --lanes`, plain `mokata watch`) stay.
+
+### Added / Changed — proving and merging
+- **Proof screen:** each acceptance criterion, the tests that prove it (a test counts only by its
+  full id, `path::Class::name`, found in the file's own syntax tree) and the code they cover, with a
+  risk overlay.
+- **`mokata suggest` and the "next step" hints** name the recorded fact each suggestion came from;
+  the command they offer asks for its own consent.
+- **The PR check carries evidence.** `mokata ci-check` (and the GitHub Action) can show the run's
+  gate evidence and the committed run record, with paths as links and content in collapsible blocks.
+  Anything cut for size is said, never silently dropped. `mokata evidence commit` writes the record
+  behind your approval.
+- **The spec check says "not checked" when it cannot grade.** An ungraded leg is shown as absent,
+  never as a pass, and the verdict names the legs it did not check. An absent leg still exits 0;
+  only a block exits 1.
+- **The PR check works on a fresh repository:** committed specs carry their own
+  acceptance-criterion-to-test map.
+- **`mokata worktree merge`** merges a session's worktree only with full-suite evidence at the head,
+  your approval and a compare-and-set commit point. If interrupted, `--recover` restores a clean
+  state. It needs git 2.40 or newer.
+- **Honest index coverage:** `mokata index` and the `index_status` tool say which languages are
+  indexed and how many files were skipped as unsupported. It indexes Python only; before this
+  release it said nothing.
+- Cmd-P finds `kubelet.go` when you type it on the Kubernetes tree, and `mokata graph build --full`
+  rebuilds a copied or renamed checkout. `scripts/bench_corpus.py` measures kubernetes, TypeScript
+  and cpython.
+
+### Security
+- **A visible write to `.git/hooks` or `.git/config` now asks for your approval.** It covers
+  file-tool writes and Bash that mokata can read (including a literal `cd`, one level of `sh -c`,
+  and a `git config` command). It is not a wall — see Known limitations.
+- **Well-formed private keys are redacted whole** in the context the IDE sends to a session (0.0.26
+  could leak a whole key body).
+- **`.git/` and `.mokata/` are refused on every IDE read route in any spelling of the name**, hard
+  links into them included.
+- Every IDE response carries `nosniff`; a GIF whose frame exceeds its declared size is caught; a git
+  read that stalls says "git did not answer" instead of hanging.
+- `mokata ci-check --base` refuses a value that starts with `-` (exit 2, naming it); before this
+  release `--base=--output=<file>` made git write that file.
+
+### Fixed
+- The approval card keeps its keyboard focus and its note after Cancel, after a failed ask, and after
+  a code is voided or expires; a decision made in a terminal shows on the card without a reload. It
+  has a Cancel when the code ask hangs.
+- Opening Terminal and pressing Tab before any session existed raised a script error; it no longer
+  does.
+- `mokata spec emit` from a linked worktree commits the spec into that worktree, not the main
+  checkout.
+- `mokata explain`, the IDE's hand-off to the terminal and the home screen's next step name the
+  command the way your install named it: `/explain` after `mokata init`, `/mokata:explain` in the
+  plugin.
+
+### Re-scheduled
+- **Call hierarchy from a language server** — published in the 0.0.26 notes as part of the read-only
+  language server due in 0.0.27, and not in this release.
+  It is re-scheduled to **0.0.28** (tracked as `ID-LSP-CALL-HIERARCHY`). Until then callers come from
+  the code graph, which covers Python only.
+
+### Known limitations
+- **`mokata index` is Python only.** Impact and blast radius from it do not cover Go, TypeScript,
+  Rust or Java; the command now says so. The skipped count covers only javascript, go, rust and
+  java, and `.pyi` / `.PY` files are counted as skipped.
+- **On a very large TypeScript repository the impact ripple for a widely called function takes about
+  74 seconds** (measured on the TypeScript compiler's own source, 15M lines, a function with 391
+  callers; it is a visible job with Cancel), and the first search hit takes about 2.2 seconds.
+  Kubernetes and cpython ripples took 1.5 to 3.3 seconds.
+- **The `.git/hooks` and `.git/config` gate has limits.** It does not see a computed `cd` (`cd "$D"`,
+  `cd -`, `popd`), Bash mokata cannot parse (variables, `eval`, heredoc-fed interpreters,
+  `find -exec`, `xargs`), or commands that change config as a side effect (`git remote add`,
+  `git push -u`, `git branch -u`). On a filesystem without file ids (FAT, exFAT, some SMB) a hard
+  link to `.git/config` is not seen. **An agent with a shell can approve its own proposal with
+  `mokata approve <id> --yes`**; the gate makes the write visible, it does not stop an agent that has
+  Bash. Writes to `.gitattributes`, `.git/info/attributes` and `.gitmodules` are not gated (they only
+  select a driver; the driver's program is defined in config, which is gated). The gate is not yet
+  described in the product docs.
+- **The PR check's spec leg is not part of the merge gate.** `mokata worktree merge` does not run it.
+  The merge commit is unsigned unless signing needs no repository-chosen code.
+- **Some mangled private-key shapes are still not redacted** in session context: a key whose marker
+  has no trailing dashes, one or two dashes, a cut BEGIN line, a Unicode dash, or is built by joining
+  strings. A key split across lines with no marker is not caught by the line scanner.
+- **Other mokata commands that mokata prints still use the plugin form `/mokata:<name>`**:
+  `mokata suggest`, the IDE's empty Sessions screen, hints and skill text. After `mokata init` type
+  `/<name>` instead (or `/mokata-<name>` for review, init, doctor, resume and bug). The explain
+  hand-off and the home screen are already correct.
+- **The image pixel difference is shown but feeds no gate.**
+- **Language-server support:** pnpm and yarn global installs on Windows are unverified; trust is not
+  bound to the server's command line, and the trust status says so.
+- **CSV:** a single record over 64 MiB is refused; a keyed comparison of 1,000,000 rows in reverse
+  order takes about 71 seconds; there is no case-insensitive ordering or regex filter.
+- **A path-swap race can still serve a swapped file** (2 in 1.2 million attempts in a test, 1 of them
+  on 0.0.26); Windows 8.3 short names and alternate streams are unverified on a real Windows machine.
+  On a case-sensitive disk a directory named `.Git` is refused.
+- **Not in this release, and not scheduled:** hunk-level stage and discard, PR review submit and
+  other git hosts.
+- **Carried over from 0.0.26, not re-verified for this release:** this release has not yet run on the macOS and
+  Windows CI legs, and the Windows IDE terminal and the `.cmd` hook launcher are not verified on a
+  real Windows desktop; hook timings
+  are measured on Linux only; on Windows a spec proposal can wait ~20 s while another mokata process
+  writes the same run's state; follow mode is unproven against a real `claude` session; runs created
+  before 0.0.26 keep the previous re-entry behaviour for a resumed or idle window until a new run is
+  registered; a restarted MCP server is recognised only when Claude sits within two launcher
+  processes of its hooks; the clean-machine install workflow has not run on a release runner.
+
 ## [0.0.26] — 2026-10-27
 
 **Stability: a stable MCP server, sessions that keep their run, every session in its own worktree,

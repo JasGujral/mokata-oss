@@ -515,10 +515,9 @@ def report(results: List[EvalResult], title: str = "MCP-R.D3 eval") -> str:
 # made against the real batch, not against the three illustrative ones.
 NAMING_CANDIDATES: Tuple[Tuple[str, str], ...] = (
     ("status", "get_status"),               # doc 88 §D1, named
-    ("watch", "write_dashboard"),           # doc 88 §D1, named — and the most defensible of all:
-                                            #   the tool does not watch anything, it WRITES an HTML
-                                            #   dashboard once and returns its path (tools_read.py
-                                            #   :246-265, calling `dashboard.write_dashboard`).
+    # ("watch", "write_dashboard") — doc 88 §D1's named candidate — is off the list because the
+    # tool is DELETED (0.0.27 WATCH-FOLD: the HTML dashboard folded into the IDE's Sessions screen).
+    # The rationale below is the 2026-07-20 record and keeps its wording as dated.
     ("query", "query_graph"),               # doc 88 §D1, named
     ("coverage", "get_coverage"),
     ("budget", "get_budget"),

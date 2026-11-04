@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from typing import List, Tuple
 
+from .plugin_runtime import slash_command
+
 
 def _line(fn, fallback: str) -> str:
     try:
@@ -73,6 +75,10 @@ def _identity(surface) -> str:
 
 
 def _run(surface) -> Tuple[str, Tuple[str, str]]:
+    """The run line (its words unchanged) and the next pair — 0.0.27 P14: the next pair is the
+    run's PRIMARY next-step hint (`hints.derive`), so bare `mokata`, `mokata suggest`, the MCP tool
+    and the IDE say the same next step. A run whose recorded state cannot be read says so, naming
+    the store, and points at `doctor` — never a guessed "resume"."""
     try:
         from .progress import build_progress
         from .run_resolver import resolve_run
@@ -81,18 +87,29 @@ def _run(surface) -> Tuple[str, Tuple[str, str]]:
             if getattr(res, "ambiguous", False):
                 return (f"  run: {len(res.candidates)} runs, none identifiably yours",
                         ("mokata sessions", "list them, then `--run <id>`"))
-            return ("  run: none active", ("/mokata:brainstorm", "start a tracked run"))
+            return ("  run: none active", (slash_command("brainstorm", surface.root), "start a tracked run"))
         p = build_progress(surface.state, run_id=res.run_id)
         if not p.active:
-            return (f"  run: {res.run_id[:8]} — no progress recorded yet",
-                    ("mokata progress", "where the run stands"))
-        if p.complete:
-            return (f"  run: {res.run_id[:8]} — complete [{p.done}/{p.total}]",
-                    ("/mokata:brainstorm", "start the next run"))
-        return (f"  run: {res.run_id[:8]} — phase '{p.current}' [{p.done}/{p.total}]",
-                ("mokata resume", f"pick up at '{p.current}' (gates hold)"))
+            line = f"  run: {res.run_id[:8]} — no progress recorded yet"
+        elif p.complete:
+            line = f"  run: {res.run_id[:8]} — complete [{p.done}/{p.total}]"
+        else:
+            line = f"  run: {res.run_id[:8]} — phase '{p.current}' [{p.done}/{p.total}]"
     except Exception:  # noqa: BLE001
-        return ("  run: could not be read", ("mokata progress", "where the run stands"))
+        return ("  run: could not be read", ("mokata doctor", "see what is damaged"))
+    return _next_from_hint(surface.root, res.run_id, line)
+
+
+def _next_from_hint(root: str, run_id: str, line: str) -> Tuple[str, Tuple[str, str]]:
+    from .hints import STATUS_NONE, STATUS_UNKNOWN, derive, primary
+    ans = derive(root, run=run_id)
+    if ans["status"] == STATUS_UNKNOWN:
+        return (f"  run: {run_id[:8]} — could not be read ({ans['reason']})",
+                ("mokata doctor", "see what is damaged"))
+    if ans["status"] == STATUS_NONE:
+        return line, (slash_command("brainstorm", root), "start the next run")
+    h = primary(ans)
+    return line, (h["command"], h["text"])
 
 
 def _pending(root: str) -> str:

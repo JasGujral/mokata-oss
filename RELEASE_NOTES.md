@@ -1,4 +1,4 @@
-mokata **0.0.26**. Set up or upgrade with one instruction, in your repo:
+mokata **0.0.27**. Set up or upgrade with one instruction, in your repo:
 `uv tool install --upgrade "mokata[full]"` (or `pipx install --force "mokata[full]"`), then
 `mokata setup claude --mode full`.
 Requires **Python ≥ 3.12**, and for the Claude Code integration **Claude Code ≥ 2.1.198**. The plugin
@@ -6,57 +6,90 @@ route needs **[`uv`](https://docs.astral.sh/uv/) on your PATH**.
 
 ---
 
-## 0.0.26 — "Stable sessions, a worktree per session, and an IDE at multi-million-line scale."
+## 0.0.27 — "Read a change your way, see it proven, merge it with evidence."
 
-**⚠ Before you upgrade.** Python 3.12+ and Claude Code 2.1.198+ are now required. Specs approved by
-0.0.25 need re-approving with a task plan — `mokata doctor` names each run and the command
-(`mokata spec migrate <run>`). Run `mokata setup claude` once after upgrading.
+**⚠ Before you upgrade.** Specs without a `tests[]` map must be re-emitted to be graded by the PR
+check; there is no migration. `mokata ci-check` now exits **2** when it cannot resolve the base to
+compare against (for example a shallow checkout with `fetch-depth: 1`) — a report-only job on a
+shallow checkout fails until it fetches the base. Removed: the HTML `mokata watch` dashboard, Vim
+navigation, the change treemap, the Replay scrubber, the rail and status footer, and Copy Ref (use
+Copy with Context).
 
-**🔒 Security fix.** 19 slash-command templates passed your or the repository's text through `eval`,
-a shell-injection path through `$ARGUMENTS`. They now pass it as single-quoted arguments, and CI runs
-six security lints on every pull request. The posture is published in `docs/security.md`.
+**🔒 Safer by default.** A visible write to `.git/hooks` or `.git/config` now asks for your approval
+— this makes the write visible; it is not a wall (see below). Well-formed private keys are redacted
+whole in the context the IDE sends to a session (0.0.26 could leak a whole key body). `.git/` and
+`.mokata/` are refused on every IDE read route in any spelling of the name. `mokata ci-check --base`
+refuses a value that starts with `-`.
 
-**The MCP server is stable.** Tool calls no longer block each other, a call still working answers
-`running` and can be re-joined, and a retried spec amend is answered from the record instead of being
-applied twice. Spec registration and amend stay on your run after a resume, a long idle or a dropped
-connection (`/mcp` reconnect) — and never take another window's session.
+**Read a change your way.** In `mokata ide`: split or unified diffs with the changed words marked;
+image diffs (side by side, swipe, onion skin, pixel difference); CSV and TSV as a table, and a
+comparison of two versions by row or by key; **Copy with Context** (secret-scanned) and **Find
+Usages**; dark, light, two high-contrast themes or follow your OS; an explorer that copes with very
+large repositories. `mokata explain live` prints the Claude Code command for a change explainer —
+Claude writes it on your own login, and mokata keeps only the claims that cite a fact or a line range.
 
-**Every session in its own worktree.** Each Claude Code session edits its own git worktree; runs,
-approvals and the IDE share one `.mokata/` store, and code answers follow the worktree you are in. A
-worktree that is behind its base cannot be merged: the IDE offers an approve-gated **Sync** first,
-and `/ship` always rebases and re-runs the suite before you merge or open a pull request.
+**Read-only code intelligence from a language server** — go-to-definition, references, hover and
+document symbols — only after you trust the workspace (`mokata ide --trust`). This is part of what the
+0.0.26 notes promised for 0.0.27; call hierarchy, the other part, is re-scheduled (see below).
 
-**Plans you can hold the agent to.** A spec carries a task plan, approved and sealed with a hash;
-writes outside the active task are blocked. A session that claims "done" without the evidence is sent
-back with what is missing; the third failed fix at one failure, or a sixth review round, stops for a
-new approach. Memory writes must cite things that exist.
+**See that a change is proven.** The Proof screen shows each acceptance criterion, the tests that
+prove it and the code they cover. `mokata suggest` names the recorded fact behind each hint. The PR
+check can carry the run's gate evidence and the committed run record, says "not checked" when it
+cannot grade a leg (never a pass), and works on a fresh repository.
 
-**The IDE works on multi-million-line repositories.** One navigation; every session in one place;
-heavy work as visible jobs with progress and Cancel; go-to-definition, outline, search (every hit,
-paged) and meaning search from the code graph at kubernetes scale; graph views that draw in about a
-second and never more than 150 nodes. Approve proposed writes in the window with a one-time code from
-your terminal. Closing the IDE with work running asks first. A repo nobody set up opens on Welcome
-and writes nothing until you confirm.
+**Merge with evidence.** `mokata worktree merge` merges a session's worktree only with full-suite
+evidence at the head, your approval and a compare-and-set commit point; `--recover` restores a clean
+state if it is interrupted. Needs git 2.40 or newer.
 
-**Full mode, built in one go.** `mokata setup claude --mode full` ends with code-review-graph's
-index, the meaning-search index and ripgrep word search ready. The per-prompt hook no longer takes
-5–6 s with code-review-graph (~75 ms p95), and code-review-graph's blast radius is mapped correctly.
+**Three tabs.** The window is now Review · Sessions · Code, with one "waiting on you" bar.
+`mokata watch --open` opens the IDE on Sessions.
+
+**Honest about the index.** `mokata index` and `index_status` now say which languages are indexed
+and how many files were skipped. It indexes Python only.
 
 ## Re-scheduled
 
-- **Read-only code intelligence in the IDE** — references, hover and call hierarchy from a language
-  server, behind workspace trust — is scheduled for **0.0.27** (tracked as `ID-LSP-READONLY-EARLIER`).
-  Until then go-to-definition and callers come from the code graph.
+- **Call hierarchy from a language server** — published in the 0.0.26 notes as part of the read-only
+  language server due in 0.0.27, and not in this release.
+  It is re-scheduled to **0.0.28** (tracked as `ID-LSP-CALL-HIERARCHY`). Until then callers come from
+  the code graph, which covers Python only.
 
 ## Known limitations
-- **Not yet run on the macOS and Windows CI legs.** Tested on Linux and by hand on macOS; Windows
-  setup, the Windows IDE terminal and the `.cmd` hook launcher are not yet verified on a real desktop.
-- **Hook timings are measured on Linux only.**
-- **On Windows, a spec proposal can wait ~20 s** while another mokata process writes the same run's
-  state without pause; it then completes.
-- **Follow mode is unproven against a real `claude` session** end to end.
-- **Runs created before 0.0.26 keep the previous re-entry behaviour** for a resumed or idle window
-  until a new run is registered.
-- **A restarted MCP server is recognised only when Claude sits within two launcher processes of its
-  hooks**; a deeper chain (e.g. the Windows `py.exe` stub) refuses as ambiguous, as in 0.0.25.
-- **The clean-machine install workflow has not run on a release runner yet.**
+- **`mokata index` is Python only.** Impact and blast radius from it do not cover Go, TypeScript,
+  Rust or Java; the command says so. The skipped count covers only javascript, go, rust and java, and `.pyi` / `.PY` files are counted as
+  skipped.
+- **Very large TypeScript repositories are slow to ripple:** about 74 seconds for a function with 391
+  callers in a 15M-line tree (a visible job with Cancel); the first search hit takes about 2.2 s.
+- **The `.git/hooks` and `.git/config` gate has limits.** It does not see a computed `cd` (`cd "$D"`, `cd -`, `popd`), Bash
+  mokata cannot parse (variables, `eval`, heredoc-fed interpreters, `find -exec`, `xargs`), or
+  commands that change config as a side effect (`git remote add`, `git push -u`, `git branch -u`);
+  a hard link to `.git/config` is not seen on FAT, exFAT or some SMB shares. **An agent with a shell
+  can approve its own proposal with `mokata approve <id> --yes`** — the gate makes the write visible;
+  it does not stop an agent that has Bash. Writes to `.gitattributes`, `.git/info/attributes` and
+  `.gitmodules` are not gated. The gate is not yet described in the product docs.
+- **The PR check's spec leg is not part of the merge gate** (`mokata worktree merge` does not run it), and the merge commit is unsigned unless
+  signing needs no repository-chosen code.
+- **Some mangled private-key shapes are still not redacted** in session context (a marker with no
+  trailing dashes, one or two dashes, a cut BEGIN line, a Unicode dash, or a key built by joining
+  strings; a key split across lines with no marker).
+- **Some printed commands still use the plugin form `/mokata:<name>`** (`mokata suggest`, hints, skill
+  text, the IDE's empty Sessions screen). After `mokata init` type `/<name>` instead (or `/mokata-<name>` for review, init, doctor, resume
+  and bug).
+- **The image pixel difference feeds no gate.**
+- **Language server:** pnpm and yarn global installs on Windows are unverified; trust is not bound to
+  the server's command line.
+- **CSV:** a single record over 64 MiB is refused; a keyed comparison of 1,000,000 rows in reverse
+  order takes about 71 s; there is no case-insensitive ordering or regex filter.
+- **A path-swap race can still serve a swapped file** (2 in 1.2 million attempts in a test); Windows
+  8.3 short names and alternate streams are unverified on a real Windows machine. On a case-sensitive
+  disk a directory named `.Git` is refused.
+- **Not in this release, and not scheduled:** hunk-level stage and discard, PR review submit and
+  other git hosts.
+- **Carried over from 0.0.26, not re-verified:** this release has not yet run on the macOS and
+  Windows CI legs, and the Windows IDE terminal and the `.cmd` hook launcher are not verified on a
+  real Windows desktop; hook timings are measured
+  on Linux only; on Windows a spec proposal can wait ~20 s while another mokata process writes the
+  same run's state; follow mode is unproven against a real `claude` session; runs created before
+  0.0.26 keep the previous re-entry behaviour until a new run is registered; a restarted MCP server
+  is recognised only within two launcher processes of Claude's hooks; the clean-machine install
+  workflow has not run on a release runner.

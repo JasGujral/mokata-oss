@@ -426,6 +426,7 @@ def gate_guard_main(argv: Optional[List[str]] = None) -> int:
         content = ""
         tool_name, agent_id = "", None
         payload_id = ""
+        tool_input: Any = None
         if args.path is None and args.command is None:
             raw = _read_stdin_bounded(_STDIN_READ_TIMEOUT_SECS)
             payload = {}
@@ -472,12 +473,29 @@ def gate_guard_main(argv: Optional[List[str]] = None) -> int:
                 _err(render_refusal(verdict) + "\n")
                 return BLOCK_EXIT
 
-        # ---- 1b · the SUBAGENT CONTRACT (HP.S3, 0.0.22 D4). Only a call made inside a subagent,
-        # or a call that STARTS one, is judged; everything else passes straight through.
+        # ---- 1a · GIT-CONTROL (0.0.27 SEC-HARDEN, P2). A write to git's hooks or config — what git
+        # EXECUTES, later, as whoever commits — waits for a human's `mokata approve` of exactly this
+        # call. Like self-protect it keys on the destination alone, in every session, before any
+        # run-state gate; unlike self-protect it is approvable (it is a P2 gate, not a fence).
+        from .git_control import hits as git_control_hits
+        from .git_control import refusal as git_control_refusal
         bash = None
         if command:
             from .bash_lane import analyze
             bash = analyze(command, cwd)          # D5 — bare names included, resolved against cwd
+        # The bash lane's targets follow a literal `cd` (`cd .git/hooks && echo x > pre-commit` is
+        # judged at .git/hooks/pre-commit); self-protect's parser adds what it alone sees.
+        gc_hits = git_control_hits(cwd, path, (list(bash.targets) if bash else []) +
+                                   bash_write_targets(command or ""), command or "")
+        if gc_hits:
+            refusal = git_control_refusal(cwd, session_id, gc_hits, tool_name, tool_input,
+                                          command or "", path)
+            if refusal:
+                _err(refusal + "\n")
+                return BLOCK_EXIT
+
+        # ---- 1b · the SUBAGENT CONTRACT (HP.S3, 0.0.22 D4). Only a call made inside a subagent,
+        # or a call that STARTS one, is judged; everything else passes straight through.
         if agent_id is not None or tool_name in _SPAWN_TOOLS:
             refusal = _subagent_contract_refusal(
                 cwd, session_id, agent_id, tool_name, path,
@@ -1705,11 +1723,11 @@ def user_prompt_submit_main(argv: Optional[List[str]] = None) -> int:
             # human sent IDE context, or the budget fired, which are said on their own.
             if head:
                 _emit(head, event=USER_PROMPT_SUBMIT_EVENT)
-                _ide_context_delivered(root, ide_ids)
+                _ide_context_delivered(root, ide_ids, session_id)
             return 0
         _emit((head + "\n" + pack.text) if head else pack.text,
               event=USER_PROMPT_SUBMIT_EVENT)
-        _ide_context_delivered(root, ide_ids)
+        _ide_context_delivered(root, ide_ids, session_id)
         # AFTER the emit, and only the ids that actually SURVIVED the budget (`pack.item_ids` is
         # what was rendered, not what was retrieved). Recording a dropped item would suppress it
         # for the rest of the session without the model ever having seen it — losing memory in
@@ -1745,19 +1763,42 @@ def _ide_context_for(surface, root: str, session_id: Optional[str], notice: str)
         from .context_budget import context_budget
         from .ide.context import pending_block
         turn = context_budget(getattr(surface, "manifest", None)).turn_tokens
-        return pending_block(root, session_id, max(turn - estimate_tokens(notice), 0))
+        block, ids = pending_block(root, session_id, max(turn - estimate_tokens(notice), 0))
     except (ImportError, OSError, ValueError):
-        return "", []                       # never fail a turn over IDE context; it stays queued
+        block, ids = "", []                 # never fail a turn over IDE context; it stays queued
+    # 0.0.27 P46 — an "Explain changes" request from the IDE rides the SAME channel, from its OWN
+    # one-slot record (never the 8-item queue), drained only after the emit like the rest.
+    try:
+        from .ide.context import explain_block
+        line, rid = explain_block(root, session_id)
+    except (ImportError, OSError, ValueError):
+        line, rid = "", None
+    if line:
+        block = "\n".join(x for x in (line, block) if x)
+        ids = list(ids) + [f"explain:{rid}"]
+    return block, ids
 
 
-def _ide_context_delivered(root: str, ids) -> None:
+def _ide_context_delivered(root: str, ids, session_id: Optional[str] = None) -> None:
     if not ids:
         return
+    plain = [i for i in ids if not str(i).startswith("explain:")]
+    asked = [str(i)[len("explain:"):] for i in ids if str(i).startswith("explain:")]
     try:
         from .ide.context import delivered
-        delivered(root, ids)
+        delivered(root, plain)
     except (ImportError, OSError, ValueError):
         pass                                # undrained: re-sent next turn rather than lost
+    for rid in asked:
+        try:
+            import time as _time
+            from .explain.store import update_request
+            from .ide.context import explain_clear
+            if session_id:
+                explain_clear(root, session_id, rid)
+            update_request(root, rid, delivered_at=_time.time())
+        except (ImportError, OSError, ValueError):
+            pass                            # undrained: re-sent next turn rather than lost
 
 
 def _turn_budget_after(surface, notice: str) -> Optional[int]:

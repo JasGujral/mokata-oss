@@ -298,13 +298,9 @@ def namespace(root: str) -> str:
     return derive_project_id(root)
 
 
-def actor() -> str:
-    """Best-effort attribution for the shared rows. A name, never a machine path."""
-    for var in ("MOKATA_ACTOR", "USER", "USERNAME", "LOGNAME"):
-        val = os.environ.get(var)
-        if val:
-            return val
-    return "unknown"
+# `actor` — attribution for the shared rows — is THE run identity in `session` (R6, 0.0.27: this
+# module carried a second, identical copy).
+from .session import actor  # noqa: E402
 
 
 # --------------------------------------------------------------------------------- shared backend

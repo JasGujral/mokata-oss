@@ -13,7 +13,7 @@
     "request/response shape"
    ],
    "lexical": {
-    "target_score": 18.4609,
+    "target_score": 18.5526,
     "target_rank": 1
    }
   },
@@ -28,7 +28,7 @@
     "request/response shape"
    ],
    "lexical": {
-    "target_score": 11.8134,
+    "target_score": 11.8413,
     "target_rank": 1
    }
   },
@@ -43,7 +43,7 @@
     "a status code"
    ],
    "lexical": {
-    "target_score": 8.7473,
+    "target_score": 8.8024,
     "target_rank": 1
    }
   },
@@ -57,7 +57,7 @@
     "route, handler, endpoint, or public interface"
    ],
    "lexical": {
-    "target_score": 11.7397,
+    "target_score": 11.7948,
     "target_rank": 1
    }
   },
@@ -73,7 +73,7 @@
     "a status code"
    ],
    "lexical": {
-    "target_score": 18.5075,
+    "target_score": 18.6176,
     "target_rank": 1
    }
   },
@@ -85,8 +85,8 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": -3.2119,
-    "target_rank": 52
+    "target_score": -3.2574,
+    "target_rank": 53
    }
   },
   {
@@ -100,7 +100,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 7
+    "target_rank": 8
    }
   },
   {
@@ -128,7 +128,7 @@
     "migrates callers off an old shape"
    ],
    "lexical": {
-    "target_score": 0.9445,
+    "target_score": 0.9536,
     "target_rank": 5
    }
   },
@@ -155,7 +155,7 @@
     "@nestjs/core"
    ],
    "lexical": {
-    "target_score": 12.6395,
+    "target_score": 12.7129,
     "target_rank": 1
    }
   },
@@ -169,7 +169,7 @@
     "controller, module, provider, guard, pipe or DTO"
    ],
    "lexical": {
-    "target_score": 6.6562,
+    "target_score": 6.6929,
     "target_rank": 1
    }
   },
@@ -184,7 +184,7 @@
     "@nestjs/core"
    ],
    "lexical": {
-    "target_score": 11.7397,
+    "target_score": 11.7948,
     "target_rank": 1
    }
   },
@@ -199,7 +199,7 @@
     "@nestjs/core"
    ],
    "lexical": {
-    "target_score": 12.2506,
+    "target_score": 12.3056,
     "target_rank": 1
    }
   },
@@ -213,7 +213,7 @@
     "controller, module, provider, guard, pipe or DTO"
    ],
    "lexical": {
-    "target_score": 6.6562,
+    "target_score": 6.6929,
     "target_rank": 1
    }
   },
@@ -225,8 +225,8 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": -6.0502,
-    "target_rank": 53
+    "target_score": -6.0778,
+    "target_rank": 54
    }
   },
   {
@@ -240,7 +240,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 10
+    "target_rank": 11
    }
   },
   {
@@ -251,8 +251,8 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": -4.6821,
-    "target_rank": 52
+    "target_score": -4.7005,
+    "target_rank": 53
    }
   },
   {
@@ -263,8 +263,8 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": -0.2239,
-    "target_rank": 52
+    "target_score": -0.2147,
+    "target_rank": 53
    }
   },
   {
@@ -290,7 +290,7 @@
     "weighing options or trade-offs"
    ],
    "lexical": {
-    "target_score": 16.612,
+    "target_score": 16.7038,
     "target_rank": 1
    }
   },
@@ -305,7 +305,7 @@
     "describing a NEW problem/feature"
    ],
    "lexical": {
-    "target_score": 17.2973,
+    "target_score": 17.3891,
     "target_rank": 1
    }
   },
@@ -320,7 +320,7 @@
     "describing a NEW problem/feature"
    ],
    "lexical": {
-    "target_score": 8.3724,
+    "target_score": 8.4275,
     "target_rank": 1
    }
   },
@@ -334,7 +334,7 @@
     "exploring an approach"
    ],
    "lexical": {
-    "target_score": 8.6826,
+    "target_score": 8.7376,
     "target_rank": 1
    }
   },
@@ -348,7 +348,7 @@
     "weighing options or trade-offs"
    ],
    "lexical": {
-    "target_score": 8.667,
+    "target_score": 8.7037,
     "target_rank": 1
    }
   },
@@ -375,7 +375,7 @@
     "write or define the spec"
    ],
    "lexical": {
-    "target_score": 1.3148,
+    "target_score": 1.3332,
     "target_rank": 15
    }
   },
@@ -391,7 +391,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 19
+    "target_rank": 20
    }
   },
   {
@@ -402,7 +402,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 1.1268,
+    "target_score": 1.1451,
     "target_rank": 5
    }
   },
@@ -417,7 +417,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 10
+    "target_rank": 11
    }
   },
   {
@@ -432,7 +432,7 @@
     "running browser"
    ],
    "lexical": {
-    "target_score": 23.1712,
+    "target_score": 23.0483,
     "target_rank": 1
    }
   },
@@ -447,7 +447,7 @@
     "running browser"
    ],
    "lexical": {
-    "target_score": 12.7938,
+    "target_score": 12.7579,
     "target_rank": 1
    }
   },
@@ -461,7 +461,7 @@
     "DevTools-observable surface"
    ],
    "lexical": {
-    "target_score": 11.626,
+    "target_score": 11.6994,
     "target_rank": 1
    }
   },
@@ -476,7 +476,7 @@
     "running browser"
    ],
    "lexical": {
-    "target_score": 9.4005,
+    "target_score": 9.3738,
     "target_rank": 1
    }
   },
@@ -491,7 +491,7 @@
     "running browser"
    ],
    "lexical": {
-    "target_score": 14.5956,
+    "target_score": 14.4177,
     "target_rank": 1
    }
   },
@@ -505,8 +505,8 @@
     "failing tests written"
    ],
    "lexical": {
-    "target_score": -4.1866,
-    "target_rank": 53
+    "target_score": -4.2868,
+    "target_rank": 54
    }
   },
   {
@@ -517,8 +517,8 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": -0.8188,
-    "target_rank": 48
+    "target_score": -0.828,
+    "target_rank": 49
    }
   },
   {
@@ -531,8 +531,8 @@
     "hot path, a database query, a cache, or a batch/loop"
    ],
    "lexical": {
-    "target_score": -1.5363,
-    "target_rank": 50
+    "target_score": -1.5455,
+    "target_rank": 51
    }
   },
   {
@@ -543,7 +543,7 @@
    "chosen": "debug",
    "relied_on": [],
    "lexical": {
-    "target_score": 0.4377,
+    "target_score": 0.4469,
     "target_rank": 9
    }
   },
@@ -555,7 +555,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 6.3197,
+    "target_score": 6.1051,
     "target_rank": 1
    }
   },
@@ -570,7 +570,7 @@
     "regression test then a fix"
    ],
    "lexical": {
-    "target_score": 5.8678,
+    "target_score": 5.9045,
     "target_rank": 1
    }
   },
@@ -584,7 +584,7 @@
     "concrete reproducer or bug report"
    ],
    "lexical": {
-    "target_score": 7.3089,
+    "target_score": 7.3456,
     "target_rank": 2
    }
   },
@@ -598,7 +598,7 @@
     "regression test then a fix"
    ],
    "lexical": {
-    "target_score": 22.6465,
+    "target_score": 22.6656,
     "target_rank": 1
    }
   },
@@ -613,7 +613,7 @@
     "regression test then a fix"
    ],
    "lexical": {
-    "target_score": 27.673,
+    "target_score": 27.7288,
     "target_rank": 1
    }
   },
@@ -628,7 +628,7 @@
     "regression test then a fix"
    ],
    "lexical": {
-    "target_score": 5.3569,
+    "target_score": 5.3936,
     "target_rank": 2
    }
   },
@@ -683,7 +683,7 @@
     "failing tests written"
    ],
    "lexical": {
-    "target_score": 5.1117,
+    "target_score": 5.0574,
     "target_rank": 4
    }
   },
@@ -711,7 +711,7 @@
     "chain of skills to run in order"
    ],
    "lexical": {
-    "target_score": 15.6677,
+    "target_score": 15.7594,
     "target_rank": 1
    }
   },
@@ -725,7 +725,7 @@
     "chain of skills to run in order"
    ],
    "lexical": {
-    "target_score": 16.3792,
+    "target_score": 16.4709,
     "target_rank": 1
    }
   },
@@ -739,7 +739,7 @@
     "chain of skills to run in order"
    ],
    "lexical": {
-    "target_score": 8.8835,
+    "target_score": 8.9569,
     "target_rank": 1
    }
   },
@@ -753,7 +753,7 @@
     "chain of skills to run in order"
    ],
    "lexical": {
-    "target_score": 9.2567,
+    "target_score": 9.3117,
     "target_rank": 1
    }
   },
@@ -767,7 +767,7 @@
     "chain of skills to run in order"
    ],
    "lexical": {
-    "target_score": 8.4376,
+    "target_score": 8.5109,
     "target_rank": 1
    }
   },
@@ -781,7 +781,7 @@
     "full pipeline end-to-end"
    ],
    "lexical": {
-    "target_score": 1.1268,
+    "target_score": 1.1451,
     "target_rank": 15
    }
   },
@@ -810,7 +810,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 17
+    "target_rank": 18
    }
   },
   {
@@ -822,7 +822,7 @@
    "relied_on": [],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 6
+    "target_rank": 7
    }
   },
   {
@@ -835,7 +835,7 @@
     "Show where the run is"
    ],
    "lexical": {
-    "target_score": 1.1268,
+    "target_score": 1.1451,
     "target_rank": 18
    }
   },
@@ -850,7 +850,7 @@
     "quality-gate step"
    ],
    "lexical": {
-    "target_score": 14.2246,
+    "target_score": 14.298,
     "target_rank": 1
    }
   },
@@ -865,7 +865,7 @@
     "GitHub Actions or other CI workflow"
    ],
    "lexical": {
-    "target_score": 17.4404,
+    "target_score": 17.5322,
     "target_rank": 1
    }
   },
@@ -880,7 +880,7 @@
     "quality-gate step"
    ],
    "lexical": {
-    "target_score": 16.1754,
+    "target_score": 16.1945,
     "target_rank": 1
    }
   },
@@ -894,7 +894,7 @@
     "GitHub Actions or other CI workflow"
    ],
    "lexical": {
-    "target_score": 13.0409,
+    "target_score": 13.0233,
     "target_rank": 1
    }
   },
@@ -909,7 +909,7 @@
     "GitHub Actions or other CI workflow"
    ],
    "lexical": {
-    "target_score": 13.2052,
+    "target_score": 13.2331,
     "target_rank": 1
    }
   },
@@ -975,7 +975,7 @@
    "chosen": "debug",
    "relied_on": [],
    "lexical": {
-    "target_score": 1.6376,
+    "target_score": 1.565,
     "target_rank": 8
    }
   },
@@ -989,7 +989,7 @@
     "root-causing"
    ],
    "lexical": {
-    "target_score": 11.7397,
+    "target_score": 11.7948,
     "target_rank": 1
    }
   },
@@ -1003,7 +1003,7 @@
     "something is broken and asks why"
    ],
    "lexical": {
-    "target_score": 8.667,
+    "target_score": 8.7037,
     "target_rank": 1
    }
   },
@@ -1017,7 +1017,7 @@
     "root-causing"
    ],
    "lexical": {
-    "target_score": 11.088,
+    "target_score": 11.0976,
     "target_rank": 1
    }
   },
@@ -1029,7 +1029,7 @@
    "chosen": "debug",
    "relied_on": [],
    "lexical": {
-    "target_score": 7.3678,
+    "target_score": 7.4045,
     "target_rank": 1
    }
   },
@@ -1043,7 +1043,7 @@
     "root-causing"
    ],
    "lexical": {
-    "target_score": 14.8124,
+    "target_score": 14.8858,
     "target_rank": 1
    }
   },
@@ -1055,8 +1055,8 @@
    "chosen": "develop",
    "relied_on": [],
    "lexical": {
-    "target_score": -2.3846,
-    "target_rank": 53
+    "target_score": -2.4029,
+    "target_rank": 54
    }
   },
   {
@@ -1082,7 +1082,7 @@
    "relied_on": [],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 11
+    "target_rank": 12
    }
   },
   {
@@ -1096,7 +1096,7 @@
     "regression test then a fix"
    ],
    "lexical": {
-    "target_score": 8.1581,
+    "target_score": 8.1221,
     "target_rank": 2
    }
   },
@@ -1125,7 +1125,7 @@
     "independent subtasks + a dependency plan"
    ],
    "lexical": {
-    "target_score": 28.4679,
+    "target_score": 28.5963,
     "target_rank": 1
    }
   },
@@ -1139,7 +1139,7 @@
     "independent subtasks + a dependency plan"
    ],
    "lexical": {
-    "target_score": 9.1693,
+    "target_score": 9.2427,
     "target_rank": 1
    }
   },
@@ -1151,7 +1151,7 @@
    "chosen": "decompose",
    "relied_on": [],
    "lexical": {
-    "target_score": 4.8604,
+    "target_score": 4.8971,
     "target_rank": 3
    }
   },
@@ -1165,7 +1165,7 @@
     "independent subtasks + a dependency plan"
    ],
    "lexical": {
-    "target_score": 21.0003,
+    "target_score": 21.1287,
     "target_rank": 1
    }
   },
@@ -1179,7 +1179,7 @@
     "independent subtasks + a dependency plan"
    ],
    "lexical": {
-    "target_score": 12.2506,
+    "target_score": 12.3056,
     "target_rank": 1
    }
   },
@@ -1191,7 +1191,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 3.5835,
+    "target_score": 3.6019,
     "target_rank": 1
    }
   },
@@ -1220,7 +1220,7 @@
     "chain of skills to run in order"
    ],
    "lexical": {
-    "target_score": 3.411,
+    "target_score": 3.4477,
     "target_rank": 5
    }
   },
@@ -1250,7 +1250,7 @@
     "7-phase tracker"
    ],
    "lexical": {
-    "target_score": 1.1268,
+    "target_score": 1.1451,
     "target_rank": 14
    }
   },
@@ -1264,7 +1264,7 @@
     "removes or retires a symbol, endpoint, flag, or module"
    ],
    "lexical": {
-    "target_score": 9.7289,
+    "target_score": 9.784,
     "target_rank": 1
    }
   },
@@ -1279,7 +1279,7 @@
     "migrates callers off an old shape"
    ],
    "lexical": {
-    "target_score": 20.4068,
+    "target_score": 20.4985,
     "target_rank": 1
    }
   },
@@ -1293,7 +1293,7 @@
     "migrates callers off an old shape"
    ],
    "lexical": {
-    "target_score": 10.7506,
+    "target_score": 10.8056,
     "target_rank": 1
    }
   },
@@ -1307,7 +1307,7 @@
     "removes or retires a symbol, endpoint, flag, or module"
    ],
    "lexical": {
-    "target_score": 21.7931,
+    "target_score": 21.5018,
     "target_rank": 1
    }
   },
@@ -1321,7 +1321,7 @@
     "migrates callers off an old shape"
    ],
    "lexical": {
-    "target_score": 17.3341,
+    "target_score": 17.4075,
     "target_rank": 1
    }
   },
@@ -1333,7 +1333,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 8.2938,
+    "target_score": 8.3489,
     "target_rank": 1
    }
   },
@@ -1345,7 +1345,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 3.5835,
+    "target_score": 3.6019,
     "target_rank": 3
    }
   },
@@ -1371,7 +1371,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 5.5576,
+    "target_score": 5.5943,
     "target_rank": 3
    }
   },
@@ -1398,7 +1398,7 @@
     "minimum implementation"
    ],
    "lexical": {
-    "target_score": 23.0111,
+    "target_score": 23.0486,
     "target_rank": 1
    }
   },
@@ -1412,7 +1412,7 @@
     "approved, spec-backed change"
    ],
    "lexical": {
-    "target_score": 16.9375,
+    "target_score": 16.9838,
     "target_rank": 1
    }
   },
@@ -1427,7 +1427,7 @@
     "approved, spec-backed change"
    ],
    "lexical": {
-    "target_score": 20.6096,
+    "target_score": 20.6287,
     "target_rank": 1
    }
   },
@@ -1442,7 +1442,7 @@
     "approved, spec-backed change"
    ],
    "lexical": {
-    "target_score": 6.0326,
+    "target_score": 5.9512,
     "target_rank": 3
    }
   },
@@ -1457,7 +1457,7 @@
     "approved, spec-backed change"
    ],
    "lexical": {
-    "target_score": 11.2083,
+    "target_score": 11.2091,
     "target_rank": 1
    }
   },
@@ -1471,7 +1471,7 @@
     "exploring an approach"
    ],
    "lexical": {
-    "target_score": 0.1823,
+    "target_score": 0.1915,
     "target_rank": 9
    }
   },
@@ -1485,7 +1485,7 @@
     "failing tests written"
    ],
    "lexical": {
-    "target_score": 5.1117,
+    "target_score": 5.0574,
     "target_rank": 5
    }
   },
@@ -1500,7 +1500,7 @@
     "tests are GREEN"
    ],
    "lexical": {
-    "target_score": 5.6225,
+    "target_score": 5.5682,
     "target_rank": 2
    }
   },
@@ -1512,7 +1512,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 3.5835,
+    "target_score": 3.6019,
     "target_rank": 1
    }
   },
@@ -1541,7 +1541,7 @@
     "site URLs"
    ],
    "lexical": {
-    "target_score": 26.6213,
+    "target_score": 26.7314,
     "target_rank": 1
    }
   },
@@ -1555,7 +1555,7 @@
     "site URLs"
    ],
    "lexical": {
-    "target_score": 5.3569,
+    "target_score": 5.3936,
     "target_rank": 2
    }
   },
@@ -1569,7 +1569,7 @@
     "published documentation topics"
    ],
    "lexical": {
-    "target_score": 11.2289,
+    "target_score": 11.284,
     "target_rank": 1
    }
   },
@@ -1584,7 +1584,7 @@
     "site URLs"
    ],
    "lexical": {
-    "target_score": 19.1075,
+    "target_score": 19.1992,
     "target_rank": 1
    }
   },
@@ -1596,7 +1596,7 @@
    "chosen": "docs",
    "relied_on": [],
    "lexical": {
-    "target_score": 2.2842,
+    "target_score": 2.3026,
     "target_rank": 1
    }
   },
@@ -1639,7 +1639,7 @@
     "every /mokata command and bundled skill on one screen"
    ],
    "lexical": {
-    "target_score": 1.8489,
+    "target_score": 1.8673,
     "target_rank": 8
    }
   },
@@ -1651,8 +1651,8 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": -0.0568,
-    "target_rank": 53
+    "target_score": -0.0477,
+    "target_rank": 54
    }
   },
   {
@@ -1679,7 +1679,7 @@
     "ADR / decision record / changelog"
    ],
    "lexical": {
-    "target_score": 6.6562,
+    "target_score": 6.6929,
     "target_rank": 1
    }
   },
@@ -1694,7 +1694,7 @@
     "ADR / decision record / changelog"
    ],
    "lexical": {
-    "target_score": 8.0405,
+    "target_score": 8.0864,
     "target_rank": 1
    }
   },
@@ -1709,7 +1709,7 @@
     "ADR / decision record / changelog"
    ],
    "lexical": {
-    "target_score": 13.1767,
+    "target_score": 13.2501,
     "target_rank": 1
    }
   },
@@ -1724,7 +1724,7 @@
     "ADR / decision record / changelog"
    ],
    "lexical": {
-    "target_score": 17.476,
+    "target_score": 17.5493,
     "target_rank": 1
    }
   },
@@ -1738,7 +1738,7 @@
     "ADR / decision record / changelog"
    ],
    "lexical": {
-    "target_score": 12.2506,
+    "target_score": 12.3056,
     "target_rank": 1
    }
   },
@@ -1753,7 +1753,7 @@
     "docs may have gone stale"
    ],
    "lexical": {
-    "target_score": 1.5109,
+    "target_score": 1.5201,
     "target_rank": 19
    }
   },
@@ -1780,7 +1780,7 @@
     "site URLs"
    ],
    "lexical": {
-    "target_score": 3.0727,
+    "target_score": 3.091,
     "target_rank": 2
    }
   },
@@ -1793,7 +1793,7 @@
    "relied_on": [],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 26
+    "target_rank": 27
    }
   },
   {
@@ -1822,7 +1822,7 @@
     "docs may have gone stale"
    ],
    "lexical": {
-    "target_score": 20.8548,
+    "target_score": 20.9649,
     "target_rank": 1
    }
   },
@@ -1837,7 +1837,7 @@
     "docs may have gone stale"
    ],
    "lexical": {
-    "target_score": 19.8917,
+    "target_score": 20.0018,
     "target_rank": 1
    }
   },
@@ -1853,7 +1853,7 @@
     "drift"
    ],
    "lexical": {
-    "target_score": 19.8405,
+    "target_score": 19.9506,
     "target_rank": 1
    }
   },
@@ -1868,7 +1868,7 @@
     "docs may have gone stale"
    ],
    "lexical": {
-    "target_score": 11.7692,
+    "target_score": 11.8426,
     "target_rank": 1
    }
   },
@@ -1884,7 +1884,7 @@
     "drift"
    ],
    "lexical": {
-    "target_score": 18.0825,
+    "target_score": 18.1471,
     "target_rank": 1
    }
   },
@@ -1897,7 +1897,7 @@
    "relied_on": [],
    "lexical": {
     "target_score": -1.7346,
-    "target_rank": 51
+    "target_rank": 52
    }
   },
   {
@@ -1908,7 +1908,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 6.0511,
+    "target_score": 6.0607,
     "target_rank": 1
    }
   },
@@ -1938,7 +1938,7 @@
     "site URLs"
    ],
    "lexical": {
-    "target_score": 2.2842,
+    "target_score": 2.3026,
     "target_rank": 8
    }
   },
@@ -1952,7 +1952,7 @@
     "team write journal"
    ],
    "lexical": {
-    "target_score": 1.8489,
+    "target_score": 1.8673,
     "target_rank": 6
    }
   },
@@ -1966,7 +1966,7 @@
     "Check mokata's install"
    ],
    "lexical": {
-    "target_score": 5.7344,
+    "target_score": 5.7711,
     "target_rank": 1
    }
   },
@@ -1978,7 +1978,7 @@
    "chosen": "doctor",
    "relied_on": [],
    "lexical": {
-    "target_score": 3.5835,
+    "target_score": 3.6019,
     "target_rank": 1
    }
   },
@@ -1992,7 +1992,7 @@
     "Check mokata's install"
    ],
    "lexical": {
-    "target_score": 23.5425,
+    "target_score": 23.671,
     "target_rank": 1
    }
   },
@@ -2006,7 +2006,7 @@
     "Check mokata's install"
    ],
    "lexical": {
-    "target_score": 14.82,
+    "target_score": 14.8934,
     "target_rank": 1
    }
   },
@@ -2020,7 +2020,7 @@
     "Check mokata's install"
    ],
    "lexical": {
-    "target_score": 11.0913,
+    "target_score": 11.1647,
     "target_rank": 1
    }
   },
@@ -2036,7 +2036,7 @@
     "/mcp doesn't list mokata"
    ],
    "lexical": {
-    "target_score": 6.9724,
+    "target_score": 7.0091,
     "target_rank": 2
    }
   },
@@ -2062,7 +2062,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 2.1172,
+    "target_score": 2.1355,
     "target_rank": 3
    }
   },
@@ -2076,7 +2076,7 @@
     "Guided first-run setup"
    ],
    "lexical": {
-    "target_score": 2.2842,
+    "target_score": 2.3026,
     "target_rank": 7
    }
   },
@@ -2090,7 +2090,7 @@
     "installed version"
    ],
    "lexical": {
-    "target_score": 4.8534,
+    "target_score": 4.8901,
     "target_rank": 2
    }
   },
@@ -2104,7 +2104,7 @@
     "Enter the pipeline at a phase"
    ],
    "lexical": {
-    "target_score": 10.2734,
+    "target_score": 10.3284,
     "target_rank": 1
    }
   },
@@ -2118,7 +2118,7 @@
     "Enter the pipeline at a phase"
    ],
    "lexical": {
-    "target_score": 8.1562,
+    "target_score": 8.1929,
     "target_rank": 1
    }
   },
@@ -2132,7 +2132,7 @@
     "Enter the pipeline at a phase"
    ],
    "lexical": {
-    "target_score": 12.0529,
+    "target_score": 12.1263,
     "target_rank": 1
    }
   },
@@ -2146,7 +2146,7 @@
     "Enter the pipeline at a phase"
    ],
    "lexical": {
-    "target_score": 6.6562,
+    "target_score": 6.6929,
     "target_rank": 1
    }
   },
@@ -2160,7 +2160,7 @@
     "Enter the pipeline at a phase"
    ],
    "lexical": {
-    "target_score": 10.2734,
+    "target_score": 10.3284,
     "target_rank": 1
    }
   },
@@ -2200,7 +2200,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 3.5835,
+    "target_score": 3.6019,
     "target_rank": 1
    }
   },
@@ -2244,7 +2244,7 @@
     "parallel subagents"
    ],
    "lexical": {
-    "target_score": 16.7663,
+    "target_score": 16.858,
     "target_rank": 1
    }
   },
@@ -2258,7 +2258,7 @@
     "execution mode for a run"
    ],
    "lexical": {
-    "target_score": 10.5841,
+    "target_score": 10.6575,
     "target_rank": 1
    }
   },
@@ -2273,7 +2273,7 @@
     "parallel subagents"
    ],
    "lexical": {
-    "target_score": 17.1027,
+    "target_score": 17.1945,
     "target_rank": 1
    }
   },
@@ -2288,7 +2288,7 @@
     "parallel subagents"
    ],
    "lexical": {
-    "target_score": 8.9465,
+    "target_score": 9.0016,
     "target_rank": 1
    }
   },
@@ -2302,7 +2302,7 @@
     "execution mode for a run"
    ],
    "lexical": {
-    "target_score": 11.4033,
+    "target_score": 11.4583,
     "target_rank": 1
    }
   },
@@ -2317,7 +2317,7 @@
     "7-phase tracker"
    ],
    "lexical": {
-    "target_score": 4.3738,
+    "target_score": 4.4105,
     "target_rank": 3
    }
   },
@@ -2332,7 +2332,7 @@
     "team-readiness preflight"
    ],
    "lexical": {
-    "target_score": 3.863,
+    "target_score": 3.8997,
     "target_rank": 3
    }
   },
@@ -2372,8 +2372,151 @@
     "live, clickable dashboard of the run"
    ],
    "lexical": {
-    "target_score": 1.1268,
+    "target_score": 1.1451,
     "target_rank": 8
+   }
+  },
+  {
+   "target": "explain",
+   "kind": "positive",
+   "prompt": "Explain the changes this session made as a review page",
+   "expect": "explain",
+   "chosen": "explain",
+   "relied_on": [
+    "Explain a change set",
+    "cited review page"
+   ],
+   "lexical": {
+    "target_score": 11.9914,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "explain",
+   "kind": "positive",
+   "prompt": "Generate a cited review page for the commit range main..feature",
+   "expect": "explain",
+   "chosen": "explain",
+   "relied_on": [
+    "cited review page"
+   ],
+   "lexical": {
+    "target_score": 11.0976,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "explain",
+   "kind": "positive",
+   "prompt": "Explain a change set with a flow diagram and the edge cases",
+   "expect": "explain",
+   "chosen": "explain",
+   "relied_on": [
+    "Explain a change set"
+   ],
+   "lexical": {
+    "target_score": 21.9368,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "explain",
+   "kind": "positive",
+   "prompt": "Make an explainer page for this run's changes with the blast radius",
+   "expect": "explain",
+   "chosen": "explain",
+   "relied_on": [
+    "Explain a change set",
+    "cited review page"
+   ],
+   "lexical": {
+    "target_score": 9.5022,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "explain",
+   "kind": "positive",
+   "prompt": "Write up what changed in my working tree as a review page with diagrams",
+   "expect": "explain",
+   "chosen": "explain",
+   "relied_on": [
+    "Explain a change set",
+    "cited review page"
+   ],
+   "lexical": {
+    "target_score": 6.8895,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "explain",
+   "kind": "near_miss",
+   "prompt": "Run the two-pass review of this implementation",
+   "expect": "review",
+   "chosen": "review",
+   "relied_on": [
+    "check/review a diff or change"
+   ],
+   "lexical": {
+    "target_score": 1.9924,
+    "target_rank": 6
+   }
+  },
+  {
+   "target": "explain",
+   "kind": "near_miss",
+   "prompt": "Pop open the live review window on this session's diff",
+   "expect": "review-window",
+   "chosen": "review-window",
+   "relied_on": [
+    "Open the review window",
+    "live diff"
+   ],
+   "lexical": {
+    "target_score": 1.9924,
+    "target_rank": 6
+   }
+  },
+  {
+   "target": "explain",
+   "kind": "near_miss",
+   "prompt": "Explain how a hash map works",
+   "expect": null,
+   "chosen": null,
+   "relied_on": [],
+   "lexical": {
+    "target_score": 3.6019,
+    "target_rank": 1
+   }
+  },
+  {
+   "target": "explain",
+   "kind": "near_miss",
+   "prompt": "Where is the run in the pipeline right now",
+   "expect": "progress",
+   "chosen": "progress",
+   "relied_on": [
+    "Show where the run is"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 30
+   }
+  },
+  {
+   "target": "explain",
+   "kind": "near_miss",
+   "prompt": "Are the docs still true to the code after the rename",
+   "expect": "docsync",
+   "chosen": "docsync",
+   "relied_on": [
+    "docs still match the code",
+    "docs may have gone stale"
+   ],
+   "lexical": {
+    "target_score": 0.0,
+    "target_rank": 25
    }
   },
   {
@@ -2386,7 +2529,7 @@
     "UI component, a view, a template, or a stylesheet"
    ],
    "lexical": {
-    "target_score": 5.8678,
+    "target_score": 5.9045,
     "target_rank": 1
    }
   },
@@ -2400,7 +2543,7 @@
     "colour/contrast choice"
    ],
    "lexical": {
-    "target_score": 19.4513,
+    "target_score": 19.543,
     "target_rank": 1
    }
   },
@@ -2414,7 +2557,7 @@
     "UI component, a view, a template, or a stylesheet"
    ],
    "lexical": {
-    "target_score": 7.167,
+    "target_score": 7.2037,
     "target_rank": 1
    }
   },
@@ -2428,7 +2571,7 @@
     "UI component, a view, a template, or a stylesheet"
    ],
    "lexical": {
-    "target_score": 14.5348,
+    "target_score": 14.6082,
     "target_rank": 1
    }
   },
@@ -2442,7 +2585,7 @@
     "UI component, a view, a template, or a stylesheet"
    ],
    "lexical": {
-    "target_score": 4.5045,
+    "target_score": 4.4957,
     "target_rank": 3
    }
   },
@@ -2454,8 +2597,8 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 0.9209,
-    "target_rank": 12
+    "target_score": 0.8938,
+    "target_rank": 13
    }
   },
   {
@@ -2466,8 +2609,8 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": -4.6821,
-    "target_rank": 53
+    "target_score": -4.7005,
+    "target_rank": 54
    }
   },
   {
@@ -2482,7 +2625,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 25
+    "target_rank": 26
    }
   },
   {
@@ -2495,7 +2638,7 @@
     "Server Function, a route handler, a page that reads protected data"
    ],
    "lexical": {
-    "target_score": 0.7479,
+    "target_score": 0.7571,
     "target_rank": 15
    }
   },
@@ -2507,7 +2650,7 @@
    "chosen": "performance",
    "relied_on": [],
    "lexical": {
-    "target_score": 2.2842,
+    "target_score": 2.3026,
     "target_rank": 6
    }
   },
@@ -2522,7 +2665,7 @@
     "React web change is made in the name of speed"
    ],
    "lexical": {
-    "target_score": 23.7387,
+    "target_score": 23.6158,
     "target_rank": 1
    }
   },
@@ -2537,7 +2680,7 @@
     "React web change is made in the name of speed"
    ],
    "lexical": {
-    "target_score": 13.1178,
+    "target_score": 13.1912,
     "target_rank": 1
    }
   },
@@ -2552,7 +2695,7 @@
     "React web change is made in the name of speed"
    ],
    "lexical": {
-    "target_score": 12.1936,
+    "target_score": 12.0157,
     "target_rank": 1
    }
   },
@@ -2566,7 +2709,7 @@
     "React web change is made in the name of speed"
    ],
    "lexical": {
-    "target_score": 12.1296,
+    "target_score": 12.1575,
     "target_rank": 1
    }
   },
@@ -2581,7 +2724,7 @@
     "React web change is made in the name of speed"
    ],
    "lexical": {
-    "target_score": 17.214,
+    "target_score": 17.3241,
     "target_rank": 1
    }
   },
@@ -2596,7 +2739,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 22
+    "target_rank": 23
    }
   },
   {
@@ -2607,7 +2750,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 3.1314,
+    "target_score": 3.1589,
     "target_rank": 2
    }
   },
@@ -2620,7 +2763,7 @@
    "relied_on": [],
    "lexical": {
     "target_score": -1.3966,
-    "target_rank": 52
+    "target_rank": 53
    }
   },
   {
@@ -2634,7 +2777,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 26
+    "target_rank": 27
    }
   },
   {
@@ -2646,7 +2789,7 @@
    "relied_on": [],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 20
+    "target_rank": 21
    }
   },
   {
@@ -2659,7 +2802,7 @@
     ".jsx/.tsx file in a package that depends on react-dom or next"
    ],
    "lexical": {
-    "target_score": 6.9724,
+    "target_score": 7.0091,
     "target_rank": 1
    }
   },
@@ -2673,7 +2816,7 @@
     ".jsx/.tsx file in a package that depends on react-dom or next"
    ],
    "lexical": {
-    "target_score": 3.5835,
+    "target_score": 3.6019,
     "target_rank": 3
    }
   },
@@ -2687,7 +2830,7 @@
     ".jsx/.tsx file in a package that depends on react-dom or next"
    ],
    "lexical": {
-    "target_score": 16.6244,
+    "target_score": 16.7161,
     "target_rank": 1
    }
   },
@@ -2701,7 +2844,7 @@
     ".jsx/.tsx file in a package that depends on react-dom or next"
    ],
    "lexical": {
-    "target_score": 3.5835,
+    "target_score": 3.6019,
     "target_rank": 1
    }
   },
@@ -2715,7 +2858,7 @@
     ".jsx/.tsx file in a package that depends on react-dom or next"
    ],
    "lexical": {
-    "target_score": 5.1807,
+    "target_score": 5.2082,
     "target_rank": 3
    }
   },
@@ -2727,7 +2870,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 0.3952,
+    "target_score": 0.4043,
     "target_rank": 9
    }
   },
@@ -2743,7 +2886,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 21
+    "target_rank": 22
    }
   },
   {
@@ -2754,8 +2897,8 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": -3.4823,
-    "target_rank": 52
+    "target_score": -3.4914,
+    "target_rank": 53
    }
   },
   {
@@ -2769,7 +2912,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 25
+    "target_rank": 26
    }
   },
   {
@@ -2780,8 +2923,8 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": -4.6821,
-    "target_rank": 52
+    "target_score": -4.7005,
+    "target_rank": 53
    }
   },
   {
@@ -2794,7 +2937,7 @@
     "Server Function, a route handler, a page that reads protected data"
    ],
    "lexical": {
-    "target_score": 7.7629,
+    "target_score": 7.8088,
     "target_rank": 1
    }
   },
@@ -2809,7 +2952,7 @@
     "renders user-controlled HTML or URLs"
    ],
    "lexical": {
-    "target_score": 18.3757,
+    "target_score": 18.2161,
     "target_rank": 1
    }
   },
@@ -2821,7 +2964,7 @@
    "chosen": "frontend-security",
    "relied_on": [],
    "lexical": {
-    "target_score": 15.9779,
+    "target_score": 16.0605,
     "target_rank": 1
    }
   },
@@ -2835,7 +2978,7 @@
     "Server Function, a route handler, a page that reads protected data"
    ],
    "lexical": {
-    "target_score": 16.6382,
+    "target_score": 16.7391,
     "target_rank": 1
    }
   },
@@ -2847,7 +2990,7 @@
    "chosen": "frontend-security",
    "relied_on": [],
    "lexical": {
-    "target_score": 22.5044,
+    "target_score": 22.6237,
     "target_rank": 1
    }
   },
@@ -2859,8 +3002,8 @@
    "chosen": "security",
    "relied_on": [],
    "lexical": {
-    "target_score": -3.8774,
-    "target_rank": 53
+    "target_score": -3.8958,
+    "target_rank": 54
    }
   },
   {
@@ -2871,8 +3014,8 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 3.6572,
-    "target_rank": 5
+    "target_score": 3.3971,
+    "target_rank": 6
    }
   },
   {
@@ -2883,7 +3026,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 0.3383,
+    "target_score": 0.3567,
     "target_rank": 6
    }
   },
@@ -2898,7 +3041,7 @@
     "React web change is made in the name of speed"
    ],
    "lexical": {
-    "target_score": 7.9573,
+    "target_score": 8.0124,
     "target_rank": 2
    }
   },
@@ -2913,7 +3056,7 @@
     "@nestjs/core"
    ],
    "lexical": {
-    "target_score": 2.2842,
+    "target_score": 2.3026,
     "target_rank": 6
    }
   },
@@ -2927,7 +3070,7 @@
     "commit structure"
    ],
    "lexical": {
-    "target_score": 9.588,
+    "target_score": 9.5976,
     "target_rank": 1
    }
   },
@@ -2941,7 +3084,7 @@
     "branching or merge strategy"
    ],
    "lexical": {
-    "target_score": 14.5096,
+    "target_score": 14.583,
     "target_rank": 1
    }
   },
@@ -2955,7 +3098,7 @@
     ".gitignore/.gitattributes policy"
    ],
    "lexical": {
-    "target_score": 12.2142,
+    "target_score": 12.2601,
     "target_rank": 1
    }
   },
@@ -2967,7 +3110,7 @@
    "chosen": "git",
    "relied_on": [],
    "lexical": {
-    "target_score": 10.9988,
+    "target_score": 11.0722,
     "target_rank": 1
    }
   },
@@ -2981,7 +3124,7 @@
     "commit structure"
    ],
    "lexical": {
-    "target_score": 11.7397,
+    "target_score": 11.7948,
     "target_rank": 1
    }
   },
@@ -2996,7 +3139,7 @@
     "quality-gate step"
    ],
    "lexical": {
-    "target_score": 3.0727,
+    "target_score": 3.091,
     "target_rank": 2
    }
   },
@@ -3009,7 +3152,7 @@
    "relied_on": [],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 26
+    "target_rank": 27
    }
   },
   {
@@ -3024,7 +3167,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 26
+    "target_rank": 27
    }
   },
   {
@@ -3039,7 +3182,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 26
+    "target_rank": 27
    }
   },
   {
@@ -3050,8 +3193,8 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 2.7362,
-    "target_rank": 3
+    "target_score": 2.7546,
+    "target_rank": 4
    }
   },
   {
@@ -3064,7 +3207,7 @@
     "see the governed state"
    ],
    "lexical": {
-    "target_score": 24.4254,
+    "target_score": 24.5355,
     "target_rank": 1
    }
   },
@@ -3078,7 +3221,7 @@
     "what mokata is currently enforcing or remembering"
    ],
    "lexical": {
-    "target_score": 12.7289,
+    "target_score": 12.784,
     "target_rank": 1
    }
   },
@@ -3090,7 +3233,7 @@
    "chosen": "govern",
    "relied_on": [],
    "lexical": {
-    "target_score": 30.6154,
+    "target_score": 30.7439,
     "target_rank": 1
    }
   },
@@ -3102,7 +3245,7 @@
    "chosen": "govern",
    "relied_on": [],
    "lexical": {
-    "target_score": 13.0685,
+    "target_score": 12.9988,
     "target_rank": 1
    }
   },
@@ -3116,7 +3259,7 @@
     "see the governed state"
    ],
    "lexical": {
-    "target_score": 14.024,
+    "target_score": 14.0974,
     "target_rank": 1
    }
   },
@@ -3131,7 +3274,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 24
+    "target_rank": 25
    }
   },
   {
@@ -3142,7 +3285,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 4.4014,
+    "target_score": 4.4381,
     "target_rank": 2
    }
   },
@@ -3156,8 +3299,8 @@
     "Show where the run is"
    ],
    "lexical": {
-    "target_score": -1.622,
-    "target_rank": 53
+    "target_score": -1.6403,
+    "target_rank": 54
    }
   },
   {
@@ -3168,8 +3311,8 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 3.0727,
-    "target_rank": 1
+    "target_score": 3.091,
+    "target_rank": 2
    }
   },
   {
@@ -3183,7 +3326,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 30
+    "target_rank": 31
    }
   },
   {
@@ -3196,7 +3339,7 @@
     "Initialize mokata or switch profile"
    ],
    "lexical": {
-    "target_score": 9.9033,
+    "target_score": 9.9583,
     "target_rank": 1
    }
   },
@@ -3210,7 +3353,7 @@
     "Initialize mokata or switch profile"
    ],
    "lexical": {
-    "target_score": 15.4651,
+    "target_score": 15.5385,
     "target_rank": 1
    }
   },
@@ -3222,7 +3365,7 @@
    "chosen": "init",
    "relied_on": [],
    "lexical": {
-    "target_score": 6.6562,
+    "target_score": 6.6929,
     "target_rank": 1
    }
   },
@@ -3236,7 +3379,7 @@
     "Initialize mokata or switch profile"
    ],
    "lexical": {
-    "target_score": 9.9033,
+    "target_score": 9.9583,
     "target_rank": 1
    }
   },
@@ -3250,7 +3393,7 @@
     "Initialize mokata or switch profile"
    ],
    "lexical": {
-    "target_score": 6.3197,
+    "target_score": 6.3564,
     "target_rank": 1
    }
   },
@@ -3267,7 +3410,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 25
+    "target_rank": 26
    }
   },
   {
@@ -3279,7 +3422,7 @@
    "relied_on": [],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 27
+    "target_rank": 28
    }
   },
   {
@@ -3290,7 +3433,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 3.5835,
+    "target_score": 3.6019,
     "target_rank": 1
    }
   },
@@ -3305,7 +3448,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 27
+    "target_rank": 28
    }
   },
   {
@@ -3319,7 +3462,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 30
+    "target_rank": 31
    }
   },
   {
@@ -3333,7 +3476,7 @@
     "/mcp doesn't list mokata"
    ],
    "lexical": {
-    "target_score": 11.604,
+    "target_score": 11.659,
     "target_rank": 1
    }
   },
@@ -3348,7 +3491,7 @@
     "/mcp doesn't list mokata"
    ],
    "lexical": {
-    "target_score": 18.5764,
+    "target_score": 18.6682,
     "target_rank": 1
    }
   },
@@ -3362,7 +3505,7 @@
     "tools are missing"
    ],
    "lexical": {
-    "target_score": 14.2755,
+    "target_score": 14.3489,
     "target_rank": 1
    }
   },
@@ -3377,7 +3520,7 @@
     "/mcp doesn't list mokata"
    ],
    "lexical": {
-    "target_score": 12.056,
+    "target_score": 12.111,
     "target_rank": 1
    }
   },
@@ -3393,7 +3536,7 @@
     "/mcp doesn't list mokata"
    ],
    "lexical": {
-    "target_score": 20.6863,
+    "target_score": 20.7963,
     "target_rank": 1
    }
   },
@@ -3408,7 +3551,7 @@
    ],
    "lexical": {
     "target_score": 1.5478,
-    "target_rank": 17
+    "target_rank": 22
    }
   },
   {
@@ -3419,7 +3562,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 8.8214,
+    "target_score": 8.8764,
     "target_rank": 1
    }
   },
@@ -3432,7 +3575,7 @@
    "relied_on": [],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 27
+    "target_rank": 28
    }
   },
   {
@@ -3443,7 +3586,7 @@
    "chosen": "debug",
    "relied_on": [],
    "lexical": {
-    "target_score": 2.2842,
+    "target_score": 2.3026,
     "target_rank": 6
    }
   },
@@ -3457,7 +3600,7 @@
     "installed version"
    ],
    "lexical": {
-    "target_score": 2.1172,
+    "target_score": 2.1355,
     "target_rank": 5
    }
   },
@@ -3471,7 +3614,7 @@
     "every /mokata command and bundled skill on one screen"
    ],
    "lexical": {
-    "target_score": 18.4858,
+    "target_score": 18.5776,
     "target_rank": 1
    }
   },
@@ -3485,7 +3628,7 @@
     "every /mokata command and bundled skill on one screen"
    ],
    "lexical": {
-    "target_score": 5.8678,
+    "target_score": 5.9045,
     "target_rank": 1
    }
   },
@@ -3499,7 +3642,7 @@
     "every /mokata command and bundled skill on one screen"
    ],
    "lexical": {
-    "target_score": 7.3678,
+    "target_score": 7.4045,
     "target_rank": 1
    }
   },
@@ -3513,7 +3656,7 @@
     "every /mokata command and bundled skill on one screen"
    ],
    "lexical": {
-    "target_score": 8.1581,
+    "target_score": 8.2131,
     "target_rank": 1
    }
   },
@@ -3527,7 +3670,7 @@
     "every /mokata command and bundled skill on one screen"
    ],
    "lexical": {
-    "target_score": 8.152,
+    "target_score": 8.207,
     "target_rank": 1
    }
   },
@@ -3542,7 +3685,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 27
+    "target_rank": 28
    }
   },
   {
@@ -3556,7 +3699,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 27
+    "target_rank": 28
    }
   },
   {
@@ -3567,7 +3710,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 3.5835,
+    "target_score": 3.6019,
     "target_rank": 1
    }
   },
@@ -3582,7 +3725,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 36
+    "target_rank": 37
    }
   },
   {
@@ -3596,7 +3739,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 33
+    "target_rank": 34
    }
   },
   {
@@ -3610,7 +3753,7 @@
     "team-readiness preflight"
    ],
    "lexical": {
-    "target_score": 14.4314,
+    "target_score": 14.5048,
     "target_rank": 1
    }
   },
@@ -3625,7 +3768,7 @@
     "team-readiness preflight"
    ],
    "lexical": {
-    "target_score": 7.8479,
+    "target_score": 7.903,
     "target_rank": 1
    }
   },
@@ -3640,7 +3783,7 @@
     "team-readiness preflight"
    ],
    "lexical": {
-    "target_score": 16.0041,
+    "target_score": 16.0959,
     "target_rank": 1
    }
   },
@@ -3654,7 +3797,7 @@
     "run mode (local | team)"
    ],
    "lexical": {
-    "target_score": 8.604,
+    "target_score": 8.492,
     "target_rank": 1
    }
   },
@@ -3669,7 +3812,7 @@
     "team-readiness preflight"
    ],
    "lexical": {
-    "target_score": 10.4423,
+    "target_score": 10.5157,
     "target_rank": 1
    }
   },
@@ -3684,7 +3827,7 @@
     "parallel subagents"
    ],
    "lexical": {
-    "target_score": 1.1268,
+    "target_score": 1.1451,
     "target_rank": 14
    }
   },
@@ -3698,7 +3841,7 @@
     "team join"
    ],
    "lexical": {
-    "target_score": 2.4849,
+    "target_score": 2.5033,
     "target_rank": 5
    }
   },
@@ -3713,7 +3856,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 33
+    "target_rank": 34
    }
   },
   {
@@ -3724,7 +3867,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 2.7362,
+    "target_score": 2.7546,
     "target_rank": 3
    }
   },
@@ -3739,7 +3882,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 36
+    "target_rank": 37
    }
   },
   {
@@ -3752,7 +3895,7 @@
     "teach mokata the project's rules"
    ],
    "lexical": {
-    "target_score": 12.4513,
+    "target_score": 12.5063,
     "target_rank": 1
    }
   },
@@ -3766,7 +3909,7 @@
     "capturing institutional knowledge"
    ],
    "lexical": {
-    "target_score": 11.2583,
+    "target_score": 11.3317,
     "target_rank": 1
    }
   },
@@ -3778,7 +3921,7 @@
    "chosen": "onboard",
    "relied_on": [],
    "lexical": {
-    "target_score": 10.3893,
+    "target_score": 10.4627,
     "target_rank": 1
    }
   },
@@ -3792,7 +3935,7 @@
     "teach mokata the project's rules"
    ],
    "lexical": {
-    "target_score": 11.7397,
+    "target_score": 11.7948,
     "target_rank": 1
    }
   },
@@ -3806,7 +3949,7 @@
     "capturing institutional knowledge"
    ],
    "lexical": {
-    "target_score": 15.3233,
+    "target_score": 15.3966,
     "target_rank": 1
    }
   },
@@ -3820,7 +3963,7 @@
     "what mokata is currently enforcing or remembering"
    ],
    "lexical": {
-    "target_score": 2.2842,
+    "target_score": 2.3026,
     "target_rank": 5
    }
   },
@@ -3832,7 +3975,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 3.0727,
+    "target_score": 3.091,
     "target_rank": 3
    }
   },
@@ -3846,7 +3989,7 @@
     "team join"
    ],
    "lexical": {
-    "target_score": 2.1172,
+    "target_score": 2.1355,
     "target_rank": 9
    }
   },
@@ -3858,8 +4001,8 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": -3.8774,
-    "target_rank": 53
+    "target_score": -3.8958,
+    "target_rank": 54
    }
   },
   {
@@ -3872,7 +4015,7 @@
     "Guided first-run setup"
    ],
    "lexical": {
-    "target_score": 5.4724,
+    "target_score": 5.5091,
     "target_rank": 3
    }
   },
@@ -3886,7 +4029,7 @@
     "faster or lighter"
    ],
    "lexical": {
-    "target_score": 3.5835,
+    "target_score": 3.6019,
     "target_rank": 1
    }
   },
@@ -3901,7 +4044,7 @@
     "measured"
    ],
    "lexical": {
-    "target_score": 21.9813,
+    "target_score": 22.1098,
     "target_rank": 1
    }
   },
@@ -3915,7 +4058,7 @@
     "measured"
    ],
    "lexical": {
-    "target_score": 4.8534,
+    "target_score": 4.8901,
     "target_rank": 2
    }
   },
@@ -3927,7 +4070,7 @@
    "chosen": "optimize",
    "relied_on": [],
    "lexical": {
-    "target_score": 9.4513,
+    "target_score": 9.5063,
     "target_rank": 1
    }
   },
@@ -3942,7 +4085,7 @@
     "measured"
    ],
    "lexical": {
-    "target_score": 4.9516,
+    "target_score": 4.9792,
     "target_rank": 3
    }
   },
@@ -3954,7 +4097,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 4.5045,
+    "target_score": 4.4957,
     "target_rank": 1
    }
   },
@@ -3967,7 +4110,7 @@
    "relied_on": [],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 30
+    "target_rank": 31
    }
   },
   {
@@ -3979,7 +4122,7 @@
    "relied_on": [],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 36
+    "target_rank": 37
    }
   },
   {
@@ -3994,7 +4137,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 30
+    "target_rank": 31
    }
   },
   {
@@ -4005,7 +4148,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 3.5835,
+    "target_score": 3.6019,
     "target_rank": 1
    }
   },
@@ -4019,7 +4162,7 @@
     "hot path, a database query, a cache, or a batch/loop"
    ],
    "lexical": {
-    "target_score": 11.4033,
+    "target_score": 11.4583,
     "target_rank": 1
    }
   },
@@ -4033,7 +4176,7 @@
     "latency/throughput/size budget"
    ],
    "lexical": {
-    "target_score": 10.6411,
+    "target_score": 10.6962,
     "target_rank": 1
    }
   },
@@ -4047,7 +4190,7 @@
     "hot path, a database query, a cache, or a batch/loop"
    ],
    "lexical": {
-    "target_score": 13.9329,
+    "target_score": 13.9971,
     "target_rank": 1
    }
   },
@@ -4061,7 +4204,7 @@
     "hot path, a database query, a cache, or a batch/loop"
    ],
    "lexical": {
-    "target_score": 8.5451,
+    "target_score": 8.6002,
     "target_rank": 1
    }
   },
@@ -4076,7 +4219,7 @@
     "latency/throughput/size budget"
    ],
    "lexical": {
-    "target_score": 13.7138,
+    "target_score": 13.7872,
     "target_rank": 1
    }
   },
@@ -4091,8 +4234,8 @@
     "regression test then a fix"
    ],
    "lexical": {
-    "target_score": -2.3411,
-    "target_rank": 53
+    "target_score": -2.3502,
+    "target_rank": 54
    }
   },
   {
@@ -4106,7 +4249,7 @@
     "React web change is made in the name of speed"
    ],
    "lexical": {
-    "target_score": 7.3089,
+    "target_score": 7.3456,
     "target_rank": 2
    }
   },
@@ -4119,7 +4262,7 @@
    "relied_on": [],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 31
+    "target_rank": 32
    }
   },
   {
@@ -4133,7 +4276,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 36
+    "target_rank": 37
    }
   },
   {
@@ -4144,7 +4287,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 2.7362,
+    "target_score": 2.7546,
     "target_rank": 3
    }
   },
@@ -4158,7 +4301,7 @@
     "full pipeline end-to-end"
    ],
    "lexical": {
-    "target_score": 28.6627,
+    "target_score": 28.7912,
     "target_rank": 1
    }
   },
@@ -4172,7 +4315,7 @@
     "smoke-test the whole brainstorm-to-ship story"
    ],
    "lexical": {
-    "target_score": 24.9086,
+    "target_score": 24.9277,
     "target_rank": 1
    }
   },
@@ -4184,7 +4327,7 @@
    "chosen": "playbook",
    "relied_on": [],
    "lexical": {
-    "target_score": 25.078,
+    "target_score": 25.1881,
     "target_rank": 1
    }
   },
@@ -4199,7 +4342,7 @@
     "smoke-test the whole brainstorm-to-ship story"
    ],
    "lexical": {
-    "target_score": 21.9392,
+    "target_score": 22.031,
     "target_rank": 1
    }
   },
@@ -4214,7 +4357,7 @@
     "smoke-test the whole brainstorm-to-ship story"
    ],
    "lexical": {
-    "target_score": 18.4633,
+    "target_score": 18.555,
     "target_rank": 1
    }
   },
@@ -4228,8 +4371,8 @@
     "write or define the spec"
    ],
    "lexical": {
-    "target_score": -0.9245,
-    "target_rank": 52
+    "target_score": -0.9336,
+    "target_rank": 53
    }
   },
   {
@@ -4242,7 +4385,7 @@
     "chain of skills to run in order"
    ],
    "lexical": {
-    "target_score": 2.7362,
+    "target_score": 2.7546,
     "target_rank": 8
    }
   },
@@ -4257,7 +4400,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 35
+    "target_rank": 36
    }
   },
   {
@@ -4268,7 +4411,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 2.6591,
+    "target_score": 2.6682,
     "target_rank": 2
    }
   },
@@ -4282,8 +4425,8 @@
     "Enter the pipeline at a phase"
    ],
    "lexical": {
-    "target_score": 2.1172,
-    "target_rank": 7
+    "target_score": 2.1355,
+    "target_rank": 6
    }
   },
   {
@@ -4297,7 +4440,7 @@
     "7-phase tracker"
    ],
    "lexical": {
-    "target_score": 7.2722,
+    "target_score": 7.3272,
     "target_rank": 1
    }
   },
@@ -4312,7 +4455,7 @@
     "7-phase tracker"
    ],
    "lexical": {
-    "target_score": 17.95,
+    "target_score": 18.0418,
     "target_rank": 1
    }
   },
@@ -4326,7 +4469,7 @@
     "Show where the run is"
    ],
    "lexical": {
-    "target_score": 13.6568,
+    "target_score": 13.7486,
     "target_rank": 1
    }
   },
@@ -4341,7 +4484,7 @@
     "7-phase tracker"
    ],
    "lexical": {
-    "target_score": 8.2938,
+    "target_score": 8.3489,
     "target_rank": 1
    }
   },
@@ -4355,7 +4498,7 @@
     "Show where the run is"
    ],
    "lexical": {
-    "target_score": 7.8479,
+    "target_score": 7.903,
     "target_rank": 1
    }
   },
@@ -4369,7 +4512,7 @@
     "live, clickable dashboard of the run"
    ],
    "lexical": {
-    "target_score": 1.1268,
+    "target_score": 1.1451,
     "target_rank": 14
    }
   },
@@ -4384,7 +4527,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 33
+    "target_rank": 34
    }
   },
   {
@@ -4397,7 +4540,7 @@
     "see the governed state"
    ],
    "lexical": {
-    "target_score": 1.6376,
+    "target_score": 1.656,
     "target_rank": 12
    }
   },
@@ -4409,7 +4552,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 3.5835,
+    "target_score": 3.6019,
     "target_rank": 1
    }
   },
@@ -4424,7 +4567,7 @@
     "parallel subagents"
    ],
    "lexical": {
-    "target_score": 3.863,
+    "target_score": 3.8997,
     "target_rank": 3
    }
   },
@@ -4438,7 +4581,7 @@
     "add/remove an integration, switch a backend, change profile"
    ],
    "lexical": {
-    "target_score": 5.3569,
+    "target_score": 5.3936,
     "target_rank": 2
    }
   },
@@ -4452,7 +4595,7 @@
     "add/remove an integration, switch a backend, change profile"
    ],
    "lexical": {
-    "target_score": 8.4296,
+    "target_score": 8.4847,
     "target_rank": 1
    }
   },
@@ -4466,7 +4609,7 @@
     "add/remove an integration, switch a backend, change profile"
    ],
    "lexical": {
-    "target_score": 6.1454,
+    "target_score": 6.1821,
     "target_rank": 1
    }
   },
@@ -4480,7 +4623,7 @@
     "add/remove an integration, switch a backend, change profile"
    ],
    "lexical": {
-    "target_score": 7.7779,
+    "target_score": 7.7874,
     "target_rank": 1
    }
   },
@@ -4494,7 +4637,7 @@
     "add/remove an integration, switch a backend, change profile"
    ],
    "lexical": {
-    "target_score": 8.9404,
+    "target_score": 8.9955,
     "target_rank": 1
    }
   },
@@ -4509,7 +4652,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 35
+    "target_rank": 36
    }
   },
   {
@@ -4524,7 +4667,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 33
+    "target_rank": 34
    }
   },
   {
@@ -4535,7 +4678,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 3.5835,
+    "target_score": 3.6019,
     "target_rank": 1
    }
   },
@@ -4551,7 +4694,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 39
+    "target_rank": 40
    }
   },
   {
@@ -4563,7 +4706,7 @@
    "relied_on": [],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 34
+    "target_rank": 35
    }
   },
   {
@@ -4577,7 +4720,7 @@
     "what to refactor, harden, or clean up"
    ],
    "lexical": {
-    "target_score": 14.448,
+    "target_score": 14.3967,
     "target_rank": 1
    }
   },
@@ -4591,7 +4734,7 @@
     "what to refactor, harden, or clean up"
    ],
    "lexical": {
-    "target_score": 13.2397,
+    "target_score": 13.2948,
     "target_rank": 1
    }
   },
@@ -4605,7 +4748,7 @@
     "deep, steerable review of EXISTING code"
    ],
    "lexical": {
-    "target_score": 22.7247,
+    "target_score": 22.6677,
     "target_rank": 1
    }
   },
@@ -4619,7 +4762,7 @@
     "deep, steerable review of EXISTING code"
    ],
    "lexical": {
-    "target_score": 15.4654,
+    "target_score": 15.4324,
     "target_rank": 1
    }
   },
@@ -4634,7 +4777,7 @@
     "what to refactor, harden, or clean up"
    ],
    "lexical": {
-    "target_score": 9.2842,
+    "target_score": 9.1962,
     "target_rank": 1
    }
   },
@@ -4646,7 +4789,7 @@
    "chosen": "develop",
    "relied_on": [],
    "lexical": {
-    "target_score": 1.7918,
+    "target_score": 1.8009,
     "target_rank": 2
    }
   },
@@ -4660,8 +4803,8 @@
     "describing a NEW problem/feature"
    ],
    "lexical": {
-    "target_score": -6.488,
-    "target_rank": 53
+    "target_score": -6.5247,
+    "target_rank": 54
    }
   },
   {
@@ -4674,8 +4817,8 @@
     "check/review a diff or change"
    ],
    "lexical": {
-    "target_score": 2.1172,
-    "target_rank": 7
+    "target_score": 1.9924,
+    "target_rank": 8
    }
   },
   {
@@ -4686,7 +4829,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 3.5835,
+    "target_score": 3.6019,
     "target_rank": 1
    }
   },
@@ -4701,7 +4844,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 34
+    "target_rank": 35
    }
   },
   {
@@ -4714,7 +4857,7 @@
     "Pick up where you left off"
    ],
    "lexical": {
-    "target_score": 9.283,
+    "target_score": 9.338,
     "target_rank": 1
    }
   },
@@ -4726,7 +4869,7 @@
    "chosen": "resume",
    "relied_on": [],
    "lexical": {
-    "target_score": 4.1995,
+    "target_score": 4.2362,
     "target_rank": 1
    }
   },
@@ -4738,7 +4881,7 @@
    "chosen": "resume",
    "relied_on": [],
    "lexical": {
-    "target_score": 5.6995,
+    "target_score": 5.7362,
     "target_rank": 2
    }
   },
@@ -4750,7 +4893,7 @@
    "chosen": "resume",
    "relied_on": [],
    "lexical": {
-    "target_score": 8.7722,
+    "target_score": 8.8272,
     "target_rank": 1
    }
   },
@@ -4764,7 +4907,7 @@
     "Pick up where you left off"
    ],
    "lexical": {
-    "target_score": 4.1995,
+    "target_score": 4.2362,
     "target_rank": 1
    }
   },
@@ -4780,7 +4923,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 39
+    "target_rank": 40
    }
   },
   {
@@ -4795,7 +4938,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 36
+    "target_rank": 37
    }
   },
   {
@@ -4806,7 +4949,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 3.0727,
+    "target_score": 3.091,
     "target_rank": 3
    }
   },
@@ -4821,7 +4964,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 38
+    "target_rank": 39
    }
   },
   {
@@ -4835,7 +4978,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 37
+    "target_rank": 38
    }
   },
   {
@@ -4849,7 +4992,7 @@
     "tests are GREEN"
    ],
    "lexical": {
-    "target_score": 14.1088,
+    "target_score": 13.9394,
     "target_rank": 1
    }
   },
@@ -4863,7 +5006,7 @@
     "check/review a diff or change"
    ],
    "lexical": {
-    "target_score": 9.4261,
+    "target_score": 9.338,
     "target_rank": 1
    }
   },
@@ -4877,7 +5020,7 @@
     "check/review a diff or change"
    ],
    "lexical": {
-    "target_score": 3.9136,
+    "target_score": 3.9232,
     "target_rank": 2
    }
   },
@@ -4891,7 +5034,7 @@
     "check/review a diff or change"
    ],
    "lexical": {
-    "target_score": 12.0468,
+    "target_score": 11.9771,
     "target_rank": 1
    }
   },
@@ -4905,7 +5048,7 @@
     "check/review a diff or change"
    ],
    "lexical": {
-    "target_score": 12.2842,
+    "target_score": 12.1962,
     "target_rank": 1
    }
   },
@@ -4920,8 +5063,8 @@
     "what to refactor, harden, or clean up"
    ],
    "lexical": {
-    "target_score": 1.3439,
-    "target_rank": 16
+    "target_score": 1.2099,
+    "target_rank": 19
    }
   },
   {
@@ -4935,7 +5078,7 @@
     "live diff"
    ],
    "lexical": {
-    "target_score": 5.1899,
+    "target_score": 5.0835,
     "target_rank": 3
    }
   },
@@ -4947,8 +5090,8 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 0.8747,
-    "target_rank": 15
+    "target_score": 0.7408,
+    "target_rank": 16
    }
   },
   {
@@ -4962,8 +5105,8 @@
     "describing a NEW problem/feature"
    ],
    "lexical": {
-    "target_score": -1.2425,
-    "target_rank": 50
+    "target_score": -1.2516,
+    "target_rank": 51
    }
   },
   {
@@ -4977,7 +5120,7 @@
     "approved, spec-backed change"
    ],
    "lexical": {
-    "target_score": 1.5109,
+    "target_score": 1.5201,
     "target_rank": 18
    }
   },
@@ -4991,7 +5134,7 @@
     "Open the review window"
    ],
    "lexical": {
-    "target_score": 16.3461,
+    "target_score": 16.2764,
     "target_rank": 1
    }
   },
@@ -5006,7 +5149,7 @@
     "live diff"
    ],
    "lexical": {
-    "target_score": 17.5823,
+    "target_score": 17.531,
     "target_rank": 1
    }
   },
@@ -5020,7 +5163,7 @@
     "Open the review window"
    ],
    "lexical": {
-    "target_score": 18.831,
+    "target_score": 18.7796,
     "target_rank": 1
    }
   },
@@ -5034,7 +5177,7 @@
     "live diff"
    ],
    "lexical": {
-    "target_score": 13.9651,
+    "target_score": 14.0385,
     "target_rank": 1
    }
   },
@@ -5048,7 +5191,7 @@
     "Open the review window"
    ],
    "lexical": {
-    "target_score": 11.7734,
+    "target_score": 11.6853,
     "target_rank": 1
    }
   },
@@ -5062,7 +5205,7 @@
     "check/review a diff or change"
    ],
    "lexical": {
-    "target_score": 5.1899,
+    "target_score": 5.0835,
     "target_rank": 2
    }
   },
@@ -5076,7 +5219,7 @@
     "live, clickable dashboard of the run"
    ],
    "lexical": {
-    "target_score": 5.8089,
+    "target_score": 5.8456,
     "target_rank": 2
    }
   },
@@ -5088,7 +5231,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 6.6562,
+    "target_score": 6.6929,
     "target_rank": 1
    }
   },
@@ -5104,7 +5247,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 40
+    "target_rank": 41
    }
   },
   {
@@ -5118,7 +5261,7 @@
     "hand off their session state to a teammate"
    ],
    "lexical": {
-    "target_score": 3.0727,
+    "target_score": 3.091,
     "target_rank": 2
    }
   },
@@ -5132,7 +5275,7 @@
     "authentication, authorization, input handling, secrets, cryptography"
    ],
    "lexical": {
-    "target_score": 3.5835,
+    "target_score": 3.6019,
     "target_rank": 1
    }
   },
@@ -5147,7 +5290,7 @@
     "untrusted input"
    ],
    "lexical": {
-    "target_score": 12.1287,
+    "target_score": 12.2021,
     "target_rank": 1
    }
   },
@@ -5161,7 +5304,7 @@
     "authentication, authorization, input handling, secrets, cryptography"
    ],
    "lexical": {
-    "target_score": 9.6519,
+    "target_score": 9.707,
     "target_rank": 1
    }
   },
@@ -5175,7 +5318,7 @@
     "authentication, authorization, input handling, secrets, cryptography"
    ],
    "lexical": {
-    "target_score": 3.0727,
+    "target_score": 3.091,
     "target_rank": 2
    }
   },
@@ -5189,7 +5332,7 @@
     "untrusted input"
    ],
    "lexical": {
-    "target_score": 8.667,
+    "target_score": 8.7037,
     "target_rank": 1
    }
   },
@@ -5203,8 +5346,8 @@
     "Server Function, a route handler, a page that reads protected data"
    ],
    "lexical": {
-    "target_score": -1.5363,
-    "target_rank": 52
+    "target_score": -1.5455,
+    "target_rank": 53
    }
   },
   {
@@ -5215,8 +5358,8 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": -2.3411,
-    "target_rank": 53
+    "target_score": -2.3502,
+    "target_rank": 54
    }
   },
   {
@@ -5229,8 +5372,8 @@
     "colour/contrast choice"
    ],
    "lexical": {
-    "target_score": 0.9209,
-    "target_rank": 18
+    "target_score": 0.8938,
+    "target_rank": 19
    }
   },
   {
@@ -5241,7 +5384,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 3.0727,
+    "target_score": 3.091,
     "target_rank": 2
    }
   },
@@ -5256,7 +5399,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 38
+    "target_rank": 39
    }
   },
   {
@@ -5270,7 +5413,7 @@
     "hand off their session state to a teammate"
    ],
    "lexical": {
-    "target_score": 11.6303,
+    "target_score": 11.6853,
     "target_rank": 1
    }
   },
@@ -5285,7 +5428,7 @@
     "hand off their session state to a teammate"
    ],
    "lexical": {
-    "target_score": 15.6658,
+    "target_score": 15.7392,
     "target_rank": 1
    }
   },
@@ -5300,7 +5443,7 @@
     "hand off their session state to a teammate"
    ],
    "lexical": {
-    "target_score": 11.9221,
+    "target_score": 11.9863,
     "target_rank": 1
    }
   },
@@ -5315,7 +5458,7 @@
     "hand off their session state to a teammate"
    ],
    "lexical": {
-    "target_score": 6.6379,
+    "target_score": 6.6837,
     "target_rank": 1
    }
   },
@@ -5330,7 +5473,7 @@
     "hand off their session state to a teammate"
    ],
    "lexical": {
-    "target_score": 8.6303,
+    "target_score": 8.6853,
     "target_rank": 1
    }
   },
@@ -5344,7 +5487,7 @@
     "Pick up where you left off"
    ],
    "lexical": {
-    "target_score": 3.5835,
+    "target_score": 3.6019,
     "target_rank": 2
    }
   },
@@ -5356,8 +5499,8 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": -1.7918,
-    "target_rank": 53
+    "target_score": -1.8009,
+    "target_rank": 54
    }
   },
   {
@@ -5370,7 +5513,7 @@
     "Share design artifacts (brainstorm/spec) with the team"
    ],
    "lexical": {
-    "target_score": 2.4849,
+    "target_score": 2.5033,
     "target_rank": 7
    }
   },
@@ -5385,7 +5528,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 45
+    "target_rank": 46
    }
   },
   {
@@ -5396,7 +5539,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 3.0727,
+    "target_score": 3.091,
     "target_rank": 2
    }
   },
@@ -5410,7 +5553,7 @@
     "Guided first-run setup"
    ],
    "lexical": {
-    "target_score": 12.7368,
+    "target_score": 12.8102,
     "target_rank": 1
    }
   },
@@ -5422,7 +5565,7 @@
    "chosen": "setup",
    "relied_on": [],
    "lexical": {
-    "target_score": 11.4296,
+    "target_score": 11.4847,
     "target_rank": 1
    }
   },
@@ -5436,7 +5579,7 @@
     "Guided first-run setup"
    ],
    "lexical": {
-    "target_score": 13.5211,
+    "target_score": 13.6128,
     "target_rank": 1
    }
   },
@@ -5450,7 +5593,7 @@
     "Guided first-run setup"
    ],
    "lexical": {
-    "target_score": 6.5486,
+    "target_score": 6.6037,
     "target_rank": 2
    }
   },
@@ -5464,7 +5607,7 @@
     "Guided first-run setup"
    ],
    "lexical": {
-    "target_score": 6.5992,
+    "target_score": 6.6543,
     "target_rank": 1
    }
   },
@@ -5480,7 +5623,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 39
+    "target_rank": 40
    }
   },
   {
@@ -5493,7 +5636,7 @@
     "add/remove an integration, switch a backend, change profile"
    ],
    "lexical": {
-    "target_score": 2.2842,
+    "target_score": 2.3026,
     "target_rank": 9
    }
   },
@@ -5506,7 +5649,7 @@
    "relied_on": [],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 42
+    "target_rank": 43
    }
   },
   {
@@ -5518,7 +5661,7 @@
    "relied_on": [],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 41
+    "target_rank": 42
    }
   },
   {
@@ -5533,7 +5676,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 39
+    "target_rank": 40
    }
   },
   {
@@ -5546,7 +5689,7 @@
     "needs verifying and landing"
    ],
    "lexical": {
-    "target_score": 19.4188,
+    "target_score": 19.3674,
     "target_rank": 1
    }
   },
@@ -5560,7 +5703,7 @@
     "finish, merge, release, or wrap up a change"
    ],
    "lexical": {
-    "target_score": 8.7407,
+    "target_score": 8.7503,
     "target_rank": 1
    }
   },
@@ -5575,7 +5718,7 @@
     "finish, merge, release, or wrap up a change"
    ],
    "lexical": {
-    "target_score": 10.3449,
+    "target_score": 10.4183,
     "target_rank": 1
    }
   },
@@ -5589,7 +5732,7 @@
     "needs verifying and landing"
    ],
    "lexical": {
-    "target_score": 13.3461,
+    "target_score": 13.2764,
     "target_rank": 1
    }
   },
@@ -5604,7 +5747,7 @@
     "finish, merge, release, or wrap up a change"
    ],
    "lexical": {
-    "target_score": 14.0388,
+    "target_score": 14.085,
     "target_rank": 1
    }
   },
@@ -5620,7 +5763,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 44
+    "target_rank": 45
    }
   },
   {
@@ -5633,8 +5776,8 @@
     "failing test is on record"
    ],
    "lexical": {
-    "target_score": -2.3552,
-    "target_rank": 53
+    "target_score": -2.328,
+    "target_rank": 54
    }
   },
   {
@@ -5647,8 +5790,8 @@
     "check/review a diff or change"
    ],
    "lexical": {
-    "target_score": 2.1172,
-    "target_rank": 6
+    "target_score": 1.9924,
+    "target_rank": 7
    }
   },
   {
@@ -5659,7 +5802,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 2.2842,
+    "target_score": 2.3026,
     "target_rank": 4
    }
   },
@@ -5675,7 +5818,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 40
+    "target_rank": 41
    }
   },
   {
@@ -5688,7 +5831,7 @@
     "rollout strategy (staged, canary, blue-green, feature-flagged)"
    ],
    "lexical": {
-    "target_score": 11.7397,
+    "target_score": 11.7948,
     "target_rank": 1
    }
   },
@@ -5702,7 +5845,7 @@
     "rollback or abort thresholds"
    ],
    "lexical": {
-    "target_score": 17.4404,
+    "target_score": 17.5322,
     "target_rank": 1
    }
   },
@@ -5714,7 +5857,7 @@
    "chosen": "shipping",
    "relied_on": [],
    "lexical": {
-    "target_score": 17.024,
+    "target_score": 17.0974,
     "target_rank": 1
    }
   },
@@ -5728,7 +5871,7 @@
     "rollout strategy (staged, canary, blue-green, feature-flagged)"
    ],
    "lexical": {
-    "target_score": 23.8809,
+    "target_score": 23.9909,
     "target_rank": 1
    }
   },
@@ -5740,7 +5883,7 @@
    "chosen": "shipping",
    "relied_on": [],
    "lexical": {
-    "target_score": 17.8124,
+    "target_score": 17.8858,
     "target_rank": 1
    }
   },
@@ -5755,8 +5898,8 @@
     "finish, merge, release, or wrap up a change"
    ],
    "lexical": {
-    "target_score": 0.9209,
-    "target_rank": 19
+    "target_score": 0.8938,
+    "target_rank": 20
    }
   },
   {
@@ -5772,7 +5915,7 @@
    ],
    "lexical": {
     "target_score": -0.5661,
-    "target_rank": 48
+    "target_rank": 49
    }
   },
   {
@@ -5786,7 +5929,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 43
+    "target_rank": 44
    }
   },
   {
@@ -5797,7 +5940,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 2.2842,
+    "target_score": 2.3026,
     "target_rank": 6
    }
   },
@@ -5809,7 +5952,7 @@
    "chosen": "git",
    "relied_on": [],
    "lexical": {
-    "target_score": 2.1172,
+    "target_score": 2.1355,
     "target_rank": 7
    }
   },
@@ -5823,7 +5966,7 @@
     "Author a new mokata skill test-first"
    ],
    "lexical": {
-    "target_score": 17.6279,
+    "target_score": 17.6287,
     "target_rank": 1
    }
   },
@@ -5837,7 +5980,7 @@
     "Author a new mokata skill test-first"
    ],
    "lexical": {
-    "target_score": 18.9599,
+    "target_score": 19.07,
     "target_rank": 1
    }
   },
@@ -5851,7 +5994,7 @@
     "Author a new mokata skill test-first"
    ],
    "lexical": {
-    "target_score": 4.5685,
+    "target_score": 4.6052,
     "target_rank": 2
    }
   },
@@ -5865,7 +6008,7 @@
     "Author a new mokata skill test-first"
    ],
    "lexical": {
-    "target_score": 5.8678,
+    "target_score": 5.9045,
     "target_rank": 1
    }
   },
@@ -5879,7 +6022,7 @@
     "Author a new mokata skill test-first"
    ],
    "lexical": {
-    "target_score": 12.5444,
+    "target_score": 12.5268,
     "target_rank": 1
    }
   },
@@ -5894,7 +6037,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 46
+    "target_rank": 47
    }
   },
   {
@@ -5907,7 +6050,7 @@
     "every /mokata command and bundled skill on one screen"
    ],
    "lexical": {
-    "target_score": 2.2842,
+    "target_score": 2.3026,
     "target_rank": 7
    }
   },
@@ -5919,7 +6062,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 2.2842,
+    "target_score": 2.3026,
     "target_rank": 5
    }
   },
@@ -5935,7 +6078,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 46
+    "target_rank": 47
    }
   },
   {
@@ -5948,7 +6091,7 @@
     "failing tests written"
    ],
    "lexical": {
-    "target_score": 3.4865,
+    "target_score": 3.4323,
     "target_rank": 8
    }
   },
@@ -5962,7 +6105,7 @@
     "acceptance criteria"
    ],
    "lexical": {
-    "target_score": 17.9149,
+    "target_score": 18.025,
     "target_rank": 1
    }
   },
@@ -5976,7 +6119,7 @@
     "write or define the spec"
    ],
    "lexical": {
-    "target_score": 3.6453,
+    "target_score": 3.6549,
     "target_rank": 1
    }
   },
@@ -5991,7 +6134,7 @@
     "write or define the spec"
    ],
    "lexical": {
-    "target_score": 13.203,
+    "target_score": 13.2764,
     "target_rank": 1
    }
   },
@@ -6005,7 +6148,7 @@
     "write or define the spec"
    ],
    "lexical": {
-    "target_score": 14.8361,
+    "target_score": 14.8552,
     "target_rank": 1
    }
   },
@@ -6019,7 +6162,7 @@
     "acceptance criteria"
    ],
    "lexical": {
-    "target_score": 8.627,
+    "target_score": 8.5639,
     "target_rank": 1
    }
   },
@@ -6032,7 +6175,7 @@
    "relied_on": [],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 44
+    "target_rank": 45
    }
   },
   {
@@ -6046,7 +6189,7 @@
     "weighing options or trade-offs"
    ],
    "lexical": {
-    "target_score": 1.3148,
+    "target_score": 1.3332,
     "target_rank": 15
    }
   },
@@ -6060,7 +6203,7 @@
     "failing tests written"
    ],
    "lexical": {
-    "target_score": 2.5702,
+    "target_score": 2.5251,
     "target_rank": 8
    }
   },
@@ -6074,7 +6217,7 @@
     "independent subtasks + a dependency plan"
    ],
    "lexical": {
-    "target_score": 3.3604,
+    "target_score": 3.3971,
     "target_rank": 3
    }
   },
@@ -6088,8 +6231,8 @@
     "check/review a diff or change"
    ],
    "lexical": {
-    "target_score": 0.8755,
-    "target_rank": 23
+    "target_score": 0.8938,
+    "target_rank": 24
    }
   },
   {
@@ -6103,7 +6246,7 @@
     "per-framework stacks"
    ],
    "lexical": {
-    "target_score": 8.1562,
+    "target_score": 8.1929,
     "target_rank": 1
    }
   },
@@ -6118,7 +6261,7 @@
     "per-framework stacks"
    ],
    "lexical": {
-    "target_score": 10.2734,
+    "target_score": 10.3284,
     "target_rank": 1
    }
   },
@@ -6133,7 +6276,7 @@
     "per-framework stacks"
    ],
    "lexical": {
-    "target_score": 16.8233,
+    "target_score": 16.8966,
     "target_rank": 1
    }
   },
@@ -6148,7 +6291,7 @@
     "per-framework stacks"
    ],
    "lexical": {
-    "target_score": 3.0727,
+    "target_score": 3.091,
     "target_rank": 2
    }
   },
@@ -6163,7 +6306,7 @@
     "per-framework stacks"
    ],
    "lexical": {
-    "target_score": 6.6899,
+    "target_score": 6.7266,
     "target_rank": 1
    }
   },
@@ -6177,7 +6320,7 @@
     "team join"
    ],
    "lexical": {
-    "target_score": 4.9216,
+    "target_score": 4.9583,
     "target_rank": 4
    }
   },
@@ -6189,8 +6332,8 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 3.0727,
-    "target_rank": 1
+    "target_score": 3.091,
+    "target_rank": 2
    }
   },
   {
@@ -6204,7 +6347,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 44
+    "target_rank": 45
    }
   },
   {
@@ -6217,7 +6360,7 @@
     "Share design artifacts (brainstorm/spec) with the team"
    ],
    "lexical": {
-    "target_score": 2.7362,
+    "target_score": 2.7546,
     "target_rank": 4
    }
   },
@@ -6232,7 +6375,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 40
+    "target_rank": 41
    }
   },
   {
@@ -6245,7 +6388,7 @@
     "team write journal"
    ],
    "lexical": {
-    "target_score": 23.5693,
+    "target_score": 23.6794,
     "target_rank": 1
    }
   },
@@ -6259,7 +6402,7 @@
     "compare-and-set conflicts"
    ],
    "lexical": {
-    "target_score": 20.0967,
+    "target_score": 20.0214,
     "target_rank": 1
    }
   },
@@ -6273,7 +6416,7 @@
     "team write journal"
    ],
    "lexical": {
-    "target_score": 11.3914,
+    "target_score": 11.4648,
     "target_rank": 1
    }
   },
@@ -6287,7 +6430,7 @@
     "team write journal"
    ],
    "lexical": {
-    "target_score": 13.0009,
+    "target_score": 13.0743,
     "target_rank": 1
    }
   },
@@ -6301,7 +6444,7 @@
     "compare-and-set conflicts"
    ],
    "lexical": {
-    "target_score": 4.3738,
+    "target_score": 4.4105,
     "target_rank": 1
    }
   },
@@ -6316,7 +6459,7 @@
     "docs may have gone stale"
    ],
    "lexical": {
-    "target_score": 3.0727,
+    "target_score": 3.091,
     "target_rank": 4
    }
   },
@@ -6329,7 +6472,7 @@
    "relied_on": [],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 47
+    "target_rank": 48
    }
   },
   {
@@ -6342,7 +6485,7 @@
     "team join"
    ],
    "lexical": {
-    "target_score": 2.4849,
+    "target_score": 2.5033,
     "target_rank": 4
    }
   },
@@ -6358,7 +6501,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 48
+    "target_rank": 49
    }
   },
   {
@@ -6372,7 +6515,7 @@
     "team-readiness preflight"
    ],
    "lexical": {
-    "target_score": 5.2211,
+    "target_score": 5.2578,
     "target_rank": 2
    }
   },
@@ -6387,7 +6530,7 @@
     "wires a new teammate"
    ],
    "lexical": {
-    "target_score": 21.6836,
+    "target_score": 21.7937,
     "target_rank": 1
    }
   },
@@ -6402,7 +6545,7 @@
     "wires a new teammate"
    ],
    "lexical": {
-    "target_score": 20.0291,
+    "target_score": 20.1575,
     "target_rank": 1
    }
   },
@@ -6416,7 +6559,7 @@
     "team join"
    ],
    "lexical": {
-    "target_score": 11.6597,
+    "target_score": 11.7331,
     "target_rank": 1
    }
   },
@@ -6431,7 +6574,7 @@
     "wires a new teammate"
    ],
    "lexical": {
-    "target_score": 20.6651,
+    "target_score": 20.7935,
     "target_rank": 1
    }
   },
@@ -6445,7 +6588,7 @@
     "team join"
    ],
    "lexical": {
-    "target_score": 11.703,
+    "target_score": 11.7764,
     "target_rank": 1
    }
   },
@@ -6459,7 +6602,7 @@
     "team write journal"
    ],
    "lexical": {
-    "target_score": 2.4849,
+    "target_score": 2.5033,
     "target_rank": 4
    }
   },
@@ -6474,7 +6617,7 @@
     "team-readiness preflight"
    ],
    "lexical": {
-    "target_score": 2.4849,
+    "target_score": 2.5033,
     "target_rank": 6
    }
   },
@@ -6486,7 +6629,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 2.4849,
+    "target_score": 2.5033,
     "target_rank": 3
    }
   },
@@ -6500,7 +6643,7 @@
     "Share design artifacts (brainstorm/spec) with the team"
    ],
    "lexical": {
-    "target_score": 7.706,
+    "target_score": 7.7611,
     "target_rank": 2
    }
   },
@@ -6515,7 +6658,7 @@
     "per-framework stacks"
    ],
    "lexical": {
-    "target_score": 3.0727,
+    "target_score": 3.091,
     "target_rank": 2
    }
   },
@@ -6529,7 +6672,7 @@
     "failing tests written"
    ],
    "lexical": {
-    "target_score": 21.4772,
+    "target_score": 21.5147,
     "target_rank": 1
    }
   },
@@ -6543,7 +6686,7 @@
     "failing tests written"
    ],
    "lexical": {
-    "target_score": 16.6126,
+    "target_score": 16.6317,
     "target_rank": 1
    }
   },
@@ -6558,7 +6701,7 @@
     "starting TDD"
    ],
    "lexical": {
-    "target_score": 13.5159,
+    "target_score": 13.4712,
     "target_rank": 1
    }
   },
@@ -6572,7 +6715,7 @@
     "failing tests written"
    ],
    "lexical": {
-    "target_score": 8.4606,
+    "target_score": 8.4247,
     "target_rank": 1
    }
   },
@@ -6586,7 +6729,7 @@
     "failing tests written"
    ],
    "lexical": {
-    "target_score": 12.7557,
+    "target_score": 12.7381,
     "target_rank": 1
    }
   },
@@ -6600,7 +6743,7 @@
     "failing test is on record"
    ],
    "lexical": {
-    "target_score": 3.937,
+    "target_score": 3.8735,
     "target_rank": 4
    }
   },
@@ -6615,7 +6758,7 @@
     "write or define the spec"
    ],
    "lexical": {
-    "target_score": 7.9331,
+    "target_score": 7.9881,
     "target_rank": 2
    }
   },
@@ -6627,7 +6770,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 3.7548,
+    "target_score": 3.7005,
     "target_rank": 4
    }
   },
@@ -6642,7 +6785,7 @@
     "running browser"
    ],
    "lexical": {
-    "target_score": 3.4865,
+    "target_score": 3.4323,
     "target_rank": 5
    }
   },
@@ -6654,8 +6797,8 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 1.6376,
-    "target_rank": 13
+    "target_score": 1.565,
+    "target_rank": 14
    }
   },
   {
@@ -6668,7 +6811,7 @@
     "60-second read-only demo"
    ],
    "lexical": {
-    "target_score": 17.0995,
+    "target_score": 17.1729,
     "target_rank": 1
    }
   },
@@ -6680,7 +6823,7 @@
    "chosen": "tour",
    "relied_on": [],
    "lexical": {
-    "target_score": 3.5835,
+    "target_score": 3.6019,
     "target_rank": 1
    }
   },
@@ -6694,7 +6837,7 @@
     "60-second read-only demo"
    ],
    "lexical": {
-    "target_score": 28.9778,
+    "target_score": 29.1062,
     "target_rank": 1
    }
   },
@@ -6706,7 +6849,7 @@
    "chosen": "tour",
    "relied_on": [],
    "lexical": {
-    "target_score": 3.5835,
+    "target_score": 3.6019,
     "target_rank": 2
    }
   },
@@ -6720,7 +6863,7 @@
     "60-second read-only demo"
    ],
    "lexical": {
-    "target_score": 6.9324,
+    "target_score": 6.9691,
     "target_rank": 1
    }
   },
@@ -6735,7 +6878,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 48
+    "target_rank": 49
    }
   },
   {
@@ -6749,7 +6892,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 49
+    "target_rank": 50
    }
   },
   {
@@ -6760,7 +6903,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 3.5835,
+    "target_score": 3.6019,
     "target_rank": 1
    }
   },
@@ -6775,7 +6918,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 48
+    "target_rank": 49
    }
   },
   {
@@ -6789,7 +6932,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 50
+    "target_rank": 51
    }
   },
   {
@@ -6802,7 +6945,7 @@
     "Update mokata"
    ],
    "lexical": {
-    "target_score": 10.2734,
+    "target_score": 10.3284,
     "target_rank": 1
    }
   },
@@ -6814,7 +6957,7 @@
    "chosen": "update",
    "relied_on": [],
    "lexical": {
-    "target_score": 3.5835,
+    "target_score": 3.6019,
     "target_rank": 1
    }
   },
@@ -6828,7 +6971,7 @@
     "Update mokata"
    ],
    "lexical": {
-    "target_score": 3.0727,
+    "target_score": 3.091,
     "target_rank": 2
    }
   },
@@ -6840,7 +6983,7 @@
    "chosen": "update",
    "relied_on": [],
    "lexical": {
-    "target_score": 3.5835,
+    "target_score": 3.6019,
     "target_rank": 1
    }
   },
@@ -6852,7 +6995,7 @@
    "chosen": "update",
    "relied_on": [],
    "lexical": {
-    "target_score": 4.7103,
+    "target_score": 4.747,
     "target_rank": 1
    }
   },
@@ -6867,7 +7010,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 51
+    "target_rank": 52
    }
   },
   {
@@ -6878,7 +7021,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 3.5835,
+    "target_score": 3.6019,
     "target_rank": 1
    }
   },
@@ -6895,7 +7038,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 49
+    "target_rank": 50
    }
   },
   {
@@ -6909,7 +7052,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 50
+    "target_rank": 51
    }
   },
   {
@@ -6923,7 +7066,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 44
+    "target_rank": 45
    }
   },
   {
@@ -6936,7 +7079,7 @@
     "Share design artifacts (brainstorm/spec) with the team"
    ],
    "lexical": {
-    "target_score": 11.5409,
+    "target_score": 11.6143,
     "target_rank": 1
    }
   },
@@ -6950,7 +7093,7 @@
     "Share design artifacts (brainstorm/spec) with the team"
    ],
    "lexical": {
-    "target_score": 7.1952,
+    "target_score": 7.2503,
     "target_rank": 1
    }
   },
@@ -6964,7 +7107,7 @@
     "Share design artifacts (brainstorm/spec) with the team"
    ],
    "lexical": {
-    "target_score": 6.6844,
+    "target_score": 6.7394,
     "target_rank": 1
    }
   },
@@ -6978,7 +7121,7 @@
     "Share design artifacts (brainstorm/spec) with the team"
    ],
    "lexical": {
-    "target_score": 10.0815,
+    "target_score": 10.1549,
     "target_rank": 1
    }
   },
@@ -6992,7 +7135,7 @@
     "Share design artifacts (brainstorm/spec) with the team"
    ],
    "lexical": {
-    "target_score": 13.2922,
+    "target_score": 13.3656,
     "target_rank": 1
    }
   },
@@ -7008,7 +7151,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 51
+    "target_rank": 52
    }
   },
   {
@@ -7019,7 +7162,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 2.7362,
+    "target_score": 2.7546,
     "target_rank": 4
    }
   },
@@ -7033,7 +7176,7 @@
     "team join"
    ],
    "lexical": {
-    "target_score": 4.9698,
+    "target_score": 5.0065,
     "target_rank": 3
    }
   },
@@ -7047,8 +7190,8 @@
     "write or define the spec"
    ],
    "lexical": {
-    "target_score": 0.8755,
-    "target_rank": 29
+    "target_score": 0.8938,
+    "target_rank": 30
    }
   },
   {
@@ -7061,7 +7204,7 @@
     "team write journal"
    ],
    "lexical": {
-    "target_score": 2.4849,
+    "target_score": 2.5033,
     "target_rank": 4
    }
   },
@@ -7075,7 +7218,7 @@
     "installed version"
    ],
    "lexical": {
-    "target_score": 4.8534,
+    "target_score": 4.8901,
     "target_rank": 2
    }
   },
@@ -7089,7 +7232,7 @@
     "installed version"
    ],
    "lexical": {
-    "target_score": 9.491,
+    "target_score": 9.5461,
     "target_rank": 1
    }
   },
@@ -7103,7 +7246,7 @@
     "installed version"
    ],
    "lexical": {
-    "target_score": 2.7362,
+    "target_score": 2.7546,
     "target_rank": 3
    }
   },
@@ -7117,7 +7260,7 @@
     "installed version"
    ],
    "lexical": {
-    "target_score": 2.7362,
+    "target_score": 2.7546,
     "target_rank": 3
    }
   },
@@ -7131,7 +7274,7 @@
     "installed version"
    ],
    "lexical": {
-    "target_score": 14.0637,
+    "target_score": 14.1371,
     "target_rank": 1
    }
   },
@@ -7144,7 +7287,7 @@
    "relied_on": [],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 52
+    "target_rank": 53
    }
   },
   {
@@ -7155,7 +7298,7 @@
    "chosen": "git",
    "relied_on": [],
    "lexical": {
-    "target_score": 2.7362,
+    "target_score": 2.7546,
     "target_rank": 5
    }
   },
@@ -7167,7 +7310,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 2.7362,
+    "target_score": 2.7546,
     "target_rank": 4
    }
   },
@@ -7181,7 +7324,7 @@
     "see the governed state"
    ],
    "lexical": {
-    "target_score": 1.6376,
+    "target_score": 1.656,
     "target_rank": 14
    }
   },
@@ -7195,7 +7338,7 @@
     "every /mokata command and bundled skill on one screen"
    ],
    "lexical": {
-    "target_score": 1.6376,
+    "target_score": 1.656,
     "target_rank": 14
    }
   },
@@ -7209,7 +7352,7 @@
     "live, clickable dashboard of the run"
    ],
    "lexical": {
-    "target_score": 20.1027,
+    "target_score": 20.1945,
     "target_rank": 1
    }
   },
@@ -7223,7 +7366,7 @@
     "live, clickable dashboard of the run"
    ],
    "lexical": {
-    "target_score": 14.7554,
+    "target_score": 14.8472,
     "target_rank": 1
    }
   },
@@ -7237,7 +7380,7 @@
     "live, clickable dashboard of the run"
    ],
    "lexical": {
-    "target_score": 11.6827,
+    "target_score": 11.7561,
     "target_rank": 1
    }
   },
@@ -7251,7 +7394,7 @@
     "live, clickable dashboard of the run"
    ],
    "lexical": {
-    "target_score": 7.783,
+    "target_score": 7.838,
     "target_rank": 1
    }
   },
@@ -7265,7 +7408,7 @@
     "live, clickable dashboard of the run"
    ],
    "lexical": {
-    "target_score": 8.4369,
+    "target_score": 8.492,
     "target_rank": 1
    }
   },
@@ -7281,7 +7424,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 52
+    "target_rank": 53
    }
   },
   {
@@ -7295,7 +7438,7 @@
     "live diff"
    ],
    "lexical": {
-    "target_score": 5.8089,
+    "target_score": 5.8456,
     "target_rank": 2
    }
   },
@@ -7307,7 +7450,7 @@
    "chosen": null,
    "relied_on": [],
    "lexical": {
-    "target_score": 3.5835,
+    "target_score": 3.6019,
     "target_rank": 1
    }
   },
@@ -7319,7 +7462,7 @@
    "chosen": "resume",
    "relied_on": [],
    "lexical": {
-    "target_score": 1.1268,
+    "target_score": 1.1451,
     "target_rank": 18
    }
   },
@@ -7334,7 +7477,7 @@
    ],
    "lexical": {
     "target_score": 0.0,
-    "target_rank": 53
+    "target_rank": 54
    }
   }
  ]

@@ -98,7 +98,9 @@ def _emit(store, gate):
 
 
 def commit_spec_via(store, spec, gate):
-    return commit_spec(store, with_tasks(spec), gate=gate, human_approved=True)
+    from mokata.engine.emit import _repo_root
+    return commit_spec(store, with_tasks(spec), gate=gate, human_approved=True,
+                       tree=_repo_root(store))
 
 
 if __name__ == "__main__":

@@ -67,7 +67,7 @@ def _actor() -> str:
     bug), and the fallback is now `"unknown"`: that is `actor()`'s OWN unknown-sentinel, and two
     different words for the same unknown actor in the SAME shared audit log is a reader's bug."""
     try:
-        from ..team_audit import actor
+        from ..session import actor
         return actor()
     except ImportError:
         return "unknown"

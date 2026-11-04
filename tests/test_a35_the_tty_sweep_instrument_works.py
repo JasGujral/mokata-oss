@@ -97,16 +97,47 @@ def _prompt_reaching_modules():
     return found
 
 
-#: The sweep's bound. ⚠ MEASURED PER PLATFORM (0.0.21 cut, mirror run 37438013172): ~48 s on
-#: Linux, but the windows-latest py3.10 leg — whose WHOLE suite ran 3162 s against Linux's ~670 s —
-#: crossed 150 s with the sweep still printing output, i.e. slow, not hung. A bound sized for one
-#: box read as a HANG on a box ~4.7x slower. Windows gets the same ratio of headroom, not a
-#: different meaning: a genuine recursion (see `_SELF`) still dies with a name on both.
-SWEEP_TIMEOUT_S = 600 if os.name == "nt" else 150
+#: A36-CEILING -- THE SWEEP IS BOUNDED BY LACK OF PROGRESS, NOT BY A WALL-CLOCK TOTAL.
+#: The old guard was a flat 150 s `subprocess.run` timeout sized from ~48 s on Linux. On a Mac the
+#: same subset takes 115 s alone and >150 s under load, so a BUSY box read as a HANG -- a false red
+#: from a guard about hangs. A total is the wrong quantity: it grows with corpus size and load,
+#: while a hang is "nothing moves".
+#:
+#: The instrument journals a heartbeat at every test boundary (`TTYSWEEP_PROGRESS`). The sweep is
+#: HUNG when no boundary has been seen for `max(STALL_FLOOR_S, STALL_FACTOR x the slowest gap seen
+#: so far)`. The floor covers import time before the first beat; the factor makes the limit scale
+#: with the box (a loaded Mac stretches every gap, so the limit stretches with it) and with the
+#: corpus. A real hang -- an `input()` that swallowed its prompt, a recursion into `_SELF` -- stops
+#: the beats and dies with the NAME of the test it stopped in.
+STALL_FLOOR_S = 600 if os.name == "nt" else 120
+STALL_FACTOR = 10
 
 
-def run_sweep(modules, extra_tree=None):
+def stall_limit(slowest_gap_s, floor_s=STALL_FLOOR_S, factor=STALL_FACTOR):
+    """How long silence may last, given the slowest gap between two beats seen so far."""
+    return max(floor_s, factor * slowest_gap_s)
+
+
+def _beats(progress_path):
+    try:
+        with io.open(progress_path, encoding="utf-8") as fh:
+            return [ln.rstrip("\n") for ln in fh if ln.strip()]
+    except OSError:
+        return []
+
+
+def _kill_tree(proc, job=None):
+    """Kill the sweep AND its children (hook subprocesses a hung test may have spawned) through
+    the one tree-kill the repo already has (`ide.lsp._kill_tree`: killpg on POSIX, the Job Object
+    on Windows) -- no second spelling, and no bare `taskkill` resolved through System32."""
+    from mokata.ide.lsp import _kill_tree as tree_kill
+    tree_kill(proc, pgid=None if os.name == "nt" else proc.pid, job=job)
+
+
+def run_sweep(modules, extra_tree=None, stall_floor_s=STALL_FLOOR_S, stall_factor=STALL_FACTOR,
+              poll_s=0.25):
     """Run the sweep over `modules` and return (proc, journal records)."""
+    import time
     env = dict(os.environ)
     env["TTYSWEEP"] = "1"
     env["PYTHONPATH"] = os.pathsep.join(
@@ -114,30 +145,65 @@ def run_sweep(modules, extra_tree=None):
         + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else []))
     with tempfile.TemporaryDirectory() as tmp:
         journal = os.path.join(tmp, "ttysweep.jsonl")
+        progress = os.path.join(tmp, "progress.log")
         env["TTYSWEEP_OUT"] = journal
+        env["TTYSWEEP_PROGRESS"] = progress
         # ⭐ THROUGH `_graded_invocation`, WHICH IS THE OTHER ROW. This is a harness that
         # COMPUTES a test list; an empty derivation here would invoke bare `unittest`, fall
         # back to discovery, run the whole suite under a forced TTY and report a clean journal.
         # That is `UNITTEST-BARE-INVOCATION-GRADES-EVERYTHING` arriving inside the guard for
-        # the other row — so the refusal is not decoration, it is load-bearing right here.
+        # the other row -- so the refusal is not decoration, it is load-bearing right here.
         argv = GI.unittest_argv(sys.executable, modules,
                                 "tty-sweep prompt-reaching module derivation")
-        # ⛔ A BOUNDED TIMEOUT, AND IT IS THE POINT RATHER THAN HYGIENE. This is the guard
-        # for a row about a suite that HANGS, so its own failure mode must not be a hang.
-        # Measured: the subset takes ~48 s, so 150 s is headroom — and it is what turns a
-        # recursion (the self-exclusion removed; see `_SELF`) from a stalled run into a
-        # `TimeoutExpired`, i.e. a RED with a name on it.
-        try:
-            proc = subprocess.run(argv, cwd=_TESTS, env=env, capture_output=True, text=True,
-                                  stdin=subprocess.DEVNULL, timeout=SWEEP_TIMEOUT_S)
-        except subprocess.TimeoutExpired as expired:
+        out_path, err_path = os.path.join(tmp, "out.txt"), os.path.join(tmp, "err.txt")
+        kw = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
+              else {"start_new_session": True})
+        # Output goes to FILES, not pipes: a poll loop that does not drain a pipe deadlocks the
+        # child on a full buffer, and that deadlock would read as the hang this guard hunts.
+        with open(out_path, "wb") as out_fh, open(err_path, "wb") as err_fh:
+            proc = subprocess.Popen(argv, cwd=_TESTS, env=env, stdin=subprocess.DEVNULL,
+                                    stdout=out_fh, stderr=err_fh, **kw)
+            job = None
+            if os.name == "nt":
+                from mokata.ide.lsp import WinJob
+                job = WinJob(proc)
+            last_n, last_t, slowest = 0, time.monotonic(), 0.0
+            stalled = None
+            try:
+                while proc.poll() is None:
+                    time.sleep(poll_s)
+                    n = len(_beats(progress))
+                    now = time.monotonic()
+                    if n != last_n:
+                        slowest = max(slowest, now - last_t)
+                        last_n, last_t = n, now
+                    elif now - last_t > stall_limit(slowest, stall_floor_s, stall_factor):
+                        stalled = now - last_t
+                        break
+            finally:
+                if proc.poll() is None:
+                    _kill_tree(proc, job)
+                proc.wait()
+                if job is not None:
+                    job.terminate()         # release the handle (no-op after a normal exit)
+        def _read(path):
+            with io.open(path, encoding="utf-8", errors="replace") as fh:
+                return fh.read()
+        stdout, stderr = _read(out_path), _read(err_path)
+        if stalled is not None:
+            beats = _beats(progress)
             raise AssertionError(
-                "the tty sweep did not finish within %ds over %d module(s). The measured "
-                "cost is ~48s on Linux, so this is a HANG rather than a slow box — and a guard "
-                "for a row about hanging suites must fail with a name rather than stall. The "
-                "usual cause is the swept set including THIS module, which makes the sweep "
-                "sweep itself (see `_SELF`).\n--- tail ---\n%s"
-                % (SWEEP_TIMEOUT_S, len(modules), (expired.output or b"")[-1500:])) from expired
+                "the tty sweep HUNG: no test boundary for %.0fs (limit %.0fs = max(%ds floor, %dx "
+                "the slowest gap seen, %.1fs)) over %d module(s), after %d beat(s). It is judged "
+                "by lack of PROGRESS, not by total time, so a slow or loaded box does not reach "
+                "this -- a stuck test does. Last boundary: %s. The usual cause is the swept set "
+                "including THIS module, which makes the sweep sweep itself (see `_SELF`)."
+                "\n--- tail ---\n%s"
+                % (stalled, stall_limit(slowest, stall_floor_s, stall_factor), stall_floor_s,
+                   stall_factor, slowest, len(modules), len(beats),
+                   beats[-1] if beats else "<none: stuck before the first test>",
+                   (stdout + stderr)[-1500:]))
+        proc = subprocess.CompletedProcess(argv, proc.returncode, stdout, stderr)
         records = []
         if os.path.exists(journal):
             with io.open(journal, encoding="utf-8") as fh:
@@ -256,6 +322,80 @@ class NoTestReachesAPromptOnTheAmbientStdin(unittest.TestCase):
                          "a test that owns its stdin was flagged — the reading is then useless, "
                          f"because the correct pattern is the common one:\n{records}")
         self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
+
+    # ---- A36-CEILING: the sweep is bounded by lack of PROGRESS, both directions proved -----------
+    def test_a_REAL_HANG_fails_by_NAME_and_does_not_wait_for_the_hung_test(self):
+        """A planted test that never returns: the sweep must die with the NAME of the test it
+        stopped in, long before the test's own 10-minute sleep would end."""
+        import time
+        with tempfile.TemporaryDirectory() as planted:
+            with io.open(os.path.join(planted, "test_planted_hang.py"), "w",
+                         encoding="utf-8") as fh:
+                fh.write(
+                    "import time, unittest\n\n\n"
+                    "class PlantedHang(unittest.TestCase):\n"
+                    "    def test_a_ok(self):\n"
+                    "        pass\n"
+                    "    def test_b_never_returns(self):\n"
+                    "        time.sleep(90)\n")
+            t0 = time.monotonic()
+            with self.assertRaises(AssertionError) as caught:
+                run_sweep(["test_planted_hang"], extra_tree=planted,
+                          stall_floor_s=3, stall_factor=3)
+            took = time.monotonic() - t0
+        self.assertIn("test_b_never_returns", str(caught.exception))
+        self.assertIn("HUNG", str(caught.exception))
+        self.assertLess(took, 120, "the hung sweep was waited out instead of cut off")
+
+    def test_a_SLOW_but_PROGRESSING_sweep_passes_even_past_the_old_total_ceiling(self):
+        """Many tests that each take a little: total time far past the stall floor, but a beat
+        lands every fraction of a second, so it is slow and NOT hung. A wall-clock total of the
+        floor's size (the old design) would have false-red this."""
+        import time
+        floor = 2
+        with tempfile.TemporaryDirectory() as planted:
+            with io.open(os.path.join(planted, "test_planted_slow.py"), "w",
+                         encoding="utf-8") as fh:
+                fh.write(
+                    "import time, unittest\n\n\n"
+                    "class PlantedSlow(unittest.TestCase):\n"
+                    "    pass\n\n"
+                    "for _i in range(14):\n"
+                    "    setattr(PlantedSlow, 'test_slow_%02d' % _i,\n"
+                    "            lambda self: time.sleep(0.5))\n")
+            t0 = time.monotonic()
+            proc, records = run_sweep(["test_planted_slow"], extra_tree=planted,
+                                      stall_floor_s=floor, stall_factor=3)
+            took = time.monotonic() - t0
+        self.assertGreater(took, floor, "premise: the sweep outlasted the floor as a TOTAL")
+        self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
+        self.assertRegex(proc.stderr, r"Ran 14 tests")
+
+    def test_the_limit_STRETCHES_with_the_slowest_gap_seen_through_run_sweep(self):
+        """M1 -- one early test is slow but under the floor (1.2 s vs a 1.5 s floor), so
+        it is OBSERVED as the slowest gap; a later silent gap (2.6 s) is above the floor but under
+        3 x that gap (3.6 s), so a loaded box is NOT a hang. With the limit pinned at the floor
+        (the old fixed bound) this sweep is cut off as HUNG."""
+        with tempfile.TemporaryDirectory() as planted:
+            with io.open(os.path.join(planted, "test_planted_stretch.py"), "w",
+                         encoding="utf-8") as fh:
+                fh.write(
+                    "import time, unittest\n\n\n"
+                    "class PlantedStretch(unittest.TestCase):\n"
+                    "    def test_a_slow_early(self):\n"
+                    "        time.sleep(1.2)\n"
+                    "    def test_b_quiet_but_within_the_stretched_limit(self):\n"
+                    "        time.sleep(2.6)\n")
+            proc, _ = run_sweep(["test_planted_stretch"], extra_tree=planted,
+                                stall_floor_s=1.5, stall_factor=3, poll_s=0.1)
+        self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
+        self.assertRegex(proc.stderr, r"Ran 2 tests")
+
+    def test_the_stall_limit_scales_with_the_slowest_gap_and_never_drops_below_the_floor(self):
+        self.assertEqual(STALL_FLOOR_S, stall_limit(0.0))
+        self.assertEqual(STALL_FLOOR_S, stall_limit(STALL_FLOOR_S / STALL_FACTOR / 2))
+        self.assertEqual(STALL_FACTOR * 50, stall_limit(50))
+        self.assertGreaterEqual(STALL_FLOOR_S, 60, "no small timeouts: the floor is generous")
 
     # ⚠ THE WHOLE-SUBSET READING LIVES IN `test_a35_...`, AND THE SPLIT IS A COST DECISION.
     # It takes ~48 s (a second run of 32 modules), and every mutant in

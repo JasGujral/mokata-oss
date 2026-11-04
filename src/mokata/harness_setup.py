@@ -176,8 +176,11 @@ _EXPECTED_HOOK_WIRING: Dict[str, List[Dict[str, Optional[str]]]] = {
 #   * No `if` filter: `if` takes exactly ONE positive permission rule and follow mode wants every
 #     in-repo edit, which the `matcher` already selects; out-of-repo paths are dropped by the server.
 #   * Gate hooks are NOT moved (ruling U8): they stay `mokata-hook` command hooks.
+#   * PostToolUse takes NO matcher (0.0.27 P12 ruling): the Activity panel shows EVERY tool the
+#     agent ran (Read, Grep, Task, Bash, …), not only the file-mutating ones `dirty-track` watches.
+#     The server keeps the tool's NAME and nothing else (`ide.bus.from_claude_hook`).
 IDE_BRIDGE_EVENTS: Dict[str, Optional[str]] = {
-    "PostToolUse": HOOK_DIRTY_MATCHER,
+    "PostToolUse": None,
     "Stop": None,
     "SessionEnd": None,
 }
@@ -1078,9 +1081,9 @@ def _load_json(path: Path) -> Dict:
     try:
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise SetupError(
-            f"{path} exists but isn't valid JSON ({exc}) — mokata won't overwrite a config it "
+            f"{path} exists but isn't valid UTF-8 JSON ({exc}) — mokata won't overwrite a config it "
             f"can't parse (it would destroy your other entries). Fix or remove the file, then "
             f"re-run."
         ) from exc

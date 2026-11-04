@@ -25,7 +25,7 @@ import _support  # noqa: F401  (puts src/ on the path)
 from mokata import cli
 from mokata.bootstrap import BOOTSTRAP_TOKEN_BUDGET, build_bootstrap
 from mokata.config import Surface
-from mokata.dashboard import (
+from mokata.governance_view import (
     build_governance_view,
     render_governance_html,
     write_governance_dashboard,
@@ -116,15 +116,16 @@ class TestLiveGovern(unittest.TestCase):
             self.assertEqual((after.stats.reads, after.stats.writes),
                              (reads_before, writes_before))   # no stat bump from the view
 
-    def test_cli_govern_live_off_dashboard_tier_degrades_to_static(self):
+    def test_cli_govern_once_wins_over_live_and_writes_a_static_snapshot(self):
+        # 0.0.27 WATCH-FOLD — `--live` no longer waits on the deleted `dashboard` tier of
+        # settings.ux.progress; `--once` is what asks for a single static snapshot.
         with tempfile.TemporaryDirectory() as d:
             init_repo(root=d, profile="full", assume_yes=True, out=_silent)
             buf = io.StringIO()
             with redirect_stdout(buf):
-                rc = cli.main(["govern", "--live", "--path", d])    # default tier = terminal
+                rc = cli.main(["govern", "--live", "--once", "--path", d])
             out = buf.getvalue()
             self.assertEqual(rc, 0)
-            self.assertIn("static snapshot", out)         # honours settings.ux.progress
             path = re.search(r"wrote (\S+)", out).group(1)
             with open(path, encoding="utf-8") as fh:
                 self.assertNotIn("http-equiv", fh.read())

@@ -1,0 +1,61 @@
+/* mokata ide — Explain (0.0.27 P46). Brand colours from app.css variables. */
+#view-explain { padding: 12px 16px; overflow: auto; }
+#panel-explain h4 { margin: 14px 0 4px; font-size: 12px; color: var(--muted); font-weight: 600; }
+.xp-form { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 8px; }
+.xp-range { display: flex; gap: 6px; }
+.xp-range .xp-input { flex: 1; min-width: 0; }
+.xp-input { font: inherit; font-size: 12px; padding: 4px 6px; color: var(--text); background: var(--panel2);
+  border: 1px solid var(--line2); border-radius: 5px; }
+.xp-input:focus-visible, .xp-btn:focus-visible, .xp-row:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.xp-btn { font: inherit; font-size: 11px; padding: 2px 8px; color: var(--text2); background: transparent;
+  border: 1px solid var(--line2); border-radius: 5px; cursor: pointer; }
+.xp-btn:hover { border-color: var(--accent); color: var(--accent-ink); }
+.xp-btn:disabled { opacity: .5; cursor: default; }
+.xp-go { align-self: flex-start; font-size: 12px; padding: 4px 12px; color: var(--on-accent); background: var(--accent); border-color: var(--accent); }
+.xp-go:hover { color: var(--on-accent); filter: brightness(1.08); }
+.xp-fine, .xp-why { margin: 2px 0; color: var(--muted); font-size: 11px; line-height: 1.4; }
+.xp-note { margin: 4px 0; color: var(--text2); font-size: 12px; }
+.xp-reqs, .xp-list, .xp-dl { list-style: none; margin: 4px 0; padding: 0; font-size: 12px; }
+.xp-req { padding: 4px 6px; border: 1px solid var(--line); border-radius: 5px; margin: 4px 0; }
+.xp-req .xp-btn { margin-top: 4px; }
+.xp-row { display: grid; grid-template-columns: auto 1fr; column-gap: 6px; row-gap: 1px; align-items: baseline;
+  padding: 5px 6px; border-radius: 5px; cursor: pointer; color: var(--text2); }
+.xp-row:hover { background: var(--sel); }
+.xp-row.on { background: var(--sel); color: var(--text); }
+.xp-row .xp-spec, .xp-row .xp-kept, .xp-row .xp-why, .xp-row .xp-btn { grid-column: 2; justify-self: start; }
+.xp-when { font-family: var(--mono); font-size: 11px; font-variant-numeric: tabular-nums; }
+.xp-spec { font-family: var(--mono); font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.xp-kept { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.xp-badge, .xp-state { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+.xp-fresh, .xp-arrived .xp-state { color: var(--accent-ink); }
+.xp-stale, .xp-waiting .xp-state, .xp-queued .xp-state { color: var(--amber); }
+.xp-orphaned, .xp-unreadable, .xp-no-page-arrived .xp-state, .xp-cancelled .xp-state { color: var(--del); }
+.xp-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+.xp-head h2 { margin: 0; font-size: 15px; color: var(--text); }
+.xp-meta { margin: 0; font-size: 12px; color: var(--muted); }
+.xp-meta.xp-stale { color: var(--amber); }
+.xp-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.xp-commit { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; width: 100%; }
+.xp-commit .xp-input { min-width: 260px; flex: 1; }
+.xp-frame { display: block; width: 100%; min-height: 240px; border: 1px solid var(--line2); border-radius: 6px; background: var(--bg); }
+.xp-dropped { margin: 10px 0; font-size: 12px; color: var(--text2); }
+.xp-dropped summary { cursor: pointer; color: var(--muted); }
+.xp-dl li { padding: 4px 0; border-bottom: 1px solid var(--line); }
+.xp-dl-where { font-family: var(--mono); font-size: 11px; margin-right: 8px; color: var(--muted); }
+.xp-dl-text { margin: 2px 0 0; color: var(--text2); overflow-wrap: anywhere; }
+.xp-empty { color: var(--muted); }
+/* the base side of a cite (P46 r2): read at the base commit, read-only, labelled */
+.xp-base { margin: 6px 0 10px; border: 1px solid var(--amber); border-radius: 6px; background: var(--bg); }
+.xp-base:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.xp-base-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; padding: 5px 8px;
+  border-bottom: 1px solid var(--line); font-size: 12px; }
+.xp-base-label { font-family: var(--mono); color: var(--amber); }
+.xp-base-where { font-family: var(--mono); font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+.xp-base-head .xp-btn { margin-left: auto; }
+.xp-base-body { padding: 4px 0; font-size: 12px; overflow-x: auto; }
+.xp-base-body .region-msg { padding: 4px 8px; }
+.xp-base-t { border-collapse: collapse; font-family: var(--mono); font-size: 12px; width: 100%; }
+.xp-base-t td { padding: 0 8px; white-space: pre; }
+.xp-base-t td.no { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; user-select: none; width: 1%; }
+.xp-base-t tr.hit td { background: var(--sel); }
+.xp-base-t tr.hit td.no { color: var(--amber); }

@@ -437,7 +437,7 @@ def _identity_and_access_for(surface: Any) -> Tuple[Any, Any]:
     may well be a LOCAL store would break local's zero-config contract, so the floor there stays
     local — but LOUDLY (`note_degraded`), never as a secret. Neither path crashes the store."""
     try:
-        from ..team_audit import actor
+        from ..session import actor
         identity = actor()
     except Exception:
         # D5 — deliberately left BROAD, with no narrow class to name: `team_audit.actor()`'s own

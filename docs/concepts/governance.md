@@ -344,10 +344,9 @@ deviation request/decision — each with a monotonic `seq`. `mokata audit` print
 Three read-only, derived surfaces so you can always see what mokata did **and why** — none of
 them mutate the state they show:
 
-- **Live `mokata govern` / `mokata watch`.** The governance dashboard takes the same optional
-  self-meta-refresh as `watch`: `mokata govern --live` re-writes on a 2s interval and the page
-  refreshes itself (honouring `settings.ux.progress`; the static snapshot — `mokata govern` /
-  `--once` — always works and is byte-identical/deterministic). Self-contained: inline CSS, **no
+- **Live `mokata govern`.** The governance dashboard takes an optional self-meta-refresh:
+  `mokata govern --live` re-writes on a 2s interval and the page refreshes itself (the static
+  snapshot — `mokata govern` / `--once` — is byte-identical/deterministic). Self-contained: inline CSS, **no
   network**, under gitignored `temp_local/`.
 - **"What changed since last session."** A concise diff of new/changed memory, new rules, and
   the gate decisions made since a lightweight **last-session snapshot**. The snapshot is captured
@@ -360,6 +359,16 @@ them mutate the state they show:
   `audit --why` recap of this run — what changed and the why behind each gate decision — so
   landing it is a reviewed decision. Shipping stays **human-gated**: mokata records the landing
   choice but **never merges / opens a PR / deletes** on its own.
+- **The gated merge.** A session worktree's branch lands in the main checkout's branch only
+  through `mokata worktree merge` (or Merge… under the IDE's Sessions › Worktree, or the `worktree_merge`
+  MCP tool — one implementation): the full suite must have passed with mokata's runner AT the
+  branch's head on a clean tree, every acceptance criterion must have a passing test, and the review
+  must have passed at that head. Then **you** approve exactly that merge in your own terminal
+  (`mokata approve <id>`; an in-chat approval does not count). It runs none of the repo's hooks,
+  filters, merge drivers or signing programs, and moves the branch by compare-and-swap, so a branch
+  that moved after your approval is refused, not merged. With no mokata run bound to the worktree,
+  only a human-filed override (`mokata worktree merge-override --reason`) lets it through, for that
+  head only.
 
 ## Reversibility (I5) & resume (I6)
 

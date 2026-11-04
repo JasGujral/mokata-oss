@@ -15,7 +15,7 @@ Business behaviour, each falsifiable:
   * User-owned data: a corrupt / foreign-schema file is REFUSED LOUDLY — moved aside byte for
     byte (never deleted, never overwritten), named in the answer and on stderr — and the IDE
     starts clean without crashing.
-  * The tab-list rules (close / others / right / left / all with pinned tabs, reopen, Ctrl+Tab,
+  * The tab-list rules (close one / close all with pinned tabs, reopen, Ctrl+Tab,
     Alt+1..9, preview, cap) are the page's pure model, run under node (skipped without node);
     every key goes through the P0 registry with Ctrl and Cmd as one modifier.
 """
@@ -53,7 +53,7 @@ THREE = {
     "active": "file:src/app/views.py",
     "closed": [{"kind": "file", "path": "README.md", "line": 1, "scroll": 0}],
     "expanded": ["src", "src/app"], "collapsed": ["tests"],
-    "mode": "review", "panel": "changes",
+    "mode": "review",
 }
 
 
@@ -104,7 +104,8 @@ class TabsSurviveARestart(_Repo):
         self.assertEqual(["file:README.md"], [t["key"] for t in w["closed"]], "reopen survives too")
         self.assertEqual(["src", "src/app"], w["expanded"])
         self.assertEqual(["tests"], w["collapsed"])
-        self.assertEqual(("review", "changes"), (w["mode"], w["panel"]))
+        self.assertEqual("review", w["mode"])
+        self.assertNotIn("panel", w, "UX-SIMPLIFY: no side panel is chosen apart from its view")
         self.assertIsNone(w["refused"])
         # It is the server's per-repo file — where the server's own record lives.
         path = W.workspace_path(self.d)
@@ -336,28 +337,26 @@ const out = {};
 @unittest.skipUnless(shutil.which("node"), "node is not on PATH — the page logic runs in a browser")
 class TheTabListRules(unittest.TestCase):
 
-    def test_close_others_right_left_all_keep_pinned_tabs_and_move_the_active_tab(self):
+    def test_close_one_and_close_all_keep_pinned_tabs_and_move_the_active_tab(self):
         o = _node(_SETUP + r"""
 const at = (mm, how, key) => { const r = M.close(mm, "file:" + key, how); return [keys(r), r.active, r.closed.map((t) => t.path)]; };
 out.one = at(m, "one", "e");           // closing the active, last tab -> its left neighbour
 const mc = { ...m, active: "file:c" };
 out.oneMid = at(mc, "one", "c");       // closing the active middle tab -> its right neighbour
-out.others = at(pinA, "others", "c");
-out.right = at({ ...pinA, active: "file:e" }, "right", "c");
-out.left = at(pinA, "left", "c");
 out.all = at(pinA, "all", "c");
 out.pinnedOne = at(pinA, "one", "a");  // asking for ONE pinned tab closes it
-out.noop = M.close(m, "file:e", "right") === m;
+const onlyPinned = { ...pinA, tabs: pinA.tabs.filter((t) => t.pinned), active: "file:a" };
+out.noop = M.close(onlyPinned, "file:a", "all") === onlyPinned;
 out.missing = M.close(m, "file:zz", "one") === m;
+// UX-SIMPLIFY #27: Close Others / Left / Right are deleted — an old `how` is refused, not ignored
+out.gone = ["others", "right", "left"].map((h) => { try { M.close(m, "file:c", h); return "accepted"; } catch (e) { return "refused"; } });
 """)
         self.assertEqual([["a", "b", "c", "d"], "file:d", ["e"]], o["one"])
         self.assertEqual([["a", "b", "d", "e"], "file:d", ["c"]], o["oneMid"])
-        self.assertEqual([["a", "c"], "file:c", ["b", "d", "e"]], o["others"])
-        self.assertEqual([["a", "b", "c"], "file:c", ["d", "e"]], o["right"])
-        self.assertEqual([["a", "c", "d", "e"], "file:e", ["b"]], o["left"])
         self.assertEqual([["a"], "file:a", ["b", "c", "d", "e"]], o["all"])
         self.assertEqual([["b", "c", "d", "e"], "file:e", ["a"]], o["pinnedOne"])
-        self.assertTrue(o["noop"], "nothing to the right of the last tab: the same model")
+        self.assertTrue(o["noop"], "close all with only a pinned tab: the same model")
+        self.assertEqual(["refused"] * 3, o["gone"])
         self.assertTrue(o["missing"])
 
     def test_reopen_brings_back_the_last_closed_first_and_ctrl_tab_alt_n_move(self):
@@ -439,10 +438,10 @@ globalThis.document = { addEventListener(t, f) { handlers.push([t, f]); }, query
         reg = (STATIC / "registry.js").read_text(encoding="utf-8")
         tabs = (STATIC / "features" / "tabs.js").read_text(encoding="utf-8")
         core = (STATIC / "features" / "core-commands.js").read_text(encoding="utf-8")
-        screens = re.search(r"const SCREENS = \[.*?\];", (STATIC / "app.js").read_text(encoding="utf-8"),
-                            re.S).group(0)
+        app = (STATIC / "app.js").read_text(encoding="utf-8")
+        screens = "\n".join(re.search(r"const %s = \[.*?\];" % n, app, re.S).group(0) for n in ("TABS", "VIEWS"))
         js = (self.STUB + reg + "\nwindow.MK.ui = {}; window.MK.$ = () => null; window.MK.el = fake;\n"
-              + screens + "\nMK.SCREENS = SCREENS;\n" + core + "\n" + tabs + r"""
+              + screens + "\nMK.TABS = TABS; MK.VIEWS = VIEWS;\n" + core + "\n" + tabs + r"""
 const R = window.mokataIDE, N = R.keys.normalize;
 const out = {};
 for (const k of ["Ctrl+W", "Cmd+W", "Ctrl+Tab", "Cmd+Shift+Tab", "Ctrl+Shift+T", "Alt+1", "Alt+9",
@@ -463,9 +462,11 @@ process.stdout.write(JSON.stringify(out));
         self.assertEqual("tabs (tabs.next)", o["Alt+PageDown"])
         self.assertEqual("tabs (tabs.prev)", o["Alt+PageUp"])
         self.assertEqual("tabs (tabs.reopen)", o["Alt+Shift+T"])
-        for t in ("Tabs: close others", "Tabs: close to the right", "Tabs: close to the left",
-                  "Tabs: close all", "Tabs: reopen closed tab"):
+        for t in ("Tabs: close all", "Tabs: reopen closed tab"):
             self.assertIn(t, o["palette"])
+        for t in ("Tabs: close others", "Tabs: close to the right", "Tabs: close to the left",
+                  "Tabs: keep the preview tab open"):
+            self.assertNotIn(t, o["palette"], "UX-SIMPLIFY #27 deleted it")
         self.assertEqual([], o["conflicts"])
 
     def test_the_views_hand_every_shown_file_to_the_tabs(self):

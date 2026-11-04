@@ -292,7 +292,8 @@ ANATOMY: Dict[str, Anatomy] = {
             _r("Review basically passed — close enough.",
                "Read the persisted verdict; no record on file means STOP, not proceed."),
             _r("I'll just merge / open the PR / push to finish.",
-               "mokata never merges, PRs, or deletes — the human chooses how to land it."),
+               "mokata never merges, PRs, or deletes on its own — the human chooses how to land it "
+               "(the gated merge lands only on their approval of exactly that merge)."),
         ),
         verification=(
             "the full suite is green against the confirmed baseline",

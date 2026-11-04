@@ -1,0 +1,36 @@
+/* mokata ide — rendered Markdown, Mermaid and rendered diffs (0.0.26 P7). Brand tokens only. */
+.mk-doc, .mk-diff { font: 14px/1.6 var(--sans); color: var(--text); max-width: 100%; }
+.mk-doc { padding: 4px 22px 40px; max-width: 920px; }
+.mk-doc h1, .mk-doc h2, .mk-diff h1, .mk-diff h2 { border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+.mk-doc h1, .mk-diff h1 { font-size: 22px; } .mk-doc h2, .mk-diff h2 { font-size: 18px; }
+.mk-doc h3, .mk-diff h3 { font-size: 15px; }
+.mk-doc a, .mk-diff a { color: var(--accent-ink); }
+.mk-doc code, .mk-diff code { background: var(--panel2); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+.mk-doc pre, .mk-diff pre { background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; overflow: auto; }
+.mk-doc pre code, .mk-diff pre code { border: 0; padding: 0; background: none; }
+.mk-doc blockquote, .mk-diff blockquote { margin: 0; padding: 0 12px; border-left: 3px solid var(--line2); color: var(--text2); }
+.mk-doc table, .mk-diff table { border-collapse: collapse; }
+.mk-doc th, .mk-doc td, .mk-diff th, .mk-diff td { border: 1px solid var(--line2); padding: 4px 8px; }
+.mk-al-left { text-align: left; } .mk-al-center { text-align: center; } .mk-al-right { text-align: right; }
+.mk-doc img, .mk-diff img { max-width: 100%; }
+.mk-img-off { color: var(--muted); font-style: italic; }
+.mk-chunk.mk-pending { min-height: 600px; }
+.mk-mermaid { margin: 10px 0; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); overflow: auto; }
+.mk-m-img { display: block; max-width: 100%; height: auto; }
+.mk-m-wait { color: var(--muted); font-size: 12px; }
+.mk-m-err { color: var(--amber); font-size: 12px; margin: 0 0 6px; }
+/* the hidden layout frame: laid out (Mermaid measures text) but never seen or focused */
+.mk-mermaid-frame { position: absolute; left: -10000px; top: 0; width: 1200px; height: 900px; border: 0; visibility: hidden; }
+
+/* rendered diff: old | new, one row per top-level block */
+.mk-diff { padding: 0 10px 30px; }
+.mk-diff-head, .mk-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.mk-diff-head { position: sticky; top: 0; background: var(--bg); color: var(--muted); font: 11.5px var(--mono);
+  padding: 6px 0; border-bottom: 1px solid var(--line); z-index: 1; }
+.mk-row { border-bottom: 1px solid var(--line); }
+.mk-side { min-width: 0; padding: 0 8px; }
+.mk-row.mk-same .mk-side { opacity: .72; }
+.mk-row.mk-del .mk-old, .mk-row.mk-chg .mk-old { background: var(--del-bg); box-shadow: inset 3px 0 0 var(--del); }
+.mk-row.mk-add .mk-new, .mk-row.mk-chg .mk-new { background: var(--add-bg); box-shadow: inset 3px 0 0 var(--accent); }
+.mk-nochange { padding: 8px 0; }
+@media (max-width: 900px) { .mk-diff-head, .mk-row { grid-template-columns: 1fr; } }

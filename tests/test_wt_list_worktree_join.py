@@ -721,7 +721,9 @@ class TestRegisteredTheSameWay(_Base):
         self.assertEqual(surface.mcp_read, ("worktree_list",))
         # UPDATED at WT.S3 (0.0.23 E3), with cause: clean/remove are now gated MCP writes. The
         # CREATE half is still not one (`git worktree add` stays on the CLI's fail-closed path).
-        self.assertEqual(surface.mcp_write, ("worktree_clean", "worktree_remove"))
+        # UPDATED at 0.0.27 P21, with cause: `worktree_merge` is the gated merge — a propose-only
+        # MCP write a human approves out-of-band, redeemed through `mcp/consent._consent`.
+        self.assertEqual(surface.mcp_write, ("worktree_clean", "worktree_remove", "worktree_merge"))
         self.assertNotIn("worktree_create", surface.mcp_write)
         self.assertFalse(surface.exempt, "a command with an in-harness surface is not exempt")
         self.assertTrue(surface.covered)

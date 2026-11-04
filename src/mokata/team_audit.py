@@ -73,14 +73,10 @@ def honest_note() -> str:
             "DSN); mokata never stores the DSN secret, only the env-var name is recorded.")
 
 
-def actor() -> str:
-    """Best-effort per-actor attribution (who) from the environment — for the shared log's
-    who-did-what. Never a machine path; a name only."""
-    for var in ("MOKATA_ACTOR", "USER", "USERNAME", "LOGNAME"):
-        val = os.environ.get(var)
-        if val:
-            return val
-    return "unknown"
+# `actor` — the run identity this module attributes with — is DEFINED in `session` (R6, 0.0.27):
+# the memory store resolves it on every open, the per-prompt hook among them, and importing this
+# module for it cost that hook its four dataclasses and the ledger import (~13 M instructions).
+from .session import actor  # noqa: E402
 
 
 def namespace(root: str) -> str:
@@ -491,7 +487,6 @@ def team_audit_view(root: str, surface: Any, *, client: Any = None,
         return TeamAuditView(False, message=(
             "team audit sharing is OFF (local-first default). Opt in with "
             "`mokata config set settings.audit.shared true`, then `mokata audit --team`."))
-    dsn_env = dsn_env_name(data)
     try:
         log = make_shared_log(data=data, client=client)
     except SharedAuditUnavailable as exc:
