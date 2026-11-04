@@ -737,7 +737,8 @@ class ProcessManagement(_Repo):
         from mokata import quiet_spawn
         with mock.patch("mokata.quiet_spawn.os.name", "nt"):
             self.assertEqual({"creationflags": 0x08000000 | 0x00000200}, quiet_spawn.detached())
-        with mock.patch("mokata.ide.lsp.subprocess.Popen") as popen:
+        with mock.patch("mokata.ide.lsp.subprocess.Popen") as popen, \
+                mock.patch("mokata.ide.lsp._resume_process"):
             popen.return_value.stdin = io.BytesIO()
             popen.return_value.stdout = io.BytesIO()
             popen.return_value.stderr = io.BytesIO()
@@ -1506,38 +1507,38 @@ class TheTreeIsInItsJobBeforeItRuns(unittest.TestCase):
         self.assertIsNone(job)
         self.assertEqual({"start_new_session": True}, popen.call_args.kwargs)
 
-    @unittest.skipUnless(os.name == "nt", "Job Objects exist on Windows only")
-    def test_on_windows_nothing_a_launcher_starts_first_escapes_the_job(self):
-        """The real thing, through a REAL launcher: a venv's `Scripts\\python.exe` (which starts
-        the real interpreter as its child) running a script that starts a grandchild at once.
-        Forty runs; every launcher, real interpreter and grandchild is dead after `terminate`.
-        Spawning with the job assigned after Popen leaks about one in forty here."""
+    def _launcher_fixture(self):
         import subprocess
-        from _win_proc import tasklist_says_alive
         venv = tempfile.mkdtemp(prefix="mk-launch-venv-")
         self.addCleanup(lambda: __import__("shutil").rmtree(venv, True))
         subprocess.run([sys.executable, "-m", "venv", venv], check=True, stdin=subprocess.DEVNULL)
-        launcher = os.path.join(venv, "Scripts", "python.exe")
         script = os.path.join(venv, "spawn_grandchild.py")
         with open(script, "w", encoding="utf-8") as fh:
-            fh.write("import subprocess, sys, time\n"
+            fh.write("import os, subprocess, sys, time\n"
                      "gc = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'])\n"
-                     "import os\n"
                      "with open(sys.argv[1] + '.tmp', 'w') as o:\n"
                      "    o.write('%d %d' % (os.getpid(), gc.pid))\n"
                      "os.replace(sys.argv[1] + '.tmp', sys.argv[1])\n"
                      "time.sleep(300)\n")
-        runs = 40
+        return venv, os.path.join(venv, "Scripts", "python.exe"), script
+
+    def _spawn_through_the_launcher(self, runs, tag):
+        """`runs` times: start the venv launcher on the grandchild script THROUGH `spawn_jobbed`,
+        wait for it to report, terminate the job. Then every launcher, real interpreter and
+        grandchild must be dead. Returns nothing; asserts."""
+        import subprocess
+        from _win_proc import tasklist_says_alive
+        venv, launcher, script = self._launcher_fixture()
         pids = []
         for i in range(runs):
-            pidfile = os.path.join(venv, f"pids{i}")
+            pidfile = os.path.join(venv, f"{tag}{i}")
             proc, job = L.spawn_jobbed([launcher, script, pidfile], stdin=subprocess.DEVNULL,
                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                        **L.detached())
             self.assertTrue(job.ok, "no Job Object holds the tree")
             self.assertTrue(wait_for(lambda: os.path.exists(pidfile), timeout=120), f"run {i}: no pids")
             with open(pidfile, encoding="utf-8") as fh:
-                pids += [(i, proc.pid, *map(int, fh.read().split()))]
+                pids.append((i, proc.pid, *map(int, fh.read().split())))
             job.terminate()
             proc.wait(timeout=60)
         for i, launcher_pid, real, grandchild in pids:
@@ -1546,6 +1547,28 @@ class TheTreeIsInItsJobBeforeItRuns(unittest.TestCase):
                                 f"run {i}: pid {pid} outlived the job's terminate "
                                 f"(launcher {launcher_pid}, interpreter {real}, grandchild {grandchild})"
                                 f": {tasklist_says_alive(pid)[1]}")
+
+    @unittest.skipUnless(os.name == "nt", "Job Objects exist on Windows only")
+    def test_on_windows_nothing_a_launcher_starts_first_escapes_the_job(self):
+        """The real thing, through a REAL launcher: a venv's `Scripts\\python.exe` (which starts
+        the real interpreter as its child) running a script that starts a grandchild at once.
+        Sixty runs; the natural race (a runner leaked one in forty when the job was assigned
+        after Popen)."""
+        self._spawn_through_the_launcher(60, "n")
+
+    @unittest.skipUnless(os.name == "nt", "Job Objects exist on Windows only")
+    def test_on_windows_a_slow_job_assignment_cannot_let_the_launchers_child_out(self):
+        """The same, but the assignment is made SLOW (1 s) — the race lost on purpose. Assigned
+        after a running start, the launcher's child and grandchild are long started and in no job:
+        they survive `terminate` every time. Created suspended, nothing runs during the wait."""
+        real = L.WinJob
+
+        def slow(proc, *a, **k):
+            time.sleep(1.0)
+            return real(proc, *a, **k)
+
+        with mock.patch("mokata.ide.lsp.WinJob", side_effect=slow):
+            self._spawn_through_the_launcher(5, "s")
 
 
 class FileUrisAsRealServersSpellThem(unittest.TestCase):
