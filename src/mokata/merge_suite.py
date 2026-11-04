@@ -50,7 +50,7 @@ def run_full_suite(root: str, target: str, *, environ: Optional[Dict[str, str]] 
     from .ide.review_context import (_drive, _kill_tree, _manifest, _path_of, ide_actor,
                                      resolve_runner, test_command)
     from .merge_gate import _runs_bound, find_target, tree_stamp
-    from .quiet_spawn import detached
+    from .ide.lsp import TreeWatch, spawn_jobbed
     from .repo_identity import canonical_repo_root
     from . import project_env
     from .test_runs import record_test_run
@@ -95,17 +95,26 @@ def run_full_suite(root: str, target: str, *, environ: Optional[Dict[str, str]] 
 
     checkpoint()
     report(note=f"running `{cmd['text']}` in {wt}")
+    job = None
     try:
-        proc = subprocess.Popen(argv, cwd=wt, env=run_env,  # nosec B603 — argv, no shell
-                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, **detached())
+        # The same spawn the IDE re-run uses: POSIX a new session; Windows created suspended, put
+        # in a KILL_ON_JOB_CLOSE Job Object, then resumed — so nothing the suite starts can outlive
+        # it, hold the worktree open (the post-merge `git worktree remove` fails on Windows while
+        # anything runs there) or keep this run alive by writing to the pipe (0.0.27 LB-M2).
+        proc, job = spawn_jobbed(argv, cwd=wt, env=run_env,  # nosec B603 — argv, no shell
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT)
     except OSError as exc:
         raise SuiteError(f"the test command could not start: {exc}") from exc
+    watch = TreeWatch(proc.pid) if os.name == "nt" and job is not None and not job.ok else None
     try:
-        rc = _drive(proc, take, tick)
+        rc = _drive(proc, take, tick, job, watch)
     except Cancelled:
-        _kill_tree(proc)
+        _kill_tree(proc, job=job, watch=watch)
         raise                                   # a cancelled run records nothing
+    finally:
+        if job is not None:
+            job.terminate()                     # releases the handle; a no-op once the tree is ended
     after = tree_stamp(wt)
     tree = {"scope": "full", "worktree": wt,
             "head_before": before.get("head"), "head_after": after.get("head"),

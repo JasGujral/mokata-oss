@@ -41,6 +41,28 @@ class TheCheckReadsWhatAUtf8ServerSays(unittest.TestCase):
             srv.call("tools/list")
         self.assertIn("boom", str(cm.exception), "the server's stderr is in the failure")
 
+    def test_bytes_that_are_not_utf8_on_the_protocol_channel_fail_the_check_by_name(self):
+        """A server that puts invalid UTF-8 on its MCP channel is broken; reading it leniently
+        (U+FFFD) would let the check pass over that. It fails, and says what was wrong."""
+        bad = ("import sys\n"
+               "sys.stdin.readline()\n"
+               "sys.stdout.buffer.write(b'{\"id\": 1, \"result\": \"a \\xff\\xfe b\"}\\n')\n"
+               "sys.stdout.buffer.flush()\n")
+        srv = W.Server(tempfile.gettempdir(), argv=[sys.executable, "-c", bad])
+        self.addCleanup(srv.close)
+        with self.assertRaises(W.StepFailed) as cm:
+            srv.call("tools/list")
+        self.assertIn("UnicodeDecodeError", str(cm.exception))
+
+    def test_invalid_bytes_on_stderr_are_shown_not_fatal(self):
+        srv = W.Server(tempfile.gettempdir(), argv=[sys.executable, "-c",
+                       "import sys; sys.stdin.readline(); sys.stderr.buffer.write(b'x\\xffy\\n'); "
+                       "sys.stderr.flush()"])
+        self.addCleanup(srv.close)
+        with self.assertRaises(W.StepFailed) as cm:
+            srv.call("tools/list")
+        self.assertIn("x", str(cm.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

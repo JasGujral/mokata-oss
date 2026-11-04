@@ -39,7 +39,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from ..knowledge.cancel import cancelled, checkpoint, kill_on_cancel, report
-from ..exe_path import _under, is_batch, path_dirs, which_in
+from ..exe_path import _under, is_batch, is_stream, path_dirs, which_in
 from ..quiet_spawn import hidden
 from .lsp import TreeWatch, spawn_jobbed
 from .server import BadRequest
@@ -343,6 +343,10 @@ def resolve_runner(root: str, name: str, path_var: Optional[str],
     written, unless it is such a shim."""
     from .lsp import _global_node_package_bin
     nt = (os.name == "nt") if nt is None else nt
+    if nt and is_stream(name):
+        return None, (f"`{name}` names an NTFS alternate data stream (a `:` after the file name), "
+                      f"not a program file — Windows cannot start it and mokata does not try. Set "
+                      f"`settings.baseline.test_command` to the real executable's own path")
     bare = os.path.basename(name) == name and not os.path.isabs(name)
     if not bare:
         if nt and is_batch(name):
@@ -361,10 +365,14 @@ def resolve_runner(root: str, name: str, path_var: Optional[str],
     if not nt:
         return None, _not_found(name)
     shim = _shim_in(dirs, key)
+    # "corepack is enabled" is evidence only from a shim OUTSIDE the repo: the project env's
+    # `Scripts` is first on this PATH, and a repo that commits `.venv/Scripts/pnpm.cmd` must not be
+    # able to switch corepack on (it would download whatever the repo's `packageManager` names).
+    enabled = _shim_in([d for d in dirs if not _under(d, root)], key)
     env = {"PATH": path_var or ""}
     tried = ""
     for pkg in JS_RUNNERS.get(key, ()):
-        if pkg == "corepack" and shim is None:
+        if pkg == "corepack" and enabled is None:
             # corepack only supplies pnpm/yarn when the user ENABLED it (its shims are on PATH):
             # running it otherwise would download whatever the repo's `packageManager` names, with
             # no prompt (0.0.27 LB4-2).
@@ -503,7 +511,7 @@ def record_rerun(root: str, run_id: str, command: str, results: List[Dict[str, A
                            and not skipped,
                            command=command, results=outcome, source="ide",
                            actor=ide_actor(), exit_code=bad if isinstance(bad, int) else -1,
-                           not_run=skipped,
+                           not_run=skipped, incomplete=not complete,
                            reason="" if complete else "the run was cancelled before every "
                                                       "test ran")
 

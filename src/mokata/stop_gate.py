@@ -196,8 +196,9 @@ def missing_evidence(root: str, run_id: str, facts: Optional[LogFacts] = None) -
     if suite is None:
         reasons.append("no test run is recorded for this run")
     elif not suite.get("passed"):
-        if suite.get("not_run") and not suite.get("failed"):
-            # a run in which some tests could not even start is not a failing run (0.0.27 LB6-2)
+        if suite.get("passed") is None and suite.get("reason") and not suite.get("failed"):
+            # a run in which some tests could not even start, or that was cancelled with nothing
+            # failed, is not a failing run (0.0.27 LB6-2 / L1)
             reasons.append("not all tests ran in the last recorded test run ("
                            + str(suite.get("reason") or "some tests did not run") + ")")
         else:

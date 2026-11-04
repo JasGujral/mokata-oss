@@ -234,7 +234,8 @@ def record_test_run(root: str, run_id: str, *, passed: bool, command: str = "",
                     exit_code: Optional[int] = None,
                     reported: Iterable[str] = (),
                     tree: Optional[Dict[str, Any]] = None,
-                    not_run: Iterable[str] = (), reason: str = "") -> Dict[str, Any]:
+                    not_run: Iterable[str] = (), reason: str = "",
+                    incomplete: bool = False) -> Dict[str, Any]:
     """Record one test run for `run_id`: the last suite run, the named tests RED (failed) or GREEN
     (passed) in the TDD record, and any AC→test pairs. Returns the stored `last_suite`.
 
@@ -247,7 +248,9 @@ def record_test_run(root: str, run_id: str, *, passed: bool, command: str = "",
     `not_run` names tests the run was asked to do and could NOT start (0.0.27 LB6-2): they are in
     no outcome set, and the run is then neither a pass nor a failure of its own — `passed` is
     stored as None and `reason` says why ("2 tests did not run"), so a gate can say "not all
-    tests ran" instead of "FAILED". `results` also stores which tests FAILED (`failed`), so a test
+    tests ran" instead of "FAILED". `incomplete` is the same for a run that was CANCELLED part-way
+    (0.0.27 LB-L1): what ran is recorded, the run is not a pass, and with nothing failed it is not
+    "FAILED" either — `reason` says it was cancelled. `results` also stores which tests FAILED (`failed`), so a test
     that ran green is never shown red by the run's overall verdict."""
     if not run_id:
         raise ValueError("no run to record the test run against — name it with --run")
@@ -281,7 +284,7 @@ def record_test_run(root: str, run_id: str, *, passed: bool, command: str = "",
     skipped = _ids(not_run)
     why = (reason or "").strip()[:ID_CHARS] or (
         f"{len(skipped)} test{'s' if len(skipped) != 1 else ''} did not run" if skipped else "")
-    suite = {"at": when, "passed": None if skipped else bool(passed),
+    suite = {"at": when, "passed": None if (skipped or incomplete) else bool(passed),
              "command": (command or "").strip()[:ID_CHARS], "tests": ids,
              "source": source, "actor": (actor or "")[:ID_CHARS],
              "exit_code": exit_code if isinstance(exit_code, int) else None}

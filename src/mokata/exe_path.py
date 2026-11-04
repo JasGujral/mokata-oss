@@ -49,9 +49,20 @@ def same_place(a: str, b: str) -> bool:
     if os.path.normcase(ra) == os.path.normcase(rb):
         return True
     try:
-        return os.path.samestat(os.stat(ra), os.stat(rb))
+        return _same_file(os.stat(ra), os.stat(rb))
     except OSError:
         return False
+
+
+def _same_file(a: os.stat_result, b: os.stat_result) -> bool:
+    """`os.path.samestat`, but only when the filesystem REALLY reports file ids. Some volumes (SMB
+    redirectors, WebDAV, VM shared folders) answer `st_ino == 0` or `st_dev == 0` for everything,
+    and then every directory on them would be "the same" as every other (0.0.27 LB-L3) — a
+    PATH entry dropped as the cwd, a runner read as "inside the repo". With no ids the answer is
+    left to the folded-string compare the callers already made."""
+    if not (a.st_ino and a.st_dev and b.st_ino and b.st_dev):
+        return False
+    return os.path.samestat(a, b)
 
 
 def _under(path: str, base: str) -> bool:
@@ -69,7 +80,7 @@ def _under(path: str, base: str) -> bool:
             return True
         if base_stat is not None:
             try:
-                if os.path.samestat(os.stat(cur), base_stat):
+                if _same_file(os.stat(cur), base_stat):
                     return True
             except OSError:
                 pass
@@ -84,6 +95,15 @@ def is_batch(name: str) -> bool:
     same file — trailing dots and spaces are stripped by the Win32 path layer (`run.cmd.`,
     `run.cmd..`, `run.bat `), so `CreateProcess` starts cmd.exe for them (0.0.27 LB4-1)."""
     return name.rstrip(". ").lower().endswith((".cmd", ".bat"))
+
+
+def is_stream(name: str) -> bool:
+    """A Windows file name that carries an NTFS alternate-data-stream suffix (`run.cmd::$DATA`,
+    `x.exe:s`): a `:` anywhere but the drive prefix. `CreateProcess` cannot start one (WinError
+    193), and `run.cmd::$DATA` is the default stream of `run.cmd` — a batch file spelled so it
+    escapes the `.cmd` check — so it is refused up front, not discovered at run time."""
+    rest = name[2:] if len(name) > 1 and name[1] == ":" and name[0].isalpha() else name
+    return ":" in rest
 
 
 #: Wrappers Windows starts through a shell/host: what `shim_in` reports.
