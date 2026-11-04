@@ -514,7 +514,7 @@ class DefinitionAndReferencesRoundTrip(_Repo):
             self.assertTrue(wait_for(srv.is_ready))
 
             d = c.get("/api/lsp/definition?path=src/app/core.py&line=8&col=16").json()
-            self.assertEqual("lsp", d["source"], d)
+            self.assertEqual("lsp", d.get("source"), d)
             self.assertEqual("fake-lsp", d["lsp"]["server"])
             self.assertEqual([("src/app/core.py", 1, 5)],
                              [(x["path"], x["line"], x["col"]) for x in d["results"]])
