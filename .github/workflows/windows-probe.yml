@@ -58,7 +58,7 @@ env:
   # Currently (0.0.27 WIN-LOCK-WAIT): the fair state lock on `msvcrt` — `test_win_lock_wait` (its
   # Windows-only test is control-gated: it SKIPS, saying why, off Windows), the O14 stress test
   # whose Windows-only 45 s allowance the probe run re-derives, and the lock/StateStore module.
-  PROBE_MODULES: "test_zz_probe_diag test_p11_ide_explorer_and_locator test_casefold_private_store test_sec_harden test_p46_change_explainer test_p28_bench_corpus test_p21_gated_merge.TheIndexLock test_p21_gated_merge.OneTargetOneBaseNothingDestroyed"
+  PROBE_MODULES: "test_zz_verifyc_diag test_p11_ide_explorer_and_locator test_casefold_private_store test_sec_harden test_p46_change_explainer test_p28_bench_corpus test_p21_gated_merge"
 
 jobs:
   probe:

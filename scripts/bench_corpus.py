@@ -149,7 +149,10 @@ def clone_pinned(url: str, sha: str, dest: str) -> str:
                                "move it aside or point --dir elsewhere")
         return have
     os.makedirs(dest, exist_ok=True)
-    for args in (["init", "-q"], ["remote", "add", "origin", url],
+    # The corpus is BYTES: a benchmark's sizes and line counts must not depend on the machine's git
+    # config (Windows' default `core.autocrlf=true` would check every text file out with CRLF).
+    for args in (["init", "-q"], ["config", "core.autocrlf", "false"], ["config", "core.eol", "lf"],
+                 ["remote", "add", "origin", url],
                  ["fetch", "-q", "--depth", "1", "origin", sha],
                  ["-c", "advice.detachedHead=false", "checkout", "-q", "--detach", "FETCH_HEAD"]):
         r = git(args, cwd=dest)
