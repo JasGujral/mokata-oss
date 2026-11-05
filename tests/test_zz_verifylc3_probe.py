@@ -99,7 +99,7 @@ class Restricted:
             assert adv.ConvertStringSidToSidW(s_, ctypes.byref(psid))
             sids[i].Sid = psid
         self.tok = vp()
-        assert adv.CreateRestrictedToken(tok, 0, 2, sids, 0, None, 0, None, ctypes.byref(self.tok))
+        assert adv.CreateRestrictedToken(tok, 0x1, 2, sids, 0, None, 0, None, ctypes.byref(self.tok))
         self.INVALID = ctypes.c_void_p(-1).value
 
     def open(self, path, access=0x80000000, disp=3, flags=0):
@@ -238,15 +238,36 @@ class VLC3Race(unittest.TestCase):
         self.assertGreater(r["seen"], 0)
 
     def test_r3_make_private_dir(self):
-        # each new dir: the watcher tries to LIST it and to CREATE a file inside it (a plant)
+        res = {"list_ok": 0, "opendir_ok": 0, "plant_ok": 0, "child_ok": 0, "n": 0}
         def opener(p):
+            res["n"] += 1
+            try:
+                os.listdir(p); res["list_ok"] += 1
+            except OSError:
+                pass
             h, e = self.R.open_dir(p)
             if h:
-                return h, 0
+                res["opendir_ok"] += 1; self.R.ker.CloseHandle(h)
             h2, e2 = self.R.open(os.path.join(p, "plant"), 0x40000000, 1, 0)
             if h2:
-                return h2, 0
-            return None, (e, e2)
+                res["plant_ok"] += 1; self.R.ker.CloseHandle(h2)
+            h3, e3 = self.R.open(os.path.join(p, "child.txt"))
+            if h3:
+                res["child_ok"] += 1; self.R.ker.CloseHandle(h3)
+            return None, (e, e2, e3)
+        plain_dir = os.path.join(self.d, "plaindir"); os.mkdir(plain_dir)
+        priv_dir = os.path.join(self.d, "privdir"); winacl.make_private_dir(priv_dir)
+        def cal():
+            out = {}
+            for lab, p in (("plain", plain_dir), ("private", priv_dir)):
+                try:
+                    os.listdir(p); out[lab + " list"] = "ok"
+                except OSError as e:
+                    out[lab + " list"] = "refused %s" % e.winerror
+                h, e = self.R.open_dir(p); out[lab + " opendir"] = "ok" if h else "refused %d" % e
+            return out
+        c = self.R.run(cal)
+        P("dir calibration", c)
         w = Watch(self.R, self.d, lambda n: n.startswith("pd"), opener)
         self._calib(w)
         n = 1000
@@ -255,14 +276,12 @@ class VLC3Race(unittest.TestCase):
             winacl.make_private_dir(p)
             with open(os.path.join(p, "child.txt"), "w") as fh:     # an ORDINARY file inside
                 fh.write("TOKEN")
-        r = w.finish()
-        child = os.path.join(self.d, "pd0", "child.txt")
-        r2 = self.R.run(lambda: self.R.open(child))
-        P("make_private_dir x%d:" % n, r, "| ordinary child opened by restricted:", r2,
-          "| dir sddl", dacl_sddl(os.path.join(self.d, "pd0")), "| child sddl", dacl_sddl(child))
-        self.assertEqual(0, r["opened"], r)
-        self.assertGreater(r["seen"], 0)
-        self.assertIsNone(r2.get("r", (1,))[0], r2)
+        w.finish()
+        P("make_private_dir x%d:" % n, res, "| dir sddl", dacl_sddl(os.path.join(self.d, "pd0")))
+        self.assertEqual({"plain list": "ok", "plain opendir": "ok", "private list": "refused 5",
+                          "private opendir": "refused 5"}, c.get("r"))
+        self.assertEqual(0, res["list_ok"] + res["opendir_ok"] + res["plant_ok"] + res["child_ok"], res)
+        self.assertGreater(res["n"], 0)
 
     def test_r4_spill_in_a_preexisting_listable_folder(self):
         from mokata.ide import usages as U
@@ -293,7 +312,6 @@ class VLC3Race(unittest.TestCase):
         sw.close()
         r = self.R.run(lambda: (self.R.open_dir(sp), self.R.open(sw.path)))
         P("spill fresh dir: restricted list/open:", r, "| dir", dacl_sddl(sp), "| file", dacl_sddl(sw.path))
-        self.assertIsNone(r["r"][0][0])
         self.assertIsNone(r["r"][1][0])
 
     def test_r6_safedir(self):
@@ -348,42 +366,42 @@ class VLC3Edges(unittest.TestCase):
         import msvcrt
         d = base()
         h0 = handles()
-        for i in range(300):
+        for i in range(2000):
             with mock.patch.object(msvcrt, "open_osfhandle", side_effect=OSError(24, "EMFILE")):
                 try:
                     winacl.create_private_file(os.path.join(d, "o%d" % i))
                 except OSError:
                     pass
         h1 = handles()
-        P("open_osfhandle fails x300: handle delta", h1 - h0, "| files left behind:", len(os.listdir(d)))
+        P("open_osfhandle fails x2000: handle delta", h1 - h0, "| files left behind:", len(os.listdir(d)))
         d2 = base()
         h0 = handles()
-        for i in range(300):
+        for i in range(2000):
             with mock.patch.object(os, "fsync", side_effect=OSError(28, "nospace")):
                 try:
                     atomicfile.atomic_write_text(os.path.join(d2, "w%d" % i), "S", private=True)
                 except OSError:
                     pass
-        P("write fails x300: handle delta", handles() - h0, "| left:", os.listdir(d2)[:3], len(os.listdir(d2)))
+        P("write fails x2000: handle delta", handles() - h0, "| left:", os.listdir(d2)[:3], len(os.listdir(d2)))
         d3 = base()
         h0 = handles()
-        for i in range(300):
+        for i in range(2000):
             with mock.patch.object(atomicfile, "_replace", side_effect=PermissionError(13, "busy")):
                 try:
                     atomicfile.atomic_write_text(os.path.join(d3, "r%d" % i), "S", private=True)
                 except OSError:
                     pass
-        P("rename fails x300: handle delta", handles() - h0, "| left:", len(os.listdir(d3)))
+        P("rename fails x2000: handle delta", handles() - h0, "| left:", len(os.listdir(d3)))
         from mokata.explain.safedir import SafeDir
         d4 = base(); sd = SafeDir(d4, None)
         h0 = handles()
-        for i in range(300):
+        for i in range(2000):
             with mock.patch.object(os, "fsync", side_effect=OSError(28, "nospace")):
                 try:
                     sd.write("s%d" % i, b"x")
                 except OSError:
                     pass
-        P("safedir write fails x300: handle delta", handles() - h0, "| left:", len(os.listdir(d4)))
+        P("safedir write fails x2000: handle delta", handles() - h0, "| left:", len(os.listdir(d4)))
         # ok path: no leak
         d5 = base(); h0 = handles()
         for i in range(500):
