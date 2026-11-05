@@ -138,10 +138,21 @@ class TheDiffViewWorks(H.IdeFlow):
         p.mouse.down()
         p.mouse.move(bb["x"] + bb["width"] - 4, bb["y"] + bb["height"] / 2, steps=8)
         p.mouse.up()
-        sel = p.evaluate("window.getSelection().toString()")
+        # What a person COPIES is the business rule. `getSelection().toString()` is not that: it is
+        # browser-dependent (Chromium 141 includes the other side's cells and the screen-reader
+        # spans there), so the test reads the text the copy event actually puts on the clipboard.
+        p.evaluate("window.__copied = null; window.addEventListener('copy', "
+                   "(e) => { window.__copied = e.clipboardData.getData('text/plain'); })")
+        self.press("ControlOrMeta+C")
+        self.until("window.__copied !== null", "the copy event")
+        sel = p.evaluate("window.__copied")
         self.assertIn("const count", sel)
-        self.assertNotIn("counter", sel, "the new side leaked into an old-side selection")
+        self.assertNotIn("counter", sel, "the new side leaked into an old-side copy")
+        self.assertNotIn("<img", sel, "the new side leaked into an old-side copy")
         self.assertNotIn("removed:", sel, "screen-reader text leaked into the copy")
+        self.assertNotIn("added:", sel, "screen-reader text leaked into the copy")
+        self.assertEqual("function total(items) {", sel.split("\n")[0])
+        self.assertEqual(4, len(sel.split("\n")), "one line per row of the old side, no other side's")
         self.assertEqual("web/app.js:1-4", p.evaluate("MK.dv.selectionCite()"))
         p.evaluate("window.getSelection().removeAllRanges()")
 

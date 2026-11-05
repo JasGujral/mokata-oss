@@ -107,6 +107,17 @@ visible write to `.git/hooks` or `.git/config` now asks for your approval.
   command the way your install named it: `/explain` after `mokata init`, `/mokata:explain` in the
   plugin.
 
+- **Split view: copying a drag on one side copies that side's code only** — no line numbers, no
+  screen-reader text and nothing from the other side, across hunks, in current Chrome and Chrome 141.
+  A cross-hunk copy names the lines it skips.
+- When you leave an image diff, mokata stops reading it from git straight away.
+- **Windows:** language servers and test re-runs are found as real programs (`.exe` through
+  `PATHEXT`) and their whole process tree is ended through a Job Object; `npm`, `npx`, `pnpm` and
+  `yarn` run through `node` and their own script, never a `.cmd`; `path:LINE` cites with a drive
+  letter, `%3A` file URIs and any spelling of `.MOKATA` are read correctly; a malformed stream name
+  is never an alias of the store.
+- A test whose runner could not start shows as **not run** in the review panel and is never recorded
+  as failed.
 ### Re-scheduled
 - **Call hierarchy from a language server** — published in the 0.0.26 notes as part of the read-only
   language server due in 0.0.27, and not in this release.
@@ -114,6 +125,18 @@ visible write to `.git/hooks` or `.git/config` now asks for your approval.
   the code graph, which covers Python only.
 
 ### Known limitations
+- **Windows test runs.** A test command that resolves only to a batch file (`mvn.cmd`, `gradlew.bat`,
+  an explicit `.cmd`/`.bat`) cannot be run by mokata: the IDE re-run is disabled and the gated merge is
+  not possible for that project, because the merge needs mokata's own suite result and merge-override
+  does not substitute for it. Set the test command to a real executable (for example
+  `node <runner.js>`), or merge that project from macOS, Linux or WSL. `run.cmd.` (trailing dot) is
+  run and recorded as failed. The gated merge's own suite run is not held in a Job Object: a process
+  the suite leaves behind can keep the run going or outlive it. A run where some tests passed and the
+  rest did not run is reported as failed.
+- **On Windows, mokata's private files** (tokens, server records, spill files) **keep the folder's
+  permissions**; they are not owner-only.
+- **Split view copy:** a drag that starts in a gap row, or a selection extended with Shift+Arrow,
+  copies both sides; a cite can include a row the selection only touched.
 - **`mokata index` is Python only.** Impact and blast radius from it do not cover Go, TypeScript,
   Rust or Java; the command now says so. The skipped count covers only javascript, go, rust and
   java, and `.pyi` / `.PY` files are counted as skipped.

@@ -16,6 +16,7 @@ Each test states the user-visible rule it protects. The rules:
 """
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -77,9 +78,14 @@ RUNNER = (
 
 def _gone(pid, within=10.0):
     """True once `pid` is dead (a zombie awaiting its reaper counts as dead)."""
-    if os.name == "nt":
-        return True
     t0 = time.time()
+    if os.name == "nt":
+        from _win_proc import tasklist_says_alive           # fail-closed: no answer = alive
+        while time.time() - t0 < within:
+            if not tasklist_says_alive(pid)[0]:
+                return True
+            time.sleep(0.1)
+        return False
     while time.time() - t0 < within:
         try:
             with open(f"/proc/{pid}/status", encoding="utf-8") as fh:
@@ -285,7 +291,18 @@ class ReRun(unittest.TestCase):
         self.c = _client(self.d)
 
     def tearDown(self):
-        self._t.cleanup()
+        # Windows will not delete a directory a process still has open, and a process that was
+        # just ended releases its working directory a moment later: retry for a generous while
+        # (the product ends the tree; this only waits out the OS releasing the handle).
+        end = time.time() + 40
+        while True:
+            try:
+                self._t.cleanup()
+                return
+            except OSError:
+                if os.name != "nt" or time.time() > end:
+                    raise
+                time.sleep(0.25)
 
     def start(self, body):
         return self.c.post("/api/review/tests/run", json={"run": RUN, **body}, headers=ORIGIN)
@@ -379,6 +396,37 @@ class ReRun(unittest.TestCase):
         self.assertTrue(_gone(helper), "the test's helper process outlived Cancel")
         nxt = self.start({"tests": ["t_ok"]})
         self.assertEqual("done", wait_job(self.c, nxt.json()["id"], timeout=30)["job"]["state"])
+
+    def test_on_windows_what_a_test_left_behind_is_ended_through_the_runners_job(self):
+        """`taskkill /T` walks the tree from a LIVE root, so once the runner has exited it reaches
+        nothing and a leftover (a server a test booted) held the project directory open. The
+        runner is put in a Job Object at spawn and the leftovers' kill terminates the JOB — also
+        when the runner is long dead — and never needs `taskkill` then. (Faked off Windows.)"""
+        from unittest import mock
+        from mokata.ide import review_context as RC
+        ended = []
+
+        class Job:
+            ok = True
+
+            def terminate(self):
+                ended.append("job")
+
+        dead = mock.Mock(pid=77)
+        dead.poll.return_value = 0                         # the runner exited long ago
+        with mock.patch("mokata.ide.review_context.os.name", "nt"), \
+                mock.patch("mokata.crg_resolve._end_tree", side_effect=lambda p: ended.append("taskkill")):
+            RC._kill_tree(dead, leftovers_only=True, job=Job())
+            self.assertEqual(["job"], ended)
+            ended.clear()
+            RC._kill_tree(dead, job=Job())                 # a cancel: the job as well, not taskkill
+            self.assertEqual(["job"], ended)
+            ended.clear()
+            bad = Job()
+            bad.ok = False                                 # no job could be made: the old route
+            RC._kill_tree(dead, job=bad)
+            RC._kill_tree(dead, leftovers_only=True, job=bad)
+            self.assertEqual(["taskkill"], ended)
 
     def test_a_test_that_leaves_a_process_behind_still_finishes(self):
         """A test whose runner exits but leaves a helper holding its output still finishes (the
@@ -682,6 +730,394 @@ class TheRendererIsVendoredAndInert(unittest.TestCase):
                 self.assertEqual(200, v.status_code, name)
                 self.assertIn("javascript", v.headers["content-type"])
             self.assertEqual(404, c.get("/static/vendor/LICENSE.mermaid.txt").status_code)
+
+
+class TheRepoDoesNotChooseTheRunner(unittest.TestCase):
+    """CI-FIX 0.0.27 round 3 (was L6). `mokata ide`'s cwd is the repo, and a bare runner name
+    (`pytest`) must be the user's — the project env's, or one on an ABSOLUTE PATH entry — never a
+    file the repo put in its own root, whether the search is `shutil.which` (cwd first on Windows)
+    or the OS's own (a relative PATH entry such as `.`)."""
+
+    @unittest.skipIf(os.name == "nt", "the planted file is a POSIX script; Windows is the finder's rule")
+    def test_a_runner_planted_in_the_repo_and_reachable_only_through_cwd_is_not_run(self):
+        from mokata.ide import review_context as RC
+        d = os.path.realpath(tempfile.mkdtemp(prefix="mk-p7-plant-"))
+        self.addCleanup(lambda: shutil.rmtree(d, True))
+        mark = os.path.join(d, "RAN")
+        _write(d, "mk-p7-planted", f"#!/bin/sh\necho x > '{mark}'\n")
+        os.chmod(os.path.join(d, "mk-p7-planted"), 0o755)
+        here = os.getcwd()
+        os.chdir(d)
+        self.addCleanup(os.chdir, here)
+        for path in (".", "", "relative/dir", d + os.sep + "..", ):
+            got = RC.run_tests(d, ["mk-p7-planted"], ["t1"], environ={"PATH": path})
+            self.assertEqual("not-run", got["tests"][0]["state"], path)
+            self.assertIn("not an executable on the project's PATH", got["tests"][0]["note"], path)
+            self.assertFalse(os.path.exists(mark), f"the repo chose the runner (PATH={path!r})")
+
+    def test_an_explicit_path_in_the_manifest_is_used_as_written(self):
+        from mokata.ide import review_context as RC
+        d = os.path.realpath(tempfile.mkdtemp(prefix="mk-p7-explicit-"))
+        self.addCleanup(lambda: shutil.rmtree(d, True))
+        got = RC.run_tests(d, [sys.executable, "-c", "import sys; sys.exit(0)", "--"], ["t1"],
+                           environ={"PATH": ""})
+        self.assertEqual("green", got["tests"][0]["state"], got)
+
+
+def _fake_npm(prefix, js_body):
+    """A global npm layout as Windows has it: `npm.cmd` (the shim) beside
+    `node_modules/npm/{package.json, bin/npm-cli.js}`."""
+    _write(prefix, "npm.cmd", "@echo off\r\nrem the shim\r\n")
+    _write(prefix, "node_modules/npm/package.json", json.dumps({"name": "npm",
+                                                                "bin": {"npm": "bin/npm-cli.js"}}))
+    _write(prefix, "node_modules/npm/bin/npm-cli.js", js_body)
+
+
+class JsAndMavenTestsOnWindows(unittest.TestCase):
+    """CI-FIX 0.0.27 round 4 (MB3-1). On Windows npm/npx/yarn/pnpm exist only as `.cmd` shims and
+    mvn only as `mvn.cmd`. The IDE never runs a shim (cmd.exe), but a JS user must still be able
+    to re-run a test: npm is run as `node npm-cli.js`. What cannot be run is said UP FRONT, in
+    true words that say what to do — and the panel never offers a run that cannot happen."""
+
+    def _root(self, cmd):
+        d = os.path.realpath(tempfile.mkdtemp(prefix="mk-p7-js-"))
+        self.addCleanup(lambda: shutil.rmtree(d, True))
+        init_repo(root=d, profile="standard", assume_yes=True, out=_silent)
+        _set_command(d, cmd)
+        return d
+
+    def _tool_dir(self, name):
+        d = os.path.realpath(tempfile.mkdtemp(prefix="mk-p7-bin-"))
+        self.addCleanup(lambda: shutil.rmtree(d, True))
+        return d
+
+    def test_maven_that_exists_only_as_a_cmd_is_refused_before_the_click_and_honestly(self):
+        from mokata.ide import review_context as RC
+        root = self._root("mvn -q test -Dtest=")
+        bindir = self._tool_dir("mvn")
+        _write(bindir, "mvn.cmd", "@echo off\r\n")
+        old = os.environ["PATH"]
+        os.environ["PATH"] = bindir
+        self.addCleanup(os.environ.__setitem__, "PATH", old)
+        got = RC.test_command(root, nt=True)
+        self.assertFalse(got["runnable"], "the panel must not offer a run that cannot happen")
+        note = got["note"]
+        self.assertIn(os.path.join(bindir, "mvn.cmd"), note, "says what it found")
+        self.assertIn(".cmd/.bat", note, "says why it will not run it")
+        self.assertIn("terminal", note, "says what the user can do")
+        self.assertNotIn("not an executable on the project's PATH", note, "the shim IS on PATH")
+
+    def test_a_tool_that_is_nowhere_says_so_and_is_not_offered(self):
+        from mokata.ide import review_context as RC
+        root = self._root("mvn test")
+        old = os.environ["PATH"]
+        os.environ["PATH"] = self._tool_dir("empty")
+        self.addCleanup(os.environ.__setitem__, "PATH", old)
+        got = RC.test_command(root, nt=True)
+        self.assertFalse(got["runnable"])
+        self.assertIn("is not an executable on the project's PATH", got["note"])
+
+    def test_an_explicit_cmd_is_refused_at_preflight_too(self):
+        from mokata.ide import review_context as RC
+        root = self._root("C:/tools/gradlew.bat test")
+        got = RC.test_command(root, nt=True)
+        self.assertFalse(got["runnable"])
+        self.assertIn(".cmd/.bat", got["note"])
+
+    def test_npm_on_windows_is_resolved_to_node_and_its_own_js_entry(self):
+        """Resolution, on any OS: `npm` found only as `npm.cmd` beside a real npm package becomes
+        `[node, .../bin/npm-cli.js]`; the shim is never in the argv; the preflight offers it."""
+        from mokata.ide import review_context as RC
+        node_dir = self._tool_dir("node")
+        node_name = "node.exe" if os.name == "nt" else "node"   # only its NAME is resolved here
+        node = os.path.join(node_dir, node_name)
+        _write(node_dir, node_name, "#!/bin/sh\n")
+        os.chmod(node, 0o755)
+        prefix = self._tool_dir("npm")
+        _fake_npm(prefix, "// npm\n")
+        path = os.pathsep.join([prefix, node_dir])
+        head, why = RC.resolve_runner(self._root("npm test --"), "npm", path, nt=True)
+        self.assertIsNone(why)
+        self.assertEqual(os.path.join(prefix, "node_modules", "npm", "bin", "npm-cli.js"),
+                         head[1], head)
+        self.assertEqual(os.path.realpath(node), os.path.realpath(head[0]))
+        self.assertFalse(any(a.lower().endswith((".cmd", ".bat")) for a in head))
+
+    def test_npm_whose_entry_is_missing_is_honest_about_both_facts(self):
+        from mokata.ide import review_context as RC
+        prefix = self._tool_dir("npm")
+        _write(prefix, "npm.cmd", "@echo off\r\n")
+        head, why = RC.resolve_runner(self._root("npm test"), "npm", prefix, nt=True)
+        self.assertIsNone(head)
+        self.assertIn("npm.cmd", why)
+        self.assertIn("JavaScript entry", why)
+        self.assertIn("terminal", why)
+
+    @unittest.skipUnless(os.name == "nt", "Windows: the real thing — node.exe and a shim-only npm")
+    def test_a_fake_npm_layout_reruns_a_test_through_node_exe(self):
+        from mokata.ide import review_context as RC
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("no Node on this machine")
+        prefix = self._tool_dir("npm")
+        mark = os.path.join(prefix, "ARGV.txt")
+        _fake_npm(prefix, "require('fs').writeFileSync(%s, process.argv.slice(2).join('|'));"
+                          "process.exit(0);\n" % json.dumps(mark))
+        root = self._root("npm test --")
+        env = {**os.environ, "PATH": os.pathsep.join([prefix, os.path.dirname(node)])}
+        got = RC.run_tests(root, ["npm", "test", "--"], ["t1"], environ=env)
+        self.assertEqual("green", got["tests"][0]["state"], got)
+        with open(mark, encoding="utf-8") as fh:
+            self.assertEqual("test|--|t1", fh.read())
+
+    @unittest.skipUnless(os.name == "nt", "Windows: the real npm of the runner's Node install")
+    def test_the_real_npm_of_this_machine_is_run_without_cmd_exe(self):
+        from mokata.ide import review_context as RC
+        if not shutil.which("node") or not shutil.which("npm"):
+            self.skipTest("no Node/npm on this machine")
+        root = self._root("npm")
+        self.assertTrue(RC.test_command(root)["runnable"], RC.test_command(root))
+        got = RC.run_tests(root, ["npm", "--version", "--"], ["t1"])
+        # `npm --version -- t1` prints the version and exits 0 — a real npm, run via node.
+        self.assertEqual("green", got["tests"][0]["state"], got)
+
+    @unittest.skipIf(os.name == "nt", "POSIX behaviour")
+    def test_on_posix_a_bare_runner_is_still_found_on_path_and_run(self):
+        from mokata.ide import review_context as RC
+        bindir = self._tool_dir("bin")
+        _write(bindir, "myrunner", "#!/bin/sh\nexit 0\n")
+        os.chmod(os.path.join(bindir, "myrunner"), 0o755)
+        root = self._root("myrunner")
+        old = os.environ["PATH"]
+        os.environ["PATH"] = bindir
+        self.addCleanup(os.environ.__setitem__, "PATH", old)
+        self.assertTrue(RC.test_command(root)["runnable"])
+        got = RC.run_tests(root, ["myrunner"], ["t1"], environ={"PATH": bindir})
+        self.assertEqual("green", got["tests"][0]["state"], got)
+
+
+class OpeningThePanelStartsNoProgram(unittest.TestCase):
+    """CI-FIX 0.0.27 round 5 (MB4-1). The Proof panel is a READ: opening it, paging it or changing
+    its filter must not start `poetry`/`pipenv` to ask where the env is (10 s each, and on Windows
+    a `poetry.exe` the repo planted would run with no click and no trust prompt). The tool is
+    asked only when a test is actually run — and then only the one the USER has on an absolute
+    PATH entry, by its absolute path."""
+
+    def _repo(self, cmd="pytest -q"):
+        d = os.path.realpath(tempfile.mkdtemp(prefix="mk-p7-poetry-"))
+        self.addCleanup(lambda: shutil.rmtree(d, True))
+        init_repo(root=d, profile="standard", assume_yes=True, out=_silent)
+        _set_command(d, cmd)
+        _write(d, "pyproject.toml", "[project]\nname = 'x'\n")
+        for var in ("VIRTUAL_ENV", "CONDA_PREFIX"):
+            if var in os.environ:
+                self.addCleanup(os.environ.__setitem__, var, os.environ.pop(var))
+        return d
+
+    def _fake_tool(self, name, log):
+        """A `poetry`/`pipenv` on the USER's PATH (outside the repo) that logs its argv[0]."""
+        bindir = os.path.realpath(tempfile.mkdtemp(prefix="mk-p7-userbin-"))
+        self.addCleanup(lambda: shutil.rmtree(bindir, True))
+        _write(bindir, name, f"#!/bin/sh\necho \"$0 $*\" >> '{log}'\nexit 1\n")
+        os.chmod(os.path.join(bindir, name), 0o755)
+        return bindir
+
+    def _path(self, *dirs):
+        old = os.environ["PATH"]
+        os.environ["PATH"] = os.pathsep.join([*dirs, "/usr/bin", "/bin"])
+        self.addCleanup(os.environ.__setitem__, "PATH", old)
+
+    @unittest.skipIf(os.name == "nt", "POSIX script stands in for the tool; Windows has its own test")
+    def test_opening_paging_and_filtering_the_panel_never_calls_poetry_or_pipenv(self):
+        from mokata.ide import review_context as RC
+        d = tempfile.mkdtemp(prefix="mk-p7-panel-")
+        self.addCleanup(lambda: shutil.rmtree(d, True))
+        plant(d, tests={"t_ok": ["AC-1"]}, red=["t_ok"])
+        _set_command(d, "pytest -q")
+        _write(d, "pyproject.toml", "[project]\nname = 'x'\n")
+        log = os.path.join(d, "..", f"tool-calls-{os.path.basename(d)}.log")
+        self.addCleanup(lambda: os.path.exists(log) and os.remove(log))
+        bindir = self._fake_tool("poetry", log)
+        _write(bindir, "pipenv", f"#!/bin/sh\necho \"$0 $*\" >> '{log}'\nexit 1\n")
+        os.chmod(os.path.join(bindir, "pipenv"), 0o755)
+        self._path(bindir)
+        c = _client(d)
+        for q in ("", "&page=2", "&status=red", "&ac=AC-1"):
+            r = c.get(f"/api/review/tests?run={RUN}{q}")
+            self.assertEqual(200, r.status_code, r.text)
+            self.assertIn("command", r.json())
+        for _ in range(3):
+            RC.test_command(d)
+        self.assertFalse(os.path.exists(log), "a tool was started by a READ")
+
+    @unittest.skipIf(os.name == "nt", "POSIX script stands in for the tool; Windows has its own test")
+    def test_a_runner_only_an_installed_tool_could_supply_is_not_declared_missing_by_a_read(self):
+        """With env discovery skipped the panel cannot know `pytest` is absent from a poetry env —
+        but only when poetry/pipenv IS installed (found without starting it). Then it offers the
+        run and says where the runner will be looked up."""
+        from mokata.ide import review_context as RC
+        d = self._repo("mk-p7-no-such-runner")
+        log = os.path.join(d, "..", f"never-{os.path.basename(d)}.log")
+        self._path(self._fake_tool("poetry", log))
+        got = RC.test_command(d)
+        self.assertTrue(got["runnable"], got)
+        self.assertIn("poetry/pipenv", got["note"])
+        self.assertFalse(os.path.exists(log), "finding the tool started it")
+
+    def test_with_neither_poetry_nor_pipenv_installed_the_read_claims_no_lookup(self):
+        """MB5-1: "looked up in the poetry/pipenv env" is a promise; with no such tool anywhere
+        on the user's PATH it is false, so the read says plainly the runner was not found."""
+        from mokata.ide import review_context as RC
+        d = self._repo("mk-p7-no-such-runner")
+        empty = os.path.realpath(tempfile.mkdtemp(prefix="mk-p7-nopath-"))
+        self.addCleanup(lambda: shutil.rmtree(empty, True))
+        old = os.environ["PATH"]
+        os.environ["PATH"] = empty
+        self.addCleanup(os.environ.__setitem__, "PATH", old)
+        got = RC.test_command(d)
+        self.assertFalse(got["runnable"], got)
+        self.assertNotIn("poetry", got["note"])
+        self.assertIn("not an executable on the project's PATH", got["note"])
+
+
+    @unittest.skipIf(os.name == "nt", "POSIX scripts")
+    def test_the_tool_is_asked_by_its_absolute_path_when_a_test_runs(self):
+        """When asking IS allowed (a run), the user's own `poetry` is found on an absolute PATH
+        entry and started by its absolute path — never the bare name."""
+        from mokata import project_env
+        d = self._repo()
+        log = os.path.join(d, "..", f"abs-{os.path.basename(d)}.log")
+        self.addCleanup(lambda: os.path.exists(log) and os.remove(log))
+        bindir = self._fake_tool("poetry", log)
+        project_env.resolve(d, None, {"PATH": bindir})
+        with open(log, encoding="utf-8") as fh:
+            first = fh.read().split()[0]
+        self.assertEqual(os.path.join(bindir, "poetry"), first)
+
+    @unittest.skipIf(os.name == "nt", "POSIX scripts")
+    def test_a_poetry_the_repo_planted_is_never_run_by_any_path(self):
+        from mokata import project_env
+        from mokata.ide import review_context as RC
+        d = self._repo()
+        mark = os.path.join(d, "PLANTED_RAN")
+        for name in ("poetry", "pipenv"):
+            _write(d, name, f"#!/bin/sh\necho x > '{mark}'\nexit 1\n")
+            os.chmod(os.path.join(d, name), 0o755)
+        here = os.getcwd()
+        os.chdir(d)                                   # `mokata ide` runs with the repo as cwd
+        self.addCleanup(os.chdir, here)
+        saved = os.environ["PATH"]
+        self.addCleanup(os.environ.__setitem__, "PATH", saved)
+        for path in (".", "", "relative/dir", d, d + os.sep + ".." + os.sep + os.path.basename(d)):
+            os.environ["PATH"] = path             # what the OS and `shutil.which` would search
+            project_env.resolve(d, None, {"PATH": path})                      # a run's lookup
+            RC.run_tests(d, ["mk-p7-none"], ["t1"], environ={"PATH": path})   # the click
+            self.assertFalse(os.path.exists(mark), f"the repo's own poetry/pipenv ran (PATH={path!r})")
+        RC.test_command(d)                                                     # the read
+        self.assertFalse(os.path.exists(mark))
+
+    @unittest.skipUnless(os.name == "nt", "Windows: CreateProcess searches the parent's cwd first")
+    def test_on_windows_a_poetry_exe_in_the_repo_is_never_run(self):
+        from mokata import project_env
+        from mokata.ide import review_context as RC
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("no Node on this machine")
+        d = self._repo()
+        shutil.copy(node, os.path.join(d, "poetry.exe"))
+        mark = os.path.join(d, "PLANTED_RAN.txt")
+        _write(d, "env", "require('fs').writeFileSync(%s, 'ran');" % json.dumps(mark))
+        here = os.getcwd()
+        os.chdir(d)
+        self.addCleanup(os.chdir, here)
+        RC.test_command(d)
+        self.assertFalse(os.path.exists(mark), "a READ ran the repo's poetry.exe")
+        project_env.resolve(d, None, dict(os.environ))
+        self.assertFalse(os.path.exists(mark), "a run's lookup ran the repo's poetry.exe")
+
+
+class TheWindowsCommandLineIsNotAShellEither(unittest.TestCase):
+    """CI-FIX 0.0.27 round 5 (MB4-2). On Windows no `cmd.exe` is ever started for a test command,
+    and a command that only `cmd.exe` would read as two commands (`&`) or escape (`^`) is refused
+    up front with the remedy — it can never run its second half."""
+
+    def _root(self, cmd):
+        d = os.path.realpath(tempfile.mkdtemp(prefix="mk-p7-cmdmeta-"))
+        self.addCleanup(lambda: shutil.rmtree(d, True))
+        init_repo(root=d, profile="standard", assume_yes=True, out=_silent)
+        _set_command(d, cmd)
+        return d
+
+    def test_a_lone_ampersand_or_caret_is_refused_on_windows_with_the_remedy(self):
+        from mokata.ide import review_context as RC
+        for cmd in ("npm test & mkdir X", "npm test ^ x", "pytest -q &mkdir X"):
+            got = RC.test_command(self._root(cmd), nt=True)
+            self.assertFalse(got["runnable"], cmd)
+            self.assertIn("shell syntax", got["note"], cmd)
+
+    def test_the_shim_refusal_reads_true_for_the_ide_and_for_the_gated_merge(self):
+        from mokata.ide import review_context as RC
+        bindir = os.path.realpath(tempfile.mkdtemp(prefix="mk-p7-mvn-"))
+        self.addCleanup(lambda: shutil.rmtree(bindir, True))
+        _write(bindir, "mvn.cmd", "@echo off\r\n")
+        head, why = RC.resolve_runner(self._root("mvn test"), "mvn", bindir, nt=True)
+        self.assertIsNone(head)
+        self.assertNotIn("test id", why)
+        self.assertIn("gated merge is not possible", why)
+        self.assertNotIn("merge-override", why, "that override cannot unblock this merge")
+        self.assertIn("real executable", why)
+        self.assertIn("macOS, Linux or WSL", why)
+        self.assertNotIn("node <path", why, "a JS remedy is not offered to Maven")
+
+
+class ATestThatNeverRanIsNeverRecordedRed(unittest.TestCase):
+    """MB5-1: a re-run whose runner could not start (not found, spawn failed, a trailing-dot
+    spelling) has no outcome. It must not enter the TDD red set, must not make the last suite
+    run read as failed, and the panel shows it as not run — it was never red."""
+
+    def test_a_click_on_a_runner_that_cannot_start_records_nothing_red(self):
+        from mokata import tdd_state
+        from mokata.ide import review_context as RC
+        from mokata.test_runs import read_test_record
+        d = os.path.realpath(tempfile.mkdtemp(prefix="mk-p7-falsered-"))
+        self.addCleanup(lambda: shutil.rmtree(d, True))
+        plant(d, tests={"t_ok": ["AC-1"]}, green=["t_ok"])
+        _set_command(d, "mk-p7-no-such-runner -q")
+        empty = os.path.realpath(tempfile.mkdtemp(prefix="mk-p7-nopath-"))
+        self.addCleanup(lambda: shutil.rmtree(empty, True))
+        before = read_test_record(d, RUN)
+        got = RC.run_tests(d, ["mk-p7-no-such-runner", "-q"], ["t_ok"], environ={"PATH": empty},
+                           on_done=lambda res, done: RC.record_rerun(d, RUN, "x", res, done))
+        self.assertEqual("not-run", got["tests"][0]["state"])
+        self.assertIsNone(got["tests"][0]["rc"])
+        self.assertEqual((0, 1), (got["failed"], got["not_run"]))
+        red, green = tdd_state.load(_store(d, RUN), RUN)
+        self.assertNotIn("t_ok", red)
+        self.assertIn("t_ok", green, "the earlier green was overwritten by a run that never ran")
+        self.assertEqual(before.get("last_suite"), read_test_record(d, RUN).get("last_suite"))
+
+    def test_record_rerun_ignores_not_run_and_keeps_ran_ones(self):
+        from mokata import tdd_state
+        from mokata.ide import review_context as RC
+        from mokata.test_runs import read_test_record
+        d = os.path.realpath(tempfile.mkdtemp(prefix="mk-p7-mixed-"))
+        self.addCleanup(lambda: shutil.rmtree(d, True))
+        plant(d, tests={"t_a": ["AC-1"], "t_b": ["AC-1"]})
+        RC.record_rerun(d, RUN, "x", [{"id": "t_a", "state": "green", "rc": 0},
+                                      {"id": "t_b", "state": "not-run", "rc": None}], True)
+        red, green = tdd_state.load(_store(d, RUN), RUN)
+        self.assertIn("t_a", green)
+        self.assertNotIn("t_b", red | green)
+        self.assertFalse(read_test_record(d, RUN)["last_suite"]["passed"],
+                         "a pass cannot be claimed with a test that did not run")
+
+    def test_the_panel_shows_a_test_that_did_not_run_as_not_run_not_red(self):
+        path = os.path.join(os.path.dirname(__file__), "..", "src", "mokata", "ide", "static",
+                            "features", "review.js")
+        with open(path, encoding="utf-8") as fh:
+            js = fh.read()
+        self.assertIn('t.state === "not-run" ? "unrun"', js)
+        self.assertNotIn('t.state === "error" ? "red"', js)
 
 
 if __name__ == "__main__":

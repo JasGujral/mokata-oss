@@ -1463,7 +1463,8 @@ class AnOversizeBundleIsSpilledNotHeldNorRebuiltInline(unittest.TestCase):
                 self.assertLess(os.path.getsize(os.path.join(bdir, n)), 64 * 1024, n)
             sp = self.SP.get(d, h)
             self.assertTrue(os.path.isfile(sp.path))
-            self.assertEqual(0o600, os.stat(sp.path).st_mode & 0o777)
+            if os.name != "nt":      # Windows has no POSIX permission bits to read back
+                self.assertEqual(0o600, os.stat(sp.path).st_mode & 0o777)
             self.assertTrue(os.path.basename(sp.path).startswith("p4-"))
             got = ST.load_bundle(d, h)
             self.assertEqual(built["blobs"]["head:src/big/f007.txt"],
@@ -1593,7 +1594,12 @@ class AnOversizeBundleIsSpilledNotHeldNorRebuiltInline(unittest.TestCase):
                 self.assertIsNone(self.SP.get(d, h1))
                 p2 = self.SP.get(d, h2).path
                 with mock.patch.object(self.SP, "IDLE_S", 0.0):
-                    time.sleep(0.01)
+                    # idle means "the clock has moved past its last use": Windows' monotonic clock
+                    # ticks every ~16 ms, so wait on the clock itself, not on a guessed sleep
+                    last = self.SP.live(d)[0].used
+                    deadline = time.monotonic() + 60
+                    while time.monotonic() <= last and time.monotonic() < deadline:
+                        time.sleep(0.005)
                     self.assertIsNone(self.SP.get(d, h2))
                 self.assertFalse(os.path.exists(p2), "an idle spill was kept")
                 three = ST.cache_bundle(d, B.build(d, B.parse_target("live")))

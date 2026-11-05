@@ -44,6 +44,10 @@ state if it is interrupted. Needs git 2.40 or newer.
 **Three tabs.** The window is now Review · Sessions · Code, with one "waiting on you" bar.
 `mokata watch --open` opens the IDE on Sessions.
 
+**Fixed on Windows and in Split view.** Copying a one-side drag copies that side's code only.
+On Windows, language servers and test re-runs run as real programs and their whole process tree is
+ended when they stop; a test whose runner could not start shows as not run, never as failed.
+
 **Honest about the index.** `mokata index` and `index_status` now say which languages are indexed
 and how many files were skipped. It indexes Python only.
 
@@ -55,6 +59,18 @@ and how many files were skipped. It indexes Python only.
   the code graph, which covers Python only.
 
 ## Known limitations
+- **Windows test runs.** A test command that resolves only to a batch file (`mvn.cmd`, `gradlew.bat`,
+  an explicit `.cmd`/`.bat`) cannot be run by mokata: the IDE re-run is disabled and the gated merge is
+  not possible for that project, because the merge needs mokata's own suite result and merge-override
+  does not substitute for it. Set the test command to a real executable (for example
+  `node <runner.js>`), or merge that project from macOS, Linux or WSL. `run.cmd.` (trailing dot) is
+  run and recorded as failed. The gated merge's own suite run is not held in a Job Object: a process
+  the suite leaves behind can keep the run going or outlive it. A run where some tests passed and the
+  rest did not run is reported as failed.
+- **On Windows, mokata's private files** (tokens, server records, spill files) **keep the folder's
+  permissions**; they are not owner-only.
+- **Split view copy:** a drag that starts in a gap row, or a selection extended with Shift+Arrow,
+  copies both sides; a cite can include a row the selection only touched.
 - **`mokata index` is Python only.** Impact and blast radius from it do not cover Go, TypeScript,
   Rust or Java; the command says so. The skipped count covers only javascript, go, rust and java, and `.pyi` / `.PY` files are counted as
   skipped.

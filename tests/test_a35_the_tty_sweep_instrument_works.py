@@ -156,17 +156,12 @@ def run_sweep(modules, extra_tree=None, stall_floor_s=STALL_FLOOR_S, stall_facto
         argv = GI.unittest_argv(sys.executable, modules,
                                 "tty-sweep prompt-reaching module derivation")
         out_path, err_path = os.path.join(tmp, "out.txt"), os.path.join(tmp, "err.txt")
-        kw = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
-              else {"start_new_session": True})
         # Output goes to FILES, not pipes: a poll loop that does not drain a pipe deadlocks the
         # child on a full buffer, and that deadlock would read as the hang this guard hunts.
         with open(out_path, "wb") as out_fh, open(err_path, "wb") as err_fh:
-            proc = subprocess.Popen(argv, cwd=_TESTS, env=env, stdin=subprocess.DEVNULL,
-                                    stdout=out_fh, stderr=err_fh, **kw)
-            job = None
-            if os.name == "nt":
-                from mokata.ide.lsp import WinJob
-                job = WinJob(proc)
+            from mokata.ide.lsp import spawn_jobbed       # Windows: in the job before it runs
+            proc, job = spawn_jobbed(argv, cwd=_TESTS, env=env, stdin=subprocess.DEVNULL,
+                                     stdout=out_fh, stderr=err_fh)
             last_n, last_t, slowest = 0, time.monotonic(), 0.0
             stalled = None
             try:
@@ -394,7 +389,10 @@ class NoTestReachesAPromptOnTheAmbientStdin(unittest.TestCase):
     def test_the_stall_limit_scales_with_the_slowest_gap_and_never_drops_below_the_floor(self):
         self.assertEqual(STALL_FLOOR_S, stall_limit(0.0))
         self.assertEqual(STALL_FLOOR_S, stall_limit(STALL_FLOOR_S / STALL_FACTOR / 2))
-        self.assertEqual(STALL_FACTOR * 50, stall_limit(50))
+        # a gap long enough that the factor, not the floor, decides (50 s x 10 is under the
+        # Windows floor of 600 s): derived from the floor, so it holds on every platform
+        gap = STALL_FLOOR_S
+        self.assertEqual(STALL_FACTOR * gap, stall_limit(gap))
         self.assertGreaterEqual(STALL_FLOOR_S, 60, "no small timeouts: the floor is generous")
 
     # ⚠ THE WHOLE-SUBSET READING LIVES IN `test_a35_...`, AND THE SPLIT IS A COST DECISION.

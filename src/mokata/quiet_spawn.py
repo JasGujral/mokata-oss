@@ -27,7 +27,7 @@ import subprocess
 
 TYPE_CHECKING = False        # `typing` costs a hook ~3 ms and is only for readers here
 if TYPE_CHECKING:
-    from typing import Dict
+    from typing import Dict, Optional
 
 
 def _windows() -> bool:
@@ -41,7 +41,7 @@ def hidden() -> Dict[str, int]:
     return {}
 
 
-def detached() -> "Dict[str, object]":
+def detached(suspended: bool = False, nt: "Optional[bool]" = None) -> "Dict[str, object]":
     """`subprocess` kwargs for a background child that must OUTLIVE its parent and show no window:
     a new session on POSIX; on Windows a new process group with its own HIDDEN console.
 
@@ -52,10 +52,15 @@ def detached() -> "Dict[str, object]":
     of the launching console's Ctrl-C/close group, so it is not taken down with its parent
     (`start_new_session` is POSIX-only and silently ignored on Windows). Used by the IDE server start
     (`ide/launch.py`), the hook drainer (`mokata_emit`, 0.0.26 O3) and the code-graph index
-    builder (0.0.26 O13)."""
-    if _windows():
+    builder (0.0.26 O13).
+
+    `suspended` adds CREATE_SUSPENDED on Windows (nothing elsewhere): the process is created but
+    does not run until the caller resumes it — `ide.lsp.spawn_jobbed` puts it in its Job Object
+    first. `nt` injects the platform for the tests."""
+    if _windows() if nt is None else nt:
         return {"creationflags": (getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
-                                  | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))}
+                                  | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                                  | (0x00000004 if suspended else 0))}
     return {"start_new_session": True}
 
 

@@ -65,10 +65,13 @@ def finder_for(*knobs: str):
     return finder
 
 
-def _exe(d, name, nt=False):
-    """An executable file `name` (+ .exe when `nt`) in `d`; returns its path."""
+def _exe(d, name, nt=None):
+    """An executable file `name` in `d`; returns its path. `nt=None` is the NATIVE spelling: with
+    `.exe` on Windows (where a file with no PATHEXT extension is not an executable — the rule the
+    finder states), bare on POSIX. `nt=True`/`False` forces one spelling (the tests that fake the
+    other platform)."""
     os.makedirs(d, exist_ok=True)
-    p = os.path.join(d, name + (".exe" if nt else ""))
+    p = os.path.join(d, name + (".exe" if (os.name == "nt" if nt is None else nt) else ""))
     with open(p, "w", encoding="utf-8") as fh:
         fh.write("#!/bin/sh\n")
     os.chmod(p, 0o755)
@@ -88,6 +91,27 @@ def _pkg(root, pkg, bin_rel, binname=None, root_is_node_modules=False, create_sc
         with open(script, "w", encoding="utf-8") as fh:
             fh.write("// server\n")
     return script
+
+
+def same_argv(a, b):
+    """Two argv lists name the same command: every element equal, paths compared the way the
+    filesystem compares them (`solargraph.EXE` from PATHEXT is the file `solargraph.exe` on
+    Windows; POSIX is exact)."""
+    return len(a) == len(b) and all(os.path.normcase(x) == os.path.normcase(y) for x, y in zip(a, b))
+
+
+def lsp_get(c, url, within=60.0):
+    """A language-server READ the way a page makes it: a question that outlasts the short sync
+    window (a cold Windows runner starting a Python server is slower than 0.3 s) is answered with
+    a job handle (202), and the page then fetches the finished answer by that handle. So: ask with
+    the widest window, and follow the handle until the answer is final. The response is returned
+    like `c.get` (`.json()`, `.status_code`)."""
+    sep = "&" if "?" in url else "?"
+    r = c.get(f"{url}{sep}sync_ms=2000")
+    end = time.monotonic() + within
+    while r.status_code == 202 and time.monotonic() < end:
+        r = c.get(f"{url}{sep}sync_ms=2000&job={r.json()['job']}")
+    return r
 
 
 def wait_for(pred, timeout=20.0, step=0.05):
@@ -169,7 +193,7 @@ class UntrustedMeansNoProcess(_Repo):
                     self.assertEqual("untrusted", body["lsp"]["state"])
                     self.assertIn("not trusted", body["lsp"]["note"])
                 popen.assert_not_called()
-            d = c.get("/api/lsp/definition?path=src/app/core.py&line=8&col=16").json()
+            d = lsp_get(c, "/api/lsp/definition?path=src/app/core.py&line=8&col=16").json()
             self.assertEqual("parse", d["symbol"])
             self.assertTrue(any(r["path"] == "src/app/core.py" and r["line"] == 1 for r in d["results"]),
                             d["results"])
@@ -503,27 +527,27 @@ class DefinitionAndReferencesRoundTrip(_Repo):
             srv = state.lsp.get("python")
             self.assertTrue(wait_for(srv.is_ready))
 
-            d = c.get("/api/lsp/definition?path=src/app/core.py&line=8&col=16").json()
-            self.assertEqual("lsp", d["source"], d)
+            d = lsp_get(c, "/api/lsp/definition?path=src/app/core.py&line=8&col=16").json()
+            self.assertEqual("lsp", d.get("source"), d)
             self.assertEqual("fake-lsp", d["lsp"]["server"])
             self.assertEqual([("src/app/core.py", 1, 5)],
                              [(x["path"], x["line"], x["col"]) for x in d["results"]])
             self.assertEqual("def parse(text):", d["results"][0]["snippet"])
 
-            refs = c.get("/api/lsp/references?path=src/app/core.py&line=1&col=5").json()
+            refs = lsp_get(c, "/api/lsp/references?path=src/app/core.py&line=1&col=5").json()
             self.assertEqual("lsp", refs["source"])
             self.assertEqual([1, 8], sorted(x["line"] for x in refs["results"]))
             self.assertTrue(all(x["path"] == "src/app/core.py" for x in refs["results"]))
 
-            hov = c.get("/api/lsp/hover?path=src/app/core.py&line=8&col=16").json()
+            hov = lsp_get(c, "/api/lsp/hover?path=src/app/core.py&line=8&col=16").json()
             self.assertIn("(function) parse", hov["hover"])
 
-            sym = c.get("/api/lsp/symbols?path=src/app/core.py").json()
+            sym = lsp_get(c, "/api/lsp/symbols?path=src/app/core.py").json()
             self.assertEqual([("parse", "function", 1), ("total", "function", 7)],
                              [(s["name"], s["kind"], s["line"]) for s in sym["results"]])
 
             self.assertTrue(wait_for(lambda: srv.diagnostics))
-            diag = c.get("/api/lsp/diagnostics?path=src/app/core.py").json()
+            diag = lsp_get(c, "/api/lsp/diagnostics?path=src/app/core.py").json()
             self.assertEqual("lsp", diag["source"])
             self.assertEqual([(8, "warning", "fake-lsp")],
                              [(x["line"], x["severity"], x["source"]) for x in diag["results"]])
@@ -608,11 +632,11 @@ class ProcessManagement(_Repo):
             state.lsp.finder = finder_for("--crash-on", "textDocument/hover", "--index-seconds", "0.1")
             self.assertEqual(200, c.post("/api/lsp/start", json={"language": "python"}, headers=ORIGIN).status_code)
             self.assertTrue(wait_for(state.lsp.get("python").is_ready))
-            hov = c.get("/api/lsp/hover?path=src/app/core.py&line=1&col=5").json()
+            hov = lsp_get(c, "/api/lsp/hover?path=src/app/core.py&line=1&col=5").json()
             self.assertEqual("graph", hov["source"])
             self.assertEqual("crashed", hov["lsp"]["state"])
             self.assertIn("fake-lsp", hov["lsp"]["note"])
-            d = c.get("/api/lsp/definition?path=src/app/core.py&line=8&col=16").json()
+            d = lsp_get(c, "/api/lsp/definition?path=src/app/core.py&line=8&col=16").json()
             self.assertEqual("lsp", d["source"])
             self.assertEqual("restarted", d["lsp"]["state"])
             self.assertEqual(1, c.get("/api/lsp").json()["servers"][0]["restarts"])
@@ -713,7 +737,8 @@ class ProcessManagement(_Repo):
         from mokata import quiet_spawn
         with mock.patch("mokata.quiet_spawn.os.name", "nt"):
             self.assertEqual({"creationflags": 0x08000000 | 0x00000200}, quiet_spawn.detached())
-        with mock.patch("mokata.ide.lsp.subprocess.Popen") as popen:
+        with mock.patch("mokata.ide.lsp.subprocess.Popen") as popen, \
+                mock.patch("mokata.ide.lsp._resume_process"):
             popen.return_value.stdin = io.BytesIO()
             popen.return_value.stdout = io.BytesIO()
             popen.return_value.stderr = io.BytesIO()
@@ -731,7 +756,10 @@ class ProcessManagement(_Repo):
             self.assertNotIn("shell", kw)
             self.assertTrue(kw.get("start_new_session") or kw.get("creationflags"), kw)
         self.assertFalse(hasattr(L, "resolve_cmd_shim"), "shim text is never parsed (decoy-REM finding)")
-        hostile = os.path.join(self.d, 'a&calc %TEMP% ^x "q" |y')
+        # `"` and `|` cannot be in a Windows file name (WinError 123), so the spelling of the
+        # hostile directory is the most hostile one the platform's file system allows.
+        hostile = os.path.join(self.d, 'a&calc %TEMP% ^x "q" |y' if os.name != "nt"
+                               else "a&calc %TEMP% ^x 'q' !y")
         node_dir = os.path.join(self.d, "nodebin")
         node = _exe(node_dir, "node", nt=os.name == "nt")
         script = _pkg(hostile, "typescript-language-server", "lib/cli.mjs")
@@ -742,7 +770,7 @@ class ProcessManagement(_Repo):
         with mock.patch.dict(os.environ, {"PATH": os.pathsep.join([decoy, node_dir]), "PATHEXT": ".COM;.EXE;.BAT;.CMD"}):
             found = L.find_server(hostile, "typescript")
         self.assertTrue(found["found"], found)
-        self.assertEqual([node, script, "--stdio"], found["argv"])
+        self.assertTrue(same_argv([node, script, "--stdio"], found["argv"]), found["argv"])
         joined = " ".join(found["argv"]).lower()
         for forbidden in ("cmd.exe", "comspec", "evil"):
             self.assertNotIn(forbidden, joined)
@@ -756,8 +784,9 @@ class ProcessManagement(_Repo):
         decoy = _exe(self.repo, "solargraph")
         _exe(self.repo, "solargraph", nt=True)
         good_dir = os.path.join(self.d, "realbin")
-        good = _exe(good_dir, "solargraph")
+        good = _exe(good_dir, "solargraph", nt=False)
         good_nt = _exe(good_dir, "solargraph", nt=True)
+        native = good_nt if os.name == "nt" else good       # what the real finder can find here
         env = {"PATH": os.pathsep.join(["", ".", self.repo, "relative/bin", good_dir])}
         old = os.getcwd()
         os.chdir(self.repo)
@@ -776,10 +805,10 @@ class ProcessManagement(_Repo):
             with open(cfg, "w", encoding="utf-8") as fh:
                 json.dump({"languages": {"ruby": {"exts": [".rb"], "id": "ruby",
                                                   "servers": [["solargraph", ["stdio"], "gem install solargraph"]]}}}, fh)
-            _exe(os.path.join(self.repo, ".venv", "bin"), "solargraph")
+            _exe(os.path.join(self.repo, ".venv", "Scripts" if os.name == "nt" else "bin"), "solargraph")
             with mock.patch.dict(os.environ, env):
                 found = L.find_server(self.repo, "ruby")
-            self.assertEqual([good, "stdio"], found["argv"])
+            self.assertTrue(same_argv([native, "stdio"], found["argv"]), found["argv"])
         finally:
             os.chdir(old)
         # a `.cmd` on a real PATH dir is skipped (it would need cmd.exe), an .exe beside it wins
@@ -798,7 +827,7 @@ class ProcessManagement(_Repo):
         yarn = os.path.join(self.d, "yarn")
         script = _pkg(yarn, "typescript-language-server", "lib/cli.mjs")
         with mock.patch.dict(os.environ, env):
-            self.assertEqual([node, script, "--stdio"], L.find_server(yarn, "typescript")["argv"])
+            self.assertTrue(same_argv([node, script, "--stdio"], L.find_server(yarn, "typescript")["argv"]))
         # pnpm: node_modules/<pkg> is a symlink into the .pnpm store
         pnpm = os.path.join(self.d, "pnpm")
         store = os.path.join(pnpm, "node_modules", ".pnpm", "typescript-language-server@4.0.0", "node_modules")
@@ -807,7 +836,7 @@ class ProcessManagement(_Repo):
         os.symlink(os.path.dirname(os.path.dirname(real)), os.path.join(pnpm, "node_modules", "typescript-language-server"))
         with mock.patch.dict(os.environ, env):
             found = L.find_server(pnpm, "typescript")
-        self.assertEqual([node, os.path.realpath(real), "--stdio"], found["argv"])
+        self.assertTrue(same_argv([node, os.path.realpath(real), "--stdio"], found["argv"]), found["argv"])
         # a bin that escapes the package is refused — and the PATH fallback is tried
         evil = os.path.join(self.d, "evil")
         _pkg(evil, "typescript-language-server", "../../../../tmp/evil.js", create_script=False)
@@ -818,13 +847,13 @@ class ProcessManagement(_Repo):
         glob_dir = os.path.join(self.d, "globalbin")
         glob = _exe(glob_dir, "typescript-language-server")
         with mock.patch.dict(os.environ, {"PATH": os.pathsep.join([node_dir, glob_dir])}):
-            self.assertEqual([glob, "--stdio"], L.find_server(evil, "typescript")["argv"])
+            self.assertTrue(same_argv([glob, "--stdio"], L.find_server(evil, "typescript")["argv"]))
             # no package at all: the global one
-            self.assertEqual([glob, "--stdio"], L.find_server(self.repo, "typescript")["argv"])
+            self.assertTrue(same_argv([glob, "--stdio"], L.find_server(self.repo, "typescript")["argv"]))
         # pyright installed with npm in the project resolves through its package too
         py = _pkg(self.repo, "pyright", "langserver.index.js", binname="pyright-langserver")
         with mock.patch.dict(os.environ, env):
-            self.assertEqual([node, py, "--stdio"], L.find_server(self.repo, "python")["argv"])
+            self.assertTrue(same_argv([node, py, "--stdio"], L.find_server(self.repo, "python")["argv"]))
 
     def test_a_path_entry_inside_the_repo_never_answers_for_a_users_server_or_for_node(self):
         """Re-verification R2: a PATH entry INSIDE the repo (`<repo>/tools`, as direnv or an npm
@@ -839,8 +868,9 @@ class ProcessManagement(_Repo):
         node = _exe(real_dir, "node")
         link_dir = os.path.join(self.d, "linkbin")
         os.makedirs(link_dir)
-        os.symlink(os.path.join(tools, "node"), os.path.join(link_dir, "node"))
-        os.symlink(os.path.join(tools, "solargraph"), os.path.join(link_dir, "solargraph"))
+        ext = ".exe" if os.name == "nt" else ""
+        os.symlink(os.path.join(tools, "node" + ext), os.path.join(link_dir, "node" + ext))
+        os.symlink(os.path.join(tools, "solargraph" + ext), os.path.join(link_dir, "solargraph" + ext))
         cfg = os.path.join(self.home, ".mokata", "lsp.json")
         os.makedirs(os.path.dirname(cfg), exist_ok=True)
         with open(cfg, "w", encoding="utf-8") as fh:
@@ -848,8 +878,8 @@ class ProcessManagement(_Repo):
                                               "servers": [["solargraph", ["stdio"], ""]]}}}, fh)
         script = _pkg(self.repo, "typescript-language-server", "lib/cli.mjs")
         with mock.patch.dict(os.environ, {"PATH": os.pathsep.join([tools, link_dir, real_dir])}):
-            self.assertEqual([good, "stdio"], L.find_server(self.repo, "ruby")["argv"])
-            self.assertEqual([node, script, "--stdio"], L.find_server(self.repo, "typescript")["argv"])
+            self.assertTrue(same_argv([good, "stdio"], L.find_server(self.repo, "ruby")["argv"]))
+            self.assertTrue(same_argv([node, script, "--stdio"], L.find_server(self.repo, "typescript")["argv"]))
         with mock.patch.dict(os.environ, {"PATH": os.pathsep.join([tools, link_dir])}):
             ruby = L.find_server(self.repo, "ruby")
             ts = L.find_server(self.repo, "typescript")
@@ -880,7 +910,7 @@ class ProcessManagement(_Repo):
             fh.write('@"%~dp0\\..\\..\\tmp\\evil.js" %*\r\n')
         with mock.patch.dict(os.environ, {"PATH": os.pathsep.join([node_dir, prefix])}):
             found = L.find_server(self.repo, "typescript")
-        self.assertEqual([node, os.path.realpath(gscript), "--stdio"], found["argv"])
+        self.assertTrue(same_argv([node, os.path.realpath(gscript), "--stdio"], found["argv"]), found["argv"])
         self.assertNotIn("evil", " ".join(found["argv"]))
 
     def test_a_node_modules_symlinked_out_of_the_repo_is_refused(self):
@@ -900,7 +930,7 @@ class ProcessManagement(_Repo):
         self.assertIn("resolves outside", found["note"])
         glob = _exe(os.path.join(self.d, "globalbin"), "typescript-language-server")
         with mock.patch.dict(os.environ, {"PATH": os.pathsep.join([node_dir, os.path.dirname(glob)])}):
-            self.assertEqual([glob, "--stdio"], L.find_server(self.repo, "typescript")["argv"])
+            self.assertTrue(same_argv([glob, "--stdio"], L.find_server(self.repo, "typescript")["argv"]))
         self.assertTrue(os.path.isfile(node))
 
     def test_the_project_venv_is_searched_before_path(self):
@@ -910,8 +940,9 @@ class ProcessManagement(_Repo):
         other = _exe(os.path.join(self.d, "pathbin"), "pylsp")
         with mock.patch.dict(os.environ, {"PATH": os.path.join(self.d, "pathbin")}):
             found = L.find_server(self.repo, "python")
-        self.assertEqual(("pylsp", exe), (found["name"], found["binary"]))
-        self.assertNotEqual(other, found["binary"])
+        self.assertEqual("pylsp", found["name"])
+        self.assertTrue(same_argv([exe], [found["binary"]]), found["binary"])
+        self.assertNotEqual(os.path.normcase(other), os.path.normcase(found["binary"]))
         self.assertEqual("ruby", L.language_of("lib/a.rb")) if False else None
 
     def test_closing_the_ide_stops_its_servers(self):
@@ -948,7 +979,7 @@ class IndexingIsAVisibleJob(_Repo):
             self.assertIn("fake-lsp indexing", idx[0]["label"])
             self.assertTrue(wait_for(lambda: "Indexing" in (state.jobs.get(idx[0]["id"]).note or "")))
             self.assertTrue(idx[0]["keep"])                 # outlives the page, like an index build
-            d = c.get("/api/lsp/definition?path=src/app/core.py&line=8&col=16").json()
+            d = lsp_get(c, "/api/lsp/definition?path=src/app/core.py&line=8&col=16").json()
             self.assertEqual("graph", d["source"])
             self.assertEqual("indexing", d["lsp"]["state"])
             self.assertEqual(idx[0]["id"], d["lsp"]["job"])
@@ -957,7 +988,7 @@ class IndexingIsAVisibleJob(_Repo):
             self.assertEqual("indexing", c.get("/api/lsp").json()["servers"][0]["state"])
             self.assertTrue(wait_for(srv.is_ready, timeout=10))
             self.assertTrue(wait_for(lambda: state.jobs.get(idx[0]["id"]).state == "done"))
-            d = c.get("/api/lsp/definition?path=src/app/core.py&line=8&col=16").json()
+            d = lsp_get(c, "/api/lsp/definition?path=src/app/core.py&line=8&col=16").json()
             self.assertEqual("lsp", d["source"])
             self.assertEqual("ready", c.get("/api/lsp").json()["servers"][0]["state"])
         finally:
@@ -1001,7 +1032,7 @@ class TheMokataEdge(_Repo):
             # the fake server only knows the documents it was handed: open the tests too
             for rel in ("tests/test_core.py", "tests/test_more.py"):
                 srv.open(os.path.join(self.repo, *rel.split("/")), "python")
-            refs = c.get("/api/lsp/references?path=src/app/core.py&line=1&col=5").json()
+            refs = lsp_get(c, "/api/lsp/references?path=src/app/core.py&line=1&col=5").json()
             self.assertEqual("lsp", refs["source"])
             edge = refs["edge"]
             tests = [r for r in refs["results"] if r["test"]]
@@ -1029,9 +1060,9 @@ class TheMokataEdge(_Repo):
                 self.assertEqual(200, c.post("/api/lsp/start", json={"language": "python"}, headers=ORIGIN).status_code)
                 srv = state.lsp.get("python")
                 self.assertTrue(wait_for(srv.is_ready))
-                c.get("/api/lsp/symbols?path=src/app/core.py")
+                lsp_get(c, "/api/lsp/symbols?path=src/app/core.py")
                 self.assertTrue(wait_for(lambda: srv.diagnostics))
-                diag = c.get("/api/lsp/diagnostics?path=src/app/core.py").json()
+                diag = lsp_get(c, "/api/lsp/diagnostics?path=src/app/core.py").json()
                 self.assertEqual([("total", ["AC-2", "AC-9"])],
                                  [(d["symbol"], d["ac"]) for d in diag["results"]])
                 self.assertEqual(["AC-2", "AC-9"], [t["ac"] for t in diag["edge"]["ac"]])
@@ -1089,7 +1120,9 @@ class ARepoNeverChoosesWhatExecutes(_Repo):
         exe = _exe(bindir, "pyright-langserver")
         with mock.patch.dict(os.environ, {"PATH": os.path.join(self.d, "nowhere")}):
             runs = L.will_run(self.repo)
-            self.assertEqual([("python", [exe, "--stdio"])], [(r["language"], r["argv"]) for r in runs])
+            self.assertEqual(["python"], [r["language"] for r in runs])
+            self.assertTrue(same_argv([exe, "--stdio"], runs[0]["argv"]), runs)
+            exe = runs[0]["argv"][0]            # the spelling the finder printed is the spelling shown
             c, state = boot(self.repo, tty=True)
             try:
                 body = c.get("/api/lsp").json()
@@ -1123,10 +1156,8 @@ class StoppingNeverHangsAndKillsTheTree(_Repo):
         with open(self.pidfile, encoding="utf-8") as fh:
             pid = int(fh.read())
         if os.name == "nt":
-            exe = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "tasklist.exe")
-            out = subprocess.run([exe, "/FI", f"PID eq {pid}", "/NH"], stdin=subprocess.DEVNULL,
-                                 capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
-            return str(pid) in out, pid
+            from _win_proc import tasklist_says_alive           # fail-closed: no answer = alive
+            return tasklist_says_alive(pid)[0], pid
         try:
             with open(f"/proc/{pid}/stat", encoding="utf-8") as fh:
                 return fh.read().rsplit(")", 1)[1].split()[0] != "Z", pid
@@ -1210,7 +1241,10 @@ class StoppingNeverHangsAndKillsTheTree(_Repo):
         self.assertTrue(h.start("python", by_human=True)["started"])
         srv = h.get("python")
         self.assertTrue(wait_for(lambda: os.path.exists(self.pidfile)))
-        self.assertEqual(srv.pgid, srv.proc.pid)
+        if os.name == "nt":                 # no process groups: the tree's handle is its Job Object
+            self.assertTrue(srv.job is not None and srv.job.ok, "no Job Object holds the tree")
+        else:
+            self.assertEqual(srv.pgid, srv.proc.pid)
         uri, _ = srv.open(os.path.join(self.repo, "src", "app", "core.py"), "python")
         t0 = time.monotonic()
         with self.assertRaises(L.ServerGone):
@@ -1282,6 +1316,7 @@ class StoppingNeverHangsAndKillsTheTree(_Repo):
         # and the Server makes that job at spawn on Windows
         made = []
         with mock.patch("mokata.ide.lsp.subprocess.Popen") as popen, \
+                mock.patch("mokata.ide.lsp._resume_process"), \
                 mock.patch("mokata.ide.lsp.WinJob", side_effect=lambda p: made.append(p) or job):
             popen.return_value.stdin = io.BytesIO()
             popen.return_value.stdout = io.BytesIO()
@@ -1411,6 +1446,214 @@ class NothingOutsideTheWorkspaceIsRead(_Repo):
         from mokata.ide.features.lsp import TRUST_KEY
         self.assertIn(":", TRUST_KEY)
         self.assertFalse(TRUST_KEY.startswith("p-"))
+
+
+class TheTreeIsInItsJobBeforeItRuns(unittest.TestCase):
+    """CI-FIX 0.0.27 round 3, H1. A server or test runner on Windows is very often a LAUNCHER (a
+    venv's `Scripts\\python.exe`, `pytest.exe`, `pylsp.exe`) that starts its real child within
+    milliseconds. Assigning the Job Object after `Popen` returned lost that race: 1 grandchild in
+    40 was in no job of ours, survived `terminate`, and (the launcher's own job allowing silent
+    breakaway) belonged to no job at all. The rule: the process is created SUSPENDED, put in the
+    job, and only then resumed — so nothing it starts can start first."""
+
+    def _spawn(self, popen_side=None, job_ok=True, resume_err=None):
+        calls = []
+        proc = mock.Mock(pid=5, _handle=77)
+        job = mock.Mock(ok=job_ok)
+
+        def popen(argv, **kw):
+            calls.append(("popen", kw.get("creationflags")))
+            return proc
+
+        def winjob(p):
+            calls.append(("job", p))
+            return job
+
+        def resume(p):
+            calls.append(("resume", p))
+            if resume_err:
+                raise resume_err
+
+        with mock.patch("mokata.ide.lsp.subprocess.Popen", side_effect=popen), \
+                mock.patch("mokata.ide.lsp.WinJob", side_effect=winjob), \
+                mock.patch("mokata.ide.lsp._resume_process", side_effect=resume):
+            try:
+                got = L.spawn_jobbed(["x"], stdin=None, nt=True)
+            except OSError as exc:
+                got = exc
+        return calls, proc, job, got
+
+    def test_the_process_is_created_suspended_assigned_to_the_job_and_only_then_resumed(self):
+        calls, proc, job, got = self._spawn()
+        self.assertEqual(["popen", "job", "resume"], [c[0] for c in calls], calls)
+        self.assertTrue(calls[0][1] & 0x4, "not created CREATE_SUSPENDED")
+        self.assertEqual(0x200 | 0x08000000, calls[0][1] & ~0x4,
+                         "its own process group and hidden console must survive")
+        self.assertEqual((proc, job), got)
+
+    def test_a_job_that_could_not_be_made_still_lets_the_process_run_and_says_so(self):
+        calls, proc, job, got = self._spawn(job_ok=False)
+        self.assertEqual(["popen", "job", "resume"], [c[0] for c in calls])
+        self.assertFalse(got[1].ok, "the caller must see that no job holds the tree")
+
+    def test_a_process_that_cannot_be_resumed_is_killed_not_left_suspended(self):
+        calls, proc, job, got = self._spawn(resume_err=OSError("refused"))
+        self.assertIsInstance(got, OSError)
+        proc.kill.assert_called()
+        job.terminate.assert_called()
+
+    def test_on_posix_it_is_a_plain_popen_with_no_job(self):
+        with mock.patch("mokata.ide.lsp.subprocess.Popen") as popen:
+            proc, job = L.spawn_jobbed(["x"], stdin=None, nt=False)
+        self.assertIsNone(job)
+        self.assertEqual({"stdin": None, "start_new_session": True}, popen.call_args.kwargs)
+
+    def _launcher_fixture(self):
+        import subprocess
+        venv = tempfile.mkdtemp(prefix="mk-launch-venv-")
+        self.addCleanup(lambda: __import__("shutil").rmtree(venv, True))
+        subprocess.run([sys.executable, "-m", "venv", venv], check=True, stdin=subprocess.DEVNULL)
+        script = os.path.join(venv, "spawn_grandchild.py")
+        with open(script, "w", encoding="utf-8") as fh:
+            fh.write("import os, subprocess, sys, time\n"
+                     "gc = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'])\n"
+                     "with open(sys.argv[1] + '.tmp', 'w') as o:\n"
+                     "    o.write('%d %d' % (os.getpid(), gc.pid))\n"
+                     "os.replace(sys.argv[1] + '.tmp', sys.argv[1])\n"
+                     "time.sleep(300)\n")
+        return venv, os.path.join(venv, "Scripts", "python.exe"), script
+
+    def _spawn_through_the_launcher(self, runs, tag):
+        """`runs` times: start the venv launcher on the grandchild script THROUGH `spawn_jobbed`,
+        wait for it to report, terminate the job. Then every launcher, real interpreter and
+        grandchild must be dead. Returns nothing; asserts."""
+        import subprocess
+        from _win_proc import tasklist_says_alive
+        venv, launcher, script = self._launcher_fixture()
+        pids = []
+        for i in range(runs):
+            pidfile = os.path.join(venv, f"{tag}{i}")
+            proc, job = L.spawn_jobbed([launcher, script, pidfile], stdin=subprocess.DEVNULL,
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.assertTrue(job.ok, "no Job Object holds the tree")
+            self.assertTrue(wait_for(lambda: os.path.exists(pidfile), timeout=120), f"run {i}: no pids")
+            with open(pidfile, encoding="utf-8") as fh:
+                pids.append((i, proc.pid, *map(int, fh.read().split())))
+            job.terminate()
+            proc.wait(timeout=60)
+        for i, launcher_pid, real, grandchild in pids:
+            for pid in (launcher_pid, real, grandchild):
+                self.assertTrue(wait_for(lambda pid=pid: not tasklist_says_alive(pid)[0], timeout=60),
+                                f"run {i}: pid {pid} outlived the job's terminate "
+                                f"(launcher {launcher_pid}, interpreter {real}, grandchild {grandchild})"
+                                f": {tasklist_says_alive(pid)[1]}")
+
+    @unittest.skipUnless(os.name == "nt", "Job Objects exist on Windows only")
+    def test_on_windows_nothing_a_launcher_starts_first_escapes_the_job(self):
+        """The real thing, through a REAL launcher: a venv's `Scripts\\python.exe` (which starts
+        the real interpreter as its child) running a script that starts a grandchild at once.
+        Sixty runs; the natural race (a runner leaked one in forty when the job was assigned
+        after Popen)."""
+        self._spawn_through_the_launcher(60, "n")
+
+    @unittest.skipUnless(os.name == "nt", "Job Objects exist on Windows only")
+    def test_on_windows_a_slow_job_assignment_cannot_let_the_launchers_child_out(self):
+        """The same, but the assignment is made SLOW (1 s) — the race lost on purpose. Assigned
+        after a running start, the launcher's child and grandchild are long started and in no job:
+        they survive `terminate` every time. Created suspended, nothing runs during the wait."""
+        real = L.WinJob
+
+        def slow(proc, *a, **k):
+            time.sleep(1.0)
+            return real(proc, *a, **k)
+
+        with mock.patch("mokata.ide.lsp.WinJob", side_effect=slow):
+            self._spawn_through_the_launcher(5, "s")
+
+
+class FileUrisAsRealServersSpellThem(unittest.TestCase):
+    """CI-FIX 0.0.27 round 3, M1. typescript-language-server, pyright and pylsp (vscode-uri) name a
+    Windows location `file:///c%3A/Users/x/a.ts` — lower-case drive, escaped colon. CPython 3.12's
+    `url2pathname` looks for the drive before it unquotes and returned `\\c:\\Users\\x\\a.ts`, a
+    path inside no repo: every definition and reference came back "outside the repository", with
+    no snippet. The fake server (`_fake_lsp_server.vscode_uri`) now speaks that dialect too, so
+    the whole path is graded, not the product against its own spelling."""
+
+    def test_every_windows_spelling_of_a_drive_is_the_same_local_path(self):
+        for uri in ("file:///c%3A/Users/x/a.ts", "file:///C%3A/Users/x/a.ts", "file:///c%3a/Users/x/a.ts",
+                    "file:///C:/Users/x/a.ts", "file:///c:/Users/x/a.ts", "file://localhost/c:/Users/x/a.ts"):
+            self.assertEqual("C:\\Users\\x\\a.ts", L.from_uri(uri, nt=True), uri)
+
+    def test_other_percent_escapes_are_decoded_once_on_both_platforms(self):
+        self.assertEqual("C:\\My Repo\\100%\\a.py", L.from_uri("file:///c%3A/My%20Repo/100%25/a.py", nt=True))
+        self.assertEqual("/tmp/My Repo/a b.py", L.from_uri("file:///tmp/My%20Repo/a%20b.py", nt=False))
+
+    def test_a_unc_share_a_host_or_a_driveless_path_is_not_local_on_windows(self):
+        for uri in ("file://evilhost/share/x.py", "file:////evilhost/share/x.py",
+                    "file:///share/x.py", "file:///c%3A%00/x", "http://x/c:/a"):
+            self.assertIsNone(L.from_uri(uri, nt=True), uri)
+
+    def test_a_location_in_the_vscode_spelling_is_inside_the_repo_with_its_snippet(self):
+        """Through `location`, with the fake's own spelling of the repo's file."""
+        from _fake_lsp_server import vscode_uri
+        root = tempfile.mkdtemp(prefix="mk-uri-")
+        self.addCleanup(lambda: __import__("shutil").rmtree(root, True))
+        os.makedirs(os.path.join(root, "src"))
+        with open(os.path.join(root, "src", "a.py"), "w", encoding="utf-8") as fh:
+            fh.write("def parse(t):\n    return t\n")
+        root = os.path.realpath(root)
+        uri = vscode_uri(L.to_uri(os.path.join(root, "src", "a.py")))
+        if os.name == "nt":
+            self.assertRegex(uri, r"^file:///[a-z]%3A/", "the fake must emit the real servers' spelling")
+        got = L.location(root, {"uri": uri, "range": {"start": {"line": 0, "character": 4},
+                                                      "end": {"line": 0, "character": 9}}}, L._Lines())
+        self.assertEqual(("src/a.py", False, "def parse(t):"),
+                         (got["path"], got["outside"], got["snippet"]), uri)
+
+    def test_the_fake_servers_answers_are_spelled_the_way_real_servers_spell_them(self):
+        from _fake_lsp_server import vscode_uri
+        self.assertEqual("file:///c%3A/Users/x/a%20b.ts", vscode_uri("file:///C:/Users/x/a%20b.ts"))
+        self.assertEqual("file:///tmp/a%20b.py", vscode_uri("file:///tmp/a%20b.py"))
+
+
+class OnlyARunnableProgramIsEverFound(unittest.TestCase):
+    """CI-FIX 0.0.27 round 3 (was L5): the default PATHEXT lists `.VBS;.JS;.WSF;.MSC`; CreateProcess
+    cannot start those and a script host must not be the answer, nor shadow a later real `.exe`."""
+
+    def test_a_script_extension_is_never_a_server_and_does_not_shadow_a_real_exe(self):
+        d1, d2 = tempfile.mkdtemp(prefix="mk-pe1-"), tempfile.mkdtemp(prefix="mk-pe2-")
+        for d in (d1, d2):
+            self.addCleanup(lambda d=d: __import__("shutil").rmtree(d, True))
+        for n in ("srv.VBS", "srv.JS", "srv.cmd", "srv.BAT", "srv.msc", "other.vbs"):
+            open(os.path.join(d1, n), "w", encoding="utf-8").close()
+        open(os.path.join(d2, "srv.EXE"), "w", encoding="utf-8").close()
+        ext = ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+        self.assertEqual(os.path.join(d2, "srv.EXE"), L.which_in("srv", [d1, d2], nt=True, pathext=ext))
+        self.assertIsNone(L.which_in("other", [d1, d2], nt=True, pathext=ext))
+        self.assertIsNone(L.which_in("other.vbs", [d1, d2], nt=True, pathext=ext), "the name itself")
+        self.assertIsNone(L.which_in("srv.js", [d1], nt=True, pathext=ext))
+
+
+class TheTasklistCheckIsFailClosed(unittest.TestCase):
+    """CI-FIX 0.0.27 round 3 (was L8): a tasklist that printed nothing or failed says nothing about
+    the process; only a successful answer that names no row for the pid is "dead"."""
+
+    def _run(self, rc, out):
+        import subprocess
+        return lambda *a, **k: subprocess.CompletedProcess(a, rc, out, "")
+
+    def test_silence_and_failure_are_not_death(self):
+        from _win_proc import tasklist_says_alive
+        self.assertTrue(tasklist_says_alive(4242, run=self._run(0, ""))[0])
+        self.assertTrue(tasklist_says_alive(4242, run=self._run(1, "ERROR: x"))[0])
+        self.assertTrue(tasklist_says_alive(4242, run=lambda *a, **k: (_ for _ in ()).throw(OSError("no")))[0])
+
+    def test_a_row_for_the_pid_is_alive_and_a_notice_without_it_is_dead(self):
+        from _win_proc import tasklist_says_alive
+        self.assertTrue(tasklist_says_alive(4242, run=self._run(0, '"python.exe","4242","Console","1","9,000 K"'))[0])
+        self.assertFalse(tasklist_says_alive(4242, run=self._run(0, "INFO: No tasks are running which match the specified criteria."))[0])
+        self.assertFalse(tasklist_says_alive(4242, run=self._run(0, '"python.exe","42420","Console","1","9,000 K"'))[0],
+                         "42420 is not 4242")
 
 
 if __name__ == "__main__":

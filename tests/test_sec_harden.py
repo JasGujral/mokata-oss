@@ -269,11 +269,12 @@ class _Ide(unittest.TestCase):
         git(self.d, "config", "commit.gpgsign", "false")
         with open(os.path.join(self.d, ".git", "config"), "a", encoding="utf-8") as fh:
             fh.write(f"# {MARK}\n")
-        write(self.d, ".git/hooks/pre-commit", f"echo {MARK}\n")
         write(self.d, ".mokata/temp_local/state/secret.json", f'{{"k": "{MARK}"}}\n')
         write(self.d, "src/app.py", "def f():\n    return 1\n")
         git(self.d, "add", "src")
         git(self.d, "commit", "-q", "-m", "init")
+        # AFTER the commit: a hook with no shebang makes git for Windows fail the commit that finds it
+        write(self.d, ".git/hooks/pre-commit", f"echo {MARK}\n")
         from starlette.testclient import TestClient
         from mokata.ide.server import AppState, build_app
         self.c = TestClient(build_app(AppState(self.d, TOKEN, PORT, None, False)), base_url=BASE,

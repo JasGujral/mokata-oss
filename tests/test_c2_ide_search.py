@@ -308,7 +308,8 @@ class TheEndpoints(unittest.TestCase):
         c = TestClient(build_app(AppState(root, "tok", 9999, None, False)),
                        base_url="http://127.0.0.1:9999")
         c.get("/pair?t=tok")
-        return c
+        from _ide_follow import Following
+        return Following(c)
 
     H = {"Origin": "http://127.0.0.1:9999"}
 
@@ -350,6 +351,8 @@ class TheEndpoints(unittest.TestCase):
         c = TestClient(build_app(AppState("", "tok", 9999, None, True)),
                        base_url="http://127.0.0.1:9999")
         c.get("/pair?t=tok")
+        from _ide_follow import Following
+        c = Following(c)
         r = c.post("/api/search", json={"q": "parse"}, headers=self.H).json()
         self.assertIs(True, r["sample"])
         self.assertTrue(r["files"])

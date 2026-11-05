@@ -24,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from contextlib import redirect_stderr, redirect_stdout
 
 import _support  # noqa: F401  (puts src/ on the path)
@@ -108,7 +109,13 @@ class ThePin(unittest.TestCase):
 
     def test_the_pinned_commit_is_what_is_checked_out_not_the_branch_tip(self):
         dest = os.path.join(self.tmp, "c1")
-        self.assertEqual(self.first, B.clone_pinned(self.url, self.first, dest))
+        # the corpus is the commit's BYTES on every machine: a git that converts line endings on
+        # checkout (Windows' stock `core.autocrlf=true`) must not change what is measured
+        hostile = os.path.join(self.tmp, "hostile.gitconfig")
+        with open(hostile, "w", encoding="utf-8") as fh:
+            fh.write("[core]\n\tautocrlf = true\n")
+        with mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": hostile}):
+            self.assertEqual(self.first, B.clone_pinned(self.url, self.first, dest))
         self.assertEqual(self.first, B.head_sha(dest))
         with open(os.path.join(dest, "a.py"), "rb") as fh:
             self.assertEqual(b"one\n", fh.read())

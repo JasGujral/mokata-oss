@@ -47,7 +47,8 @@ def run_full_suite(root: str, target: str, *, environ: Optional[Dict[str, str]] 
     """Run the full suite in the session worktree `target` and record it against the run bound to
     that worktree. Returns `{passed, exit_code, command, tree, output, recorded}`."""
     from .git_safe import Git
-    from .ide.review_context import _drive, _kill_tree, _manifest, ide_actor, test_command
+    from .ide.review_context import (_drive, _kill_tree, _manifest, _path_of, ide_actor,
+                                     resolve_runner, test_command)
     from .merge_gate import _runs_bound, find_target, tree_stamp
     from .quiet_spawn import detached
     from .repo_identity import canonical_repo_root
@@ -72,11 +73,13 @@ def run_full_suite(root: str, target: str, *, environ: Optional[Dict[str, str]] 
     base_env = dict(os.environ if environ is None else environ)
     penv = project_env.resolve(main, project_env.settings_python(man), base_env)
     run_env = project_env.activated(base_env, penv)
-    import shutil
-    argv = list(cmd["argv"])
-    path_var = next((v for k, v in run_env.items() if k.upper() == "PATH"), None)
-    exe = argv[0] if os.path.isabs(argv[0]) else shutil.which(argv[0], path=path_var)
-    argv[0] = exe or argv[0]
+    # The ONE resolver the preflight and the IDE re-run use: a bare name is found on absolute PATH
+    # entries only (never the cwd), on Windows npm/npx/pnpm/yarn run through node and their own JS
+    # entry, and a `.cmd`/`.bat` is never started (cmd.exe would re-parse the arguments).
+    head, why = resolve_runner(main, cmd["argv"][0], _path_of(run_env))
+    if head is None:
+        raise SuiteError(why or "the test command could not be resolved")
+    argv = [*head, *cmd["argv"][1:]]
     out = {"tail": bytearray(), "bytes": 0}
 
     def take(chunk: bytes) -> None:

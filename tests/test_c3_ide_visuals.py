@@ -174,7 +174,8 @@ class TheEndpoint(unittest.TestCase):
         c = TestClient(build_app(AppState(root, "tok", 9999, None, demo)),
                        base_url="http://127.0.0.1:9999")
         c.get("/pair?t=tok")
-        return c
+        from _ide_follow import Following
+        return Following(c)
 
     def test_views_bad_requests_and_the_demo(self):
         with tempfile.TemporaryDirectory() as d:

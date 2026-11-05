@@ -60,7 +60,8 @@ def _client(root: str, features=None):
     app = build_app(state) if features is None else build_app(state, features=features)
     c = TestClient(app, base_url=P0.BASE, follow_redirects=False, raise_server_exceptions=False)
     c.get(f"/pair?t={P0.TOKEN}")
-    return c
+    from _ide_follow import Following
+    return Following(c)
 
 
 def _restore_env(key, value):
@@ -229,7 +230,7 @@ class NothingIsWrittenIntoTheRepo(_Stranger):
         self.assertEqual(200, r.status_code, r.text)
         self.assertEqual(200, self.c.post("/api/context/clear", json={},
                                           headers=P0.ORIGIN).status_code)
-        self.c.get("/api/query", params={"kind": "callers", "target": "total"})
+        self.c.get("/api/query", params={"kind": "callers", "target": "total"})   # followed
         server._write_record(self.d, {"port": 1, "pid": os.getpid()})
         try:
             self.assertNothingWrittenInRepo()
