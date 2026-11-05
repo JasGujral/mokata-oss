@@ -14,13 +14,17 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e . && pip install --require-hashes -r requirements/ci.txt && pip install --require-hashes -r requirements/jsonschema.txt
-      - name: shard 2 verbose, dump every thread at 35 min
+      - name: shard 2 verbose to a FILE (no pipe), dump at 35 min, then show what is left running
         env:
           MOKATA_REQUIRE_MCP_SDK: "1"
           PYTHONUNBUFFERED: "1"
-        run: timeout -s ABRT 2100 python -X faulthandler scripts/shard_tests.py run --shard 2 --of 4 -s tests -t tests -v 2>&1 | tee shard2.log; exit ${PIPESTATUS[0]}
-      - if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: shard2-log
-          path: shard2.log
+        run: |
+          set +e
+          timeout -s ABRT 2100 python -X faulthandler scripts/shard_tests.py run --shard 2 --of 4 -s tests -t tests -v > shard2.log 2>&1 < /dev/null
+          echo "python exit: $?"
+          grep -nE "^Ran |^OK|^FAILED|^(FAIL|ERROR):" shard2.log | tail -20
+          echo "---- last 60 lines"; tail -60 shard2.log
+          echo "---- processes left"; ps -eo pid,ppid,pgid,sid,etimes,args --forest | grep -v "\[" | tail -60
+          echo "---- open fds on shard2.log"; for p in /proc/[0-9]*; do ls -l $p/fd 2>/dev/null | grep -q shard2.log && echo "$(basename $p) $(tr '\0' ' ' < $p/cmdline)"; done
+          pkill -9 -f "sleep|python" || true
+          exit 0
