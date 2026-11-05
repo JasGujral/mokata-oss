@@ -14,17 +14,20 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e . && pip install --require-hashes -r requirements/ci.txt && pip install --require-hashes -r requirements/jsonschema.txt
-      - name: shard 2 verbose to a FILE (no pipe), dump at 35 min, then show what is left running
-        env:
-          MOKATA_REQUIRE_MCP_SDK: "1"
-          PYTHONUNBUFFERED: "1"
+      - name: shard 2 as a separate user (a stray kill cannot reach the runner), to a file
         run: |
           set +e
-          timeout -s ABRT 2100 python -X faulthandler scripts/shard_tests.py run --shard 2 --of 4 -s tests -t tests -v > shard2.log 2>&1 < /dev/null
-          echo "python exit: $?"
-          grep -nE "^Ran |^OK|^FAILED|^(FAIL|ERROR):" shard2.log | tail -20
-          echo "---- last 60 lines"; tail -60 shard2.log
-          echo "---- processes left"; ps -eo pid,ppid,pgid,sid,etimes,args --forest | grep -v "\[" | tail -60
-          echo "---- open fds on shard2.log"; for p in /proc/[0-9]*; do ls -l $p/fd 2>/dev/null | grep -q shard2.log && echo "$(basename $p) $(tr '\0' ' ' < $p/cmdline)"; done
-          pkill -9 -f "sleep|python" || true
+          sudo useradd -m probe
+          chmod -R a+rwX "$GITHUB_WORKSPACE"
+          chmod a+rx /home/runner || true
+          PY=$(which python)
+          ( sudo -u probe -H env MOKATA_REQUIRE_MCP_SDK=1 PYTHONUNBUFFERED=1 PATH="$(dirname $PY):/usr/bin:/bin" \
+              timeout -s ABRT 1800 "$PY" -X faulthandler scripts/shard_tests.py run --shard 2 --of 4 -s tests -t tests -v \
+              > shard2.log 2>&1 < /dev/null; echo "probe-user exit: $?" >> shard2.log ) &
+          W=$!
+          for i in $(seq 1 40); do sleep 60; kill -0 $W 2>/dev/null || break; echo "min $i: $(grep -c ' \.\.\. ' shard2.log) tests; last: $(grep ' \.\.\. ' shard2.log | tail -1 | cut -c1-200)"; done
+          echo "---- summary"; grep -nE "^Ran |^OK|^FAILED|^(FAIL|ERROR):|probe-user exit|Fatal Python|Current thread|Thread 0x" shard2.log | tail -40
+          echo "---- last 80 lines"; tail -80 shard2.log
+          echo "---- processes of user probe"; ps -u probe -o pid,ppid,pgid,sid,etimes,stat,args --forest
+          sudo pkill -9 -u probe || true
           exit 0
