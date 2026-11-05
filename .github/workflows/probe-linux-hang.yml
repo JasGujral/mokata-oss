@@ -1,0 +1,30 @@
+name: probe-linux-hang
+on:
+  push:
+    branches: ["probe/0027-linuxhang-*"]
+permissions:
+  contents: read
+jobs:
+  tableview:
+    strategy:
+      fail-fast: false
+      matrix:
+        tree: [now, before-signal]
+        attempt: [1, 2]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - if: matrix.tree == 'before-signal'
+        run: git checkout origin/probe/0027-release-1 -- src tests
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - run: pip install --require-hashes -r requirements/e2e.txt
+      - run: python -m playwright install chromium
+      - name: full e2e
+        env:
+          MOKATA_REQUIRE_E2E: '1'
+        run: python tests/e2e_ide/run_e2e.py -v 2>&1 | grep -E "test_table_view|^Ran|^OK|^FAILED|^(ERROR|FAIL):"
