@@ -58,7 +58,7 @@ env:
   # Currently (0.0.25 B-01): the Windows cmd-window fix, observed on a real desktop —
   # `test_win_no_console_windows` (control-gated: it SKIPS, saying why, on a runner that cannot
   # show a console window), plus the flag/shim/server-light modules it stands on.
-  PROBE_MODULES: "test_zz_verifylb2_attack test_zz_verifylb_attack test_lowsb2_tree_suite_paths test_lowsb_runner_trust_and_paths test_windows_e2e_check_reads_utf8"
+  PROBE_MODULES: "test_zz_verifyb_probe test_zz_verifyb_probe2 test_zz_verifyb3_probe test_zz_verifyb3_probe2 test_zz_verifyb4_attack test_zz_verifyb5_attack test_zz_verifyb6_attack"
 
 jobs:
   probe:
