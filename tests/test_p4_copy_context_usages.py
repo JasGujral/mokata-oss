@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import re
 import os
+import pathlib
 import shutil
 import stat
 import subprocess
@@ -1144,12 +1145,12 @@ class _FakeLsp:
 
     def open(self, abspath, language_id):
         with open(abspath, encoding="utf-8") as fh:
-            return "file://" + abspath, fh.read()
+            return pathlib.Path(abspath).as_uri(), fh.read()
 
     def request(self, method, params):
         self.asked.append((method, params))
-        core = "file://" + os.path.join(self.root, "src", "app", "core.py")
-        test = "file://" + os.path.join(self.root, "tests", "test_core.py")
+        core = pathlib.Path(self.root, "src", "app", "core.py").as_uri()
+        test = pathlib.Path(self.root, "tests", "test_core.py").as_uri()
 
         def loc(uri, line, ch):
             return {"uri": uri, "range": {"start": {"line": line, "character": ch},
@@ -1157,7 +1158,7 @@ class _FakeLsp:
         return [loc(core, 0, 4),                         # the declaration itself
                 loc(core, 7, 15), loc(core, 7, 15),      # one usage, twice
                 loc(test, 0, 21), loc(test, 4, 11),
-                loc("file://" + self.outside, 3, 0)]     # outside the repository
+                loc(pathlib.Path(self.outside).as_uri(), 3, 0)]     # outside the repository
 
 
 class R2EveryBackendIsPinned(_Api):

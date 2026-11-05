@@ -374,12 +374,17 @@ class IdeFlow(unittest.TestCase):
         self.until("MK.ui.mode === %r" % view, "the %s view" % view)
 
     def open_file(self, path):
-        """Quick-open (⌘P) `path` and wait for its source in the navigate view."""
+        """Quick-open (⌘P) `path` and wait for its source in the navigate view.
+
+        ⌥-click, the palette's own "the file, not the diff" gesture: a plain ↵/click opens a CHANGED
+        file's diff, and whether the palette knows the file is changed depends on whether the change
+        list has loaded before the name was typed — a race that sent a plain click to Review on CI
+        (0.0.27: the fixtures' CSVs are uncommitted changes, so the first row became `diff`)."""
         p = self.page
         p.click("#qo-open")
         p.wait_for_selector("#qo:not([hidden])")
         p.fill("#qo-input", path)
-        p.locator("#qo-results .qo-row", has_text=path.rsplit("/", 1)[-1]).first.click()
+        p.locator("#qo-results .qo-row", has_text=path.rsplit("/", 1)[-1]).first.click(modifiers=["Alt"])
         p.wait_for_selector("#view-navigate:not([hidden])")
         self.until("!!(window.MK && MK.nav && MK.nav.path === %r)" % path, "%s to open" % path)
 

@@ -39,19 +39,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import ntpath
 import os
+import posixpath
+import re
 import subprocess
 import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
-from urllib.parse import urlsplit
-from urllib.request import url2pathname
+from urllib.parse import unquote, urlsplit
 
 from .. import __version__
 from ..errors import MokataError
 from ..knowledge import cancel as C
-from ..quiet_spawn import detached, hidden
+from ..quiet_spawn import detached, hidden, signal_group
 from ..exe_path import _under, path_dirs, which_in
 from ..repo_paths import name_of, split_path
 
@@ -199,9 +201,10 @@ def find_binary(root: str, name: str, project: bool = True) -> Optional[str]:
     return which_in(name, path_dirs(cwd=root), refuse_under=None if project else root)
 
 
-def node_on_path(root: str) -> Optional[str]:
-    """`node` from the user's PATH — never the cwd, never a copy inside the repo (R2)."""
-    return which_in("node", path_dirs(cwd=root), refuse_under=root)
+def node_on_path(root: str, environ: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """`node` from the user's PATH — never the cwd, never a copy inside the repo (R2).
+    `environ` is the environment whose PATH is read (default: this process's)."""
+    return which_in("node", path_dirs(environ, cwd=root), refuse_under=root)
 
 
 #: Built-in server name -> the npm package that ships it (`package.json` `bin`).
@@ -209,8 +212,8 @@ NODE_PACKAGES = {"typescript-language-server": "typescript-language-server",
                  "pyright-langserver": "pyright", "basedpyright-langserver": "basedpyright"}
 
 
-def _package_bin(modules: str, anchor: str, root: str,
-                 name: str) -> Tuple[Optional[List[str]], str]:
+def _package_bin(modules: str, anchor: str, root: str, name: str, pkg: Optional[str] = None,
+                 environ: Optional[Dict[str, str]] = None) -> Tuple[Optional[List[str]], str]:
     """`<modules>/<pkg>/package.json` `bin[name]` as `[node, script]`, without a shim and without
     a shell (re-verification R3, ruled). Containment holds on REALPATHS, twice (verify2 N2):
     `modules` itself must sit inside `anchor` (the repo root for a project install — so a
@@ -218,7 +221,7 @@ def _package_bin(modules: str, anchor: str, root: str,
     `modules` — pnpm's `.pnpm` store and yarn v1's hoisted tree are inside it; a package
     directory symlinked out of it, or a `bin` that climbs out (`../../..`), is refused (L4). node
     comes from the user's PATH (`node_on_path`). `.cmd` files are never read."""
-    pkg = NODE_PACKAGES.get(name)
+    pkg = pkg or NODE_PACKAGES.get(name)       # `pkg`: a non-server tool (npm, corepack…) by name
     if pkg is None:
         return None, ""
     if os.path.isdir(modules) and not _under(modules, anchor):
@@ -239,7 +242,7 @@ def _package_bin(modules: str, anchor: str, root: str,
     if not _under(script, modules) or not os.path.isfile(script):
         return None, (f"{pkg}/package.json: bin {rel!r} resolves outside {modules} "
                       f"({script}) — refused")
-    node = node_on_path(root)
+    node = node_on_path(root, environ)
     if not node:
         return None, f"{pkg} is installed in {modules} but node is not on PATH"
     return [node, script], ""
@@ -250,17 +253,19 @@ def _node_package_bin(root: str, name: str) -> Tuple[Optional[List[str]], str]:
     return _package_bin(os.path.join(root, "node_modules"), root, root, name)
 
 
-def _global_node_package_bin(root: str, name: str) -> Tuple[Optional[List[str]], str]:
+def _global_node_package_bin(root: str, name: str, pkg: Optional[str] = None,
+                             environ: Optional[Dict[str, str]] = None
+                             ) -> Tuple[Optional[List[str]], str]:
     """A GLOBAL npm install the user made, found through PATH without reading its shim: npm's
     Windows prefix is the PATH directory itself (`%APPDATA%\\npm\\x.cmd` beside
     `%APPDATA%\\npm\\node_modules\\<pkg>`), so each absolute PATH entry outside the repo is
     asked for `<entry>/node_modules/<pkg>/package.json`. (On POSIX the global bin is a symlink
     `which_in` already finds.)"""
     why = ""
-    for d in path_dirs(cwd=root):
+    for d in path_dirs(environ, cwd=root):
         if _under(d, root):
             continue
-        head, w = _package_bin(os.path.join(d, "node_modules"), d, root, name)
+        head, w = _package_bin(os.path.join(d, "node_modules"), d, root, name, pkg, environ)
         if head is not None:
             return head, ""
         why = why or w
@@ -319,13 +324,29 @@ def to_uri(path: str) -> str:
     return Path(os.path.abspath(path)).as_uri()
 
 
-def from_uri(uri: str) -> Optional[str]:
+def from_uri(uri: str, nt: Optional[bool] = None) -> Optional[str]:
     """A `file:` URI's local path. A URI with a HOST (`file://evilhost/share/x`, a UNC path on
-    Windows that would open SMB to that host) is not local: None."""
+    Windows that would open SMB to that host) is not local: None.
+
+    The path is percent-DECODED first, then read as a path. Real Windows servers (vscode-uri:
+    typescript-language-server, pyright) spell a drive as `file:///c%3A/Users/x` — lower-case
+    letter, escaped colon — and CPython 3.12's `url2pathname` looks for the drive BEFORE it
+    unquotes, so it returned `\\c:\\Users\\x`, a path inside no repo. `nt` injects the platform
+    for the tests. On Windows: `/c:/x`, `/C:/x` and `/c%3A/x` all give `C:\\x`; a path with no drive
+    letter, or one that starts `//` (a UNC share spelled as a path), is not a local file: None."""
+    is_nt = (os.name == "nt") if nt is None else nt
     parts = urlsplit(uri)
     if parts.scheme != "file" or (parts.netloc and parts.netloc != "localhost"):
         return None
-    return os.path.normpath(url2pathname(parts.path))
+    path = unquote(parts.path)
+    if "\0" in path:
+        return None
+    if not is_nt:
+        return posixpath.normpath(path)
+    m = re.match(r"^[/\\]?([A-Za-z]):([/\\].*)?$", path)
+    if not m:
+        return None
+    return ntpath.normpath(m.group(1).upper() + ":" + (m.group(2) or "/"))
 
 
 def utf16_col(line: str, col1: int) -> int:
@@ -433,6 +454,55 @@ class WinJob:
             pass
 
 
+def _resume_process(proc: Any) -> None:
+    """Let a process created CREATE_SUSPENDED run: `NtResumeProcess` on its handle (Popen drops
+    the primary thread's handle, so there is no thread to `ResumeThread`). ctypes only. Raises
+    OSError when Windows refuses."""
+    import ctypes
+    from ctypes import wintypes
+    ntdll = ctypes.WinDLL("ntdll")
+    ntdll.NtResumeProcess.argtypes = [wintypes.HANDLE]
+    ntdll.NtResumeProcess.restype = ctypes.c_long
+    status = ntdll.NtResumeProcess(int(proc._handle))
+    if status != 0:
+        raise OSError(f"NtResumeProcess failed: NTSTATUS {status & 0xFFFFFFFF:#x}")
+
+
+def spawn_jobbed(argv: Sequence[str], stdin: Any, nt: Optional[bool] = None,
+                 **popen_kw: Any) -> "tuple[subprocess.Popen, Optional[WinJob]]":
+    """Start `argv` — in its own session / process group, with no console window (`detached()`) —
+    so that it, and everything it ever starts, is in OUR Job Object from its very first
+    instruction. POSIX: a plain Popen (`start_new_session` makes the group); the job is None.
+    Windows: the process is created CREATE_SUSPENDED, assigned to a new KILL_ON_JOB_CLOSE job (no
+    breakaway of any kind is allowed), and only then resumed. Assigning AFTER a running start lost
+    a race (1 in 40 on a real runner): a launcher — a venv's `Scripts\\python.exe`, `pytest.exe`,
+    `pylsp.exe` — starts its real child within milliseconds, and a child that started first is in
+    no job of ours, so `terminate` never reached it.
+    If the job could not be made (`job.ok` False) the process is still resumed and the caller's
+    fallback (`taskkill /F /T` from the live leader, before it exits) is all there is: that
+    fallback cannot reach what a leader left behind AFTER it died. Raises OSError (the process
+    killed first) if it cannot be resumed. `nt` injects the platform for the tests."""
+    is_nt = (os.name == "nt") if nt is None else nt
+    proc = subprocess.Popen(list(argv), stdin=stdin, **popen_kw,
+                            **detached(suspended=is_nt, nt=is_nt))
+    if not is_nt:
+        return proc, None
+    job = WinJob(proc)
+    resumed = False
+    try:
+        _resume_process(proc)
+        resumed = True
+    finally:
+        if not resumed:                         # never leave a suspended process behind
+            job.terminate()
+            try:
+                proc.kill()
+                proc.wait(timeout=STOP_GRACE_S)
+            except (OSError, subprocess.SubprocessError):
+                pass
+    return proc, job
+
+
 def _kill_tree(proc: Any, pgid: Optional[int] = None, job: Optional[WinJob] = None) -> None:
     """Kill `proc` and everything it started — ALSO after `proc` itself is already dead
     (re-verification R1: a crashed leader's children survived). POSIX: `killpg(pgid)` with the
@@ -456,7 +526,7 @@ def _kill_tree(proc: Any, pgid: Optional[int] = None, job: Optional[WinJob] = No
             import signal
             if pgid is not None:                # None: the group was already killed (verify2 N1)
                 try:
-                    os.killpg(pgid, signal.SIGKILL)
+                    signal_group(pgid, signal.SIGKILL)   # never 0/1/our own group (0.0.27 CI)
                 except (ProcessLookupError, PermissionError, OSError):
                     pass
         if proc.poll() is None:
@@ -508,14 +578,12 @@ class Server:
         # Its OWN process group / session (verification M1): stopping kills the whole tree
         # (tsserver under typescript-language-server, proc-macro-srv under rust-analyzer, `go`
         # under gopls), not only the direct child. No shell is involved anywhere (M3).
-        self.proc = subprocess.Popen(self.argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=subprocess.PIPE, cwd=self.root, close_fds=True,
-                                     **detached())   # own session / group, hidden console
+        # Windows: created suspended, put in the tree's Job Object, THEN resumed (`spawn_jobbed`) —
+        # a launcher's first child is in the job too.
+        self.proc, self.job = spawn_jobbed(
+            self.argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            cwd=self.root, close_fds=True)   # own session / group, hidden console
         self.pgid = self.proc.pid if os.name != "nt" else None     # its session's id, kept
-        if os.name == "nt":
-            # R1: the tree's handle on Windows — taken before `initialize`, i.e. before a server
-            # has been asked anything that would make it start a child of its own.
-            self.job = WinJob(self.proc)
         self._stop_readers = threading.Event()
         threading.Thread(target=self._read_loop, daemon=True,
                          name=f"mokata-lsp-{self.language}").start()
@@ -1258,6 +1326,6 @@ def diagnostics_of(root: str, srv: Server, abspath: str, lines: _Lines) -> List[
 __all__ = ["ALLOWED", "ALLOWED_REQUESTS", "ALLOWED_NOTIFICATIONS", "WRITE_METHODS", "READ_ONLY",
            "IDLE_S", "MAX_CRASHES", "CRASH_WINDOW_S", "MethodRefused", "ServerGone",
            "ServerError", "Server", "Host", "languages", "language_of", "language_id",
-           "find_binary", "find_server", "path_dirs", "which_in", "will_run", "to_uri", "from_uri",
+           "find_binary", "find_server", "spawn_jobbed", "path_dirs", "which_in", "will_run", "to_uri", "from_uri",
            "utf16_col", "char_col", "location", "hover_text", "symbols_flat", "diagnostics_of",
            "source_text"]

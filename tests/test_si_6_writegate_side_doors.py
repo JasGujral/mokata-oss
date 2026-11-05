@@ -2753,7 +2753,11 @@ class TestZeroBypass(unittest.TestCase):
         # GIF frame walker (`imagediff.gif_extent` / `_Seq`) and the file/git chunk streams add 9
         # receiver edges, all reads of an in-memory buffer or a read-only file/pipe; none reaches a
         # write, so `productive` below is unchanged.
-        self.assertEqual(graph.receiver_calls, 216,
+        # 216 -> 217 AT 0.0.27 CI-FIX round 2 (winlsp), re-derived from `_write_closure()` (not
+        # summed): exactly 1 new receiver edge, `review_context.run_tests` calling `job.terminate()`
+        # on the `WinJob` it just built (a Windows Job Object handle: TerminateJobObject/CloseHandle,
+        # no file write); `productive` below is unchanged.
+        self.assertEqual(graph.receiver_calls, 217,
                          "rule (e)'s resolution count moved; re-derive its yield before trusting "
                          "any number in the audit report that depends on it")
         productive = sorted({caller for caller, _ln, target in graph.receiver_edges

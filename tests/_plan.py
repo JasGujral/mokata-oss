@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-import _support  # noqa: F401  (puts src/ on the path)
+import _srcpath  # noqa: F401  (puts src/ on the path; NOT the provisioning gate)
 
 from mokata.plan_tasks import TASKS_KEY, Task, seal
 

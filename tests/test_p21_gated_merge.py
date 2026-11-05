@@ -583,6 +583,7 @@ class TheIndexLock(unittest.TestCase):
                     lock.commit_index(tmp)
                 self.assertIn(b"original", open(os.path.join(self.gd, "index"), "rb").read())
                 self.assertEqual("m2", ML.read_record(ML.lock_path(self.gd))[0]["merge"])
+        lock.release()      # the refused commit left the lock held; Windows cannot delete an open file
 
 
 class StaleLocksAreProvenNotGuessed(unittest.TestCase):
@@ -948,7 +949,19 @@ class OneTargetOneBaseNothingDestroyed(_Merge):
         _git(case, "update-index", "--add", "--cacheinfo", "100644," + blob + ",readme.md")
         _git(case, "commit", "-qm", "a path that differs from README.md only by case")
         self.assertIn(MG.CASE, {b["code"] for b in MG.plan_merge(self.main, case).blocked})
-        bad = self.session(name="w", sid="S5", run="R5", files={"aux.txt": "x\n"})
+        bad = self.session(name="w", sid="S5", run="R5")
+        # Windows' git refuses the name `aux.txt` outright - not `git add`, not `update-index` - so a
+        # commit that carries it can only come from another OS. Build that tree with plumbing
+        # (`mktree` does not check names), exactly as such a commit arrives over a fetch.
+        blob = subprocess.run(["git", "-C", bad, "hash-object", "-w", "--stdin"], input=b"x\n",
+                              capture_output=True, check=True).stdout.strip()
+        tree = subprocess.run(["git", "-C", bad, "ls-tree", "-z", "HEAD"], capture_output=True,
+                              check=True).stdout + b"100644 blob " + blob + b"\taux.txt\0"
+        new_tree = subprocess.run(["git", "-C", bad, "mktree", "-z"], input=tree,
+                                  capture_output=True, check=True).stdout.decode().strip()
+        commit = _git(bad, "commit-tree", new_tree, "-p", "HEAD", "-m",
+                      "a path Windows cannot hold").strip()
+        _git(bad, "update-ref", "HEAD", commit)
         self.assertIn(MG.UNPORTABLE, {b["code"] for b in MG.plan_merge(self.main, bad, nt=True).blocked})
         self.assertNotIn(MG.UNPORTABLE, {b["code"] for b in MG.plan_merge(self.main, bad, nt=False).blocked})
 
@@ -1141,6 +1154,104 @@ class OneGateEverySurface(_Merge):
         from mokata.ide.contract import route_index
         merge = [r for k, r in route_index().items() if "/api/worktree/merge" in k][0]
         self.assertIn('"started"', json.dumps(merge), "the merge route never starts a job")
+
+class TheMergeRunsTheTestCommandTheWayThePreflightSaysItDoes(_Merge):
+    """CI-FIX 0.0.27 round 5 (MB4-2). The gated merge's full-suite run and the IDE's Proof panel
+    answer ONE question — can this test command be started, and how — with ONE resolver. On
+    Windows that means: a bare name is found on absolute PATH entries only; npm/npx/pnpm/yarn run
+    through node and their own JS entry; a `.cmd`/`.bat` (mvn.cmd, gradlew.bat) is never started
+    and is said so, with the way past it; and nothing is ever handed to cmd.exe."""
+
+    def command(self, cmd):
+        mf = os.path.join(self.main, ".mokata", "manifest.json")
+        with open(mf, encoding="utf-8") as fh:
+            data = json.load(fh)
+        data["settings"]["baseline"]["test_command"] = cmd
+        with open(mf, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+
+    def path(self, *dirs):
+        old = os.environ["PATH"]
+        os.environ["PATH"] = os.pathsep.join(dirs)
+        self.addCleanup(os.environ.__setitem__, "PATH", old)
+
+    def tool_dir(self):
+        d = tempfile.mkdtemp(prefix="mk-p21-tools-")
+        self.addCleanup(lambda: __import__("shutil").rmtree(d, True))
+        return os.path.realpath(d)
+
+    def windows_path(self, prefix):
+        import shutil
+        node, git = shutil.which("node"), shutil.which("git")
+        if not node:
+            self.skipTest("no Node on this machine")
+        return (prefix, os.path.dirname(node), os.path.dirname(git),
+                os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "System32"))
+
+    def fake_npm(self, prefix, mark):
+        _write(prefix, "npm.cmd", "@echo off\r\necho CMD>> \"%s\"\r\n" % mark)
+        _write(prefix, "node_modules/npm/package.json",
+               json.dumps({"name": "npm", "bin": {"npm": "bin/npm-cli.js"}}))
+        _write(prefix, "node_modules/npm/bin/npm-cli.js",
+               "require('fs').appendFileSync(%s, 'JS|' + process.argv.slice(2).join('|') + '\\n');"
+               "process.exit(0);\n" % json.dumps(mark))
+
+    @unittest.skipIf(os.name == "nt", "POSIX script")
+    def test_a_bare_runner_on_the_users_path_is_started_by_its_absolute_path(self):
+        bindir = self.tool_dir()
+        mark = os.path.join(bindir, "ARGV0")
+        _write(bindir, "mk-runner", f"#!/bin/sh\necho \"$0\" > '{mark}'\nexit 0\n")
+        os.chmod(os.path.join(bindir, "mk-runner"), 0o755)
+        self.command("mk-runner")
+        self.path(bindir, "/usr/bin", "/bin")
+        wt = self.session()
+        res = MS.run_full_suite(self.main, wt, environ={"PATH": os.environ["PATH"]})
+        self.assertTrue(res["passed"], res)
+        with open(mark, encoding="utf-8") as fh:
+            self.assertEqual(os.path.join(bindir, "mk-runner"), fh.read().strip())
+
+    @unittest.skipUnless(os.name == "nt", "Windows: npm.cmd + the npm package layout, real node.exe")
+    def test_npm_runs_through_node_in_the_merge_suite_never_through_its_cmd_shim(self):
+        prefix = self.tool_dir()
+        mark = os.path.join(prefix, "M.txt")
+        self.fake_npm(prefix, mark)
+        self.path(*self.windows_path(prefix))
+        self.command("npm test")
+        wt = self.session()
+        res = MS.run_full_suite(self.main, wt)
+        self.assertTrue(res["passed"], res)
+        with open(mark, encoding="utf-8") as fh:
+            self.assertEqual("JS|test\n", fh.read().replace("\r\n", "\n"), "ran through cmd.exe")
+
+    @unittest.skipUnless(os.name == "nt", "Windows: a batch-only runner")
+    def test_a_batch_only_runner_is_refused_honestly_and_the_way_past_it_is_named(self):
+        prefix = self.tool_dir()
+        mark = os.path.join(prefix, "M.txt")
+        _write(prefix, "mvn.cmd", "@echo off\r\necho MVN>> \"%s\"\r\nexit /b 0\r\n" % mark)
+        self.path(*self.windows_path(prefix))
+        self.command("mvn -q test")
+        wt = self.session()
+        with self.assertRaises(MS.SuiteError) as caught:
+            MS.run_full_suite(self.main, wt)
+        why = str(caught.exception)
+        self.assertIn("mvn.cmd", why)
+        self.assertIn("gated merge is not possible", why)
+        self.assertNotIn("merge-override", why)
+        self.assertIn("macOS, Linux or WSL", why)
+        self.assertNotIn("test id", why)
+        self.assertFalse(os.path.exists(mark), "the batch file was started")
+
+    @unittest.skipUnless(os.name == "nt", "Windows: cmd.exe's `&`")
+    def test_a_second_command_after_an_ampersand_never_runs(self):
+        prefix = self.tool_dir()
+        self.fake_npm(prefix, os.path.join(prefix, "M.txt"))
+        self.path(*self.windows_path(prefix))
+        injected = os.path.join(prefix, "INJECTED_DIR")
+        self.command("npm test & mkdir " + injected)
+        wt = self.session()
+        with self.assertRaises(MS.SuiteError):
+            MS.run_full_suite(self.main, wt)
+        self.assertFalse(os.path.exists(injected), "cmd.exe ran the second command")
 
 
 if __name__ == "__main__":

@@ -33,14 +33,15 @@ import os
 import re
 import queue
 import shlex
-import shutil
 import subprocess
 import threading
 import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..knowledge.cancel import cancelled, checkpoint, kill_on_cancel, report
-from ..quiet_spawn import detached, hidden
+from ..exe_path import path_dirs, which_in
+from ..quiet_spawn import hidden
+from .lsp import spawn_jobbed
 from .server import BadRequest
 
 #: ACs per page and tests per AC when the page does not say (paging, not a cap: `page` walks all).
@@ -59,6 +60,9 @@ _TEST_ID = re.compile(r"^[\w./\\:\[\]=+,@#~][\w./\\:\[\]=+,@#~-]{0,299}$")
 #: (`&&`, pipes, redirects, `;`, backticks, `$(`) is refused with the remedy — never run through
 #: `sh -c`.
 _SHELLY = re.compile(r"(&&|\|\||[|;<>`]|\$\()")
+#: What `cmd.exe` also reads as syntax and a POSIX split does not: a lone `&` (a second command),
+#: `^` (its escape) and a line break. Refused on Windows even though no cmd.exe is ever started.
+_SHELLY_NT = re.compile(r"[&^\r\n]")
 _HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 STATUS = ("green", "red", "unrun")
@@ -267,7 +271,82 @@ def _manifest(root: str) -> Tuple[Any, str]:
         return None, str(exc)[:300]
 
 
-def test_command(root: str) -> Dict[str, Any]:
+#: A JS runner's own JavaScript entry: name -> the npm packages (global installs) whose `bin` has
+#: it. On Windows these tools exist as `.cmd` shims only; the entry run by `node` is the same
+#: program without cmd.exe. (corepack ships `pnpm` and `yarn` entries.)
+JS_RUNNERS = {"npm": ("npm",), "npx": ("npm",), "pnpm": ("pnpm", "corepack"),
+              "yarn": ("yarn", "corepack")}
+
+
+def _path_of(env: Dict[str, str]) -> Optional[str]:
+    return next((v for k, v in env.items() if k.upper() == "PATH"), None)     # Win: "Path"
+
+
+def _shim_in(dirs: List[str], name: str) -> Optional[str]:
+    """The `.cmd`/`.bat` that is the only thing named `name` on these directories, if any."""
+    for d in dirs:
+        for ext in (".cmd", ".bat"):
+            cand = os.path.join(d, name + ext)
+            if os.path.isfile(cand):
+                return cand
+    return None
+
+
+def resolve_runner(root: str, name: str, path_var: Optional[str],
+                   nt: Optional[bool] = None) -> Tuple[Optional[List[str]], Optional[str]]:
+    """`(argv head, None)` when `name` can be started WITHOUT a shell, else `(None, why)` — a why
+    that is true and says what to do. A bare name is found by the product's finder (absolute PATH
+    entries, never the repo); on Windows, where npm/npx/pnpm/yarn are `.cmd` shims, the head is
+    `[node.exe, <the tool's own JS entry>]` found as the LSP finder finds node servers. A `.cmd`/
+    `.bat` is never run (cmd.exe would parse the test id and the repo's files). An explicit path is
+    used as written, unless it is such a shim."""
+    from .lsp import _global_node_package_bin
+    nt = (os.name == "nt") if nt is None else nt
+    bare = os.path.basename(name) == name and not os.path.isabs(name)
+    if not bare:
+        if nt and name.lower().endswith((".cmd", ".bat")):
+            return None, _shim_why(name, name, None)
+        return [name], None
+    dirs = path_dirs({"PATH": path_var or ""}, cwd=root)
+    exe = which_in(name, dirs, nt=nt)
+    if exe:
+        return [exe], None
+    if not nt:
+        return None, _not_found(name)
+    shim = _shim_in(dirs, name)
+    env = {"PATH": path_var or ""}
+    tried = ""
+    for pkg in JS_RUNNERS.get(name, ()):
+        head, w = _global_node_package_bin(root, name, pkg, env)
+        if head is not None:
+            return head, None
+        tried = tried or w
+    if shim is None:
+        return None, _not_found(name)
+    return None, _shim_why(name, shim, name in JS_RUNNERS, tried)
+
+
+def _not_found(name: str) -> str:
+    return f"`{name}` is not an executable on the project's PATH"
+
+
+def _shim_why(name: str, shim: str, js: Optional[bool], tried: str = "") -> str:
+    """Why a Windows batch file is not started — the same words for the IDE re-run and the gated
+    merge's full-suite run, so it says neither "test id" nor "IDE"."""
+    base = os.path.basename(shim)
+    return (f"`{name}` is a Windows batch file ({shim}) and mokata never runs a .cmd/.bat — "
+            f"cmd.exe would re-parse the command line"
+            + (f"; its own JavaScript entry (run through node) was not found either"
+               + (f" ({tried})" if tried else "") if js else "")
+            + f". mokata cannot run this project's tests on Windows, so a gated merge is not "
+              f"possible here: it needs the suite's result and {base} is never run. Set "
+              f"`settings.baseline.test_command` to a real executable"
+            + (" (for example `node <path to the runner's .js>`)" if js else "")
+            + ", or merge this project from macOS, Linux or WSL. Run the tests yourself in a "
+              "terminal meanwhile")
+
+
+def test_command(root: str, nt: Optional[bool] = None) -> Dict[str, Any]:
     """`{configured, text, argv, runnable, note}` — the project's own test command, and whether
     the IDE can run it WITHOUT a shell."""
     from ..baseline import baseline_command
@@ -281,7 +360,7 @@ def test_command(root: str) -> Dict[str, Any]:
                 "note": "no test command set — set `settings.baseline.test_command` "
                         "(`mokata config set baseline.test_command \"pytest -q\"`); mokata "
                         "never guesses one"}
-    if _SHELLY.search(cmd):
+    if _SHELLY.search(cmd) or ((os.name == "nt" if nt is None else nt) and _SHELLY_NT.search(cmd)):
         return {"configured": True, "text": cmd, "argv": [], "runnable": False,
                 "note": "the test command uses shell syntax (&&, |, ;, redirects) — the IDE runs "
                         "a test without a shell; put the runner alone in "
@@ -294,6 +373,27 @@ def test_command(root: str) -> Dict[str, Any]:
     if not argv:
         return {"configured": True, "text": cmd, "argv": [], "runnable": False,
                 "note": "the test command is empty"}
+    from .. import project_env
+    penv_env = dict(os.environ)
+    # A READ never starts a program: no `poetry`/`pipenv` is asked where the env is (the panel
+    # opening is not a click). So a runner missing from the base PATH is not "known missing" in a
+    # project whose env a tool could still supply — only what is certain is refused.
+    penv = project_env.resolve(root, project_env.settings_python(man), penv_env, ask_tools=False)
+    run_env = project_env.activated(penv_env, penv)
+    head, why = resolve_runner(root, argv[0], _path_of(run_env), nt)
+    if head is None and why == _not_found(argv[0]) and penv is None and (
+            os.path.exists(os.path.join(root, "pyproject.toml"))
+            or os.path.exists(os.path.join(root, "Pipfile"))) and any(
+            which_in(tool, path_dirs({"PATH": _path_of(penv_env)}, cwd=root), nt=nt,
+                     refuse_under=root) for tool in ("poetry", "pipenv")):
+        # (`which_in` only looks: no process is started. The claim is made only when a tool that
+        # could supply the env is installed — otherwise it is the plain "not found" below.)
+        return {"configured": True, "text": cmd, "argv": argv, "runnable": True,
+                "note": f"`{argv[0]}` is not on the base PATH; it is looked up in the project's "
+                        f"poetry/pipenv environment when a test runs (the panel starts no tool to "
+                        f"ask). Each test runs as `{cmd} <test id>`"}
+    if head is None:
+        return {"configured": True, "text": cmd, "argv": argv, "runnable": False, "note": why}
     return {"configured": True, "text": cmd, "argv": argv, "runnable": True,
             "note": "each test runs as `" + cmd + " <test id>` in the project's env"}
 
@@ -327,12 +427,18 @@ def record_rerun(root: str, run_id: str, command: str, results: List[Dict[str, A
     """Write an IDE re-run into the run's test record (`test_runs.record_test_run`, the record the
     Stop gate reads) with its provenance — ruled 2026-10-28: it counts as evidence and is always
     told apart from an agent run. Each test RED or GREEN by its own exit; the run "passed" only
-    when every test passed AND the run completed (a cancelled run never reads as passing)."""
+    when every test passed AND the run completed (a cancelled run never reads as passing).
+    A test that never RAN (`not-run`: the runner could not start) is not an outcome — never RED,
+    never in the record; a job in which nothing ran records nothing."""
     from ..test_runs import record_test_run
-    outcome = {r["id"]: r["state"] == "green" for r in results}
-    codes = [r.get("rc") for r in results]
+    ran = [r for r in results if r["state"] in ("green", "red")]
+    if not ran:                  # nothing ran (could not start): there is no outcome to record
+        return {}
+    outcome = {r["id"]: r["state"] == "green" for r in ran}
+    codes = [r.get("rc") for r in ran]
     bad = next((c for c in codes if c != 0), 0)
-    return record_test_run(root, run_id, passed=complete and all(outcome.values()),
+    return record_test_run(root, run_id, passed=complete and all(outcome.values())
+                           and len(ran) == len(results),
                            command=command, results=outcome, source="ide",
                            actor=ide_actor(), exit_code=bad if isinstance(bad, int) else -1)
 
@@ -357,19 +463,26 @@ _POLL_S = 0.1
 _DRAIN_IDLE_S = 1.0
 
 
-def _kill_tree(proc: Any, leftovers_only: bool = False) -> None:
+def _kill_tree(proc: Any, leftovers_only: bool = False, job: Any = None) -> None:
     """End the runner's whole tree. POSIX: SIGKILL to its process group (its pid, as it leads a
-    new session). Windows: `taskkill /F /T` by absolute path (`crg_resolve._end_tree`, the 0.0.26
-    helper). `leftovers_only`: the runner has already exited — end what it left in its group.
-    Never raises."""
+    new session). Windows: the runner's Job Object (`lsp.spawn_jobbed`: the runner is created suspended, put in the job, then resumed) — it holds the
+    tree whether or not the runner still lives, so what a test left behind after the runner
+    exited is ended too (`taskkill /T` needs a LIVE root to walk from, so it reaches nothing then:
+    the leftover held the project directory open and could not be deleted). Only when no job could
+    be made does it fall back to `taskkill /F /T` (`crg_resolve._end_tree`) for a live runner.
+    `leftovers_only`: the runner has already exited — end what it left in its group. Never
+    raises."""
     if os.name == "nt":
-        if not leftovers_only:
+        if job is not None and job.ok:
+            job.terminate()
+        elif not leftovers_only:
             from ..crg_resolve import _end_tree
             _end_tree(proc)
         return
     import signal
+    from ..quiet_spawn import signal_group
     try:
-        os.killpg(proc.pid, signal.SIGKILL)
+        signal_group(proc.pid, signal.SIGKILL)          # never 0/1/our own group (0.0.27 CI)
     except (ProcessLookupError, PermissionError, OSError):
         pass
     if not leftovers_only:
@@ -409,11 +522,16 @@ def run_tests(root: str, argv: List[str], ids: List[str],
     env_line = project_env.describe(penv) + (f" (manifest unreadable, `settings.python` not "
                                              f"applied: {problem})" if problem else "")
     run_env = project_env.activated(base_env, penv)
-    # The runner as the PROJECT's env finds it (its bin/ first on PATH): `pytest` is the venv's,
-    # and on Windows `npm` resolves to npm.CMD, which CreateProcess cannot find by itself.
-    path_var = next((v for k, v in run_env.items() if k.upper() == "PATH"), None)  # Win: "Path"
-    exe = argv[0] if os.path.isabs(argv[0]) else shutil.which(argv[0], path=path_var)
-    argv = [exe or argv[0], *argv[1:]]
+    # The runner as the PROJECT's env finds it (its bin/ first on PATH): `pytest` is the venv's.
+    # The product's own finder (`exe_path`): absolute PATH entries only, never the cwd — which is
+    # the repo — and on Windows only a real `.exe`/`.com`, never a `.cmd` shim (cmd.exe).
+    path_var = _path_of(run_env)
+    # An explicit path (`/abs/pytest`, `./gradlew`: the manifest's own words) is used as written;
+    # a BARE name is found only by the finder — and when it finds nothing the run does not start
+    # (handing the bare name to Popen would let the OS search `.` or a relative PATH entry,
+    # which is the repo).
+    head, not_found = resolve_runner(root, argv[0], path_var)
+    argv = [*(head or [argv[0]]), *argv[1:]]
     out = {"tail": bytearray(), "bytes": 0}
     results: List[Dict[str, Any]] = []
 
@@ -436,17 +554,26 @@ def run_tests(root: str, argv: List[str], ids: List[str],
             take(f"$ {' '.join(argv)} {tid}\n".encode("utf-8"))
             emit(f"running {tid}")
             try:
-                proc = subprocess.Popen([*argv, tid], cwd=root, env=run_env,  # nosec B603 argv
-                                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                        stderr=subprocess.STDOUT, **detached())
+                # Windows: suspended, into the tree's Job Object, then resumed — a launcher's
+                # first child (venv python.exe, pytest.exe) is in the job from its first instruction.
+                if not_found:
+                    raise OSError(not_found)
+                proc, job = spawn_jobbed([*argv, tid], cwd=root, env=run_env,  # nosec B603 argv
+                                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                         stderr=subprocess.STDOUT)
             except OSError as exc:
-                results.append({"id": tid, "state": "error", "rc": None,
-                                "seconds": 0.0, "note": f"could not start: {exc}"[:300]})
+                results.append({"id": tid, "state": "not-run", "rc": None,
+                                "seconds": 0.0,
+                                "note": (f"could not start: {exc}")[:300]})
                 if on_test:
-                    on_test(tid, "error", time.time())
+                    on_test(tid, "not-run", time.time())
                 emit(f"{tid}: could not start")
                 continue
-            rc = _drive(proc, take, lambda: emit(f"running {tid}"))
+            try:
+                rc = _drive(proc, take, lambda: emit(f"running {tid}"), job)
+            finally:
+                if job is not None:
+                    job.terminate()         # releases the handle; a no-op once the tree is ended
             st = "green" if rc == 0 else "red"
             results.append({"id": tid, "state": st, "rc": rc,
                             "seconds": round(time.time() - t0, 2)})
@@ -460,10 +587,12 @@ def run_tests(root: str, argv: List[str], ids: List[str],
     return {"tests": results, "command": " ".join(argv), "env": env_line,
             "output": out["tail"].decode("utf-8", "replace"), "output_bytes": out["bytes"],
             "passed": sum(1 for r in results if r["state"] == "green"),
-            "failed": sum(1 for r in results if r["state"] != "green")}
+            "failed": sum(1 for r in results if r["state"] == "red"),
+            "not_run": sum(1 for r in results if r["state"] == "not-run")}
 
 
-def _drive(proc: Any, take: Callable[[bytes], None], tick: Callable[[], None]) -> int:
+def _drive(proc: Any, take: Callable[[bytes], None], tick: Callable[[], None],
+           job: Any = None) -> int:
     """Read one runner's output until its pipe ends, watching the cancel flag between reads (the
     read is on its own thread, so a Cancel never waits on it). Returns the runner's exit code;
     raises `Cancelled` — after ending the runner's whole tree — when the job is cancelled."""
@@ -476,7 +605,7 @@ def _drive(proc: Any, take: Callable[[bytes], None], tick: Callable[[], None]) -
     try:
         while True:
             if cancelled():
-                _kill_tree(proc)
+                _kill_tree(proc, job=job)
                 checkpoint()                       # raises Cancelled: the job ends NOW
             try:
                 chunk = pipe.get(timeout=_POLL_S)
@@ -496,17 +625,17 @@ def _drive(proc: Any, take: Callable[[bytes], None], tick: Callable[[], None]) -
                 # worker) is ended too, so the pipe reaches EOF and the lane is free; anything that
                 # escaped the group cannot hold the job: the dead run's pipe is drained until quiet.
                 rc = proc.returncode
-                _kill_tree(proc, leftovers_only=True)
+                _kill_tree(proc, leftovers_only=True, job=job)
             elif rc is not None:
                 idle += 1
                 if idle * _POLL_S >= _DRAIN_IDLE_S:
                     break
         rc = proc.wait() if rc is None else rc
-        _kill_tree(proc, leftovers_only=True)      # nothing a test started outlives its run
+        _kill_tree(proc, leftovers_only=True, job=job)      # nothing a test started outlives its run
         return rc
     finally:
         if proc.poll() is None:                    # an exception mid-read: never leave it running
-            _kill_tree(proc)
+            _kill_tree(proc, job=job)
         reader.join(_DRAIN_IDLE_S)                 # the tree is dead: its pipe ends at once
         if not reader.is_alive() and proc.stdout is not None:
             proc.stdout.close()
