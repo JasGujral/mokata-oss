@@ -1,0 +1,109 @@
+{
+  "schemas": {
+    "P4Handle": {
+      "type": "object", "required": ["job", "kind", "label", "state"],
+      "properties": {"job": {"type": "string"}, "kind": {"type": "string", "enum": ["usages.find", "copy.context"]},
+                     "label": {"type": "string"}, "state": {"type": "string"},
+                     "done": {"type": ["integer", "null"]}, "total": {"type": ["integer", "null"]},
+                     "unit": {"type": "string"}, "note": {"type": "string"}}
+    },
+    "P4Definition": {
+      "type": "object", "required": ["path", "line", "name", "kind", "qual", "id", "col", "graph"],
+      "properties": {"path": {"type": "string"}, "line": {"type": "integer"}, "end": {"type": ["integer", "null"]},
+                     "name": {"type": "string"}, "kind": {"type": "string"}, "qual": {"type": ["string", "null"]},
+                     "id": {"type": ["string", "null"]}, "col": {"type": "integer"}, "graph": {"type": "boolean"},
+                     "graph_why": {"type": "string"}}
+    }
+  },
+  "routes": [
+    {
+      "path": "/api/ref", "method": "GET", "kind": "json",
+      "params": {"query": {"path": "a repo-relative name", "lo": "1-based first line", "hi": "1-based last line (default lo)",
+                           "ref": "instead: a ref (path:line / symbol id) to read back"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"type": "object", "required": ["sample", "ref", "path", "lines", "symbol", "note"],
+          "properties": {"sample": {"type": "boolean"}, "ref": {"type": "string"}, "path": {"type": "string"},
+                         "lines": {"type": ["array", "null"]}, "note": {"type": "string"},
+                         "symbol": {"anyOf": [{"type": "null"}, {"$ref": "#/schemas/P4Definition"}]}}}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"query": {"path": "src/app/core.py", "lo": "2"}, "status": 200},
+                 {"query": {"ref": "src/app/core.py#total"}, "status": 200},
+                 {"query": {"path": "../outside.py", "lo": "1"}, "status": 400},
+                 {"query": {"path": "src/app/core.py", "lo": "0"}, "status": 400},
+                 {"query": {"path": "src/app/core.py", "lo": "1"}, "status": 200, "demo": true}]
+    },
+    {
+      "path": "/api/usages", "method": "POST", "kind": "action",
+      "params": {"body": {"path": "a repo-relative name", "line": "a 1-based line inside the definition",
+                          "ref": "instead: a ref (path:line / symbol id)", "mode": "'lexical' for the word scan",
+                          "job": "the job this page waited for: its answer's head"}},
+      "unprobed": {"200": "the finished answer's head {id, total, symbol, backend, basis, label, files, tests, code, outside, truncated, definitions, candidates, ...} — re-asked with `job` (tests/test_p4_copy_context_usages.py covers it)"},
+      "responses": {
+        "202": {"media": "json", "schema": {"$ref": "#/schemas/P4Handle"}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}},
+        "409": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"body": {"path": "src/app/core.py", "line": 1}, "status": 202},
+                 {"body": {}, "status": 400},
+                 {"body": {"path": "src/app/core.py", "line": 1}, "status": 409, "demo": true}]
+    },
+    {
+      "path": "/api/usages/page", "method": "GET", "kind": "read",
+      "params": {"query": {"id": "the answer's id", "after": "the cursor [outside, path, line, col] (JSON)", "limit": "rows (<= 500)"}},
+      "unprobed": {"200": "{rows, first, next, total, stale, id} (a malformed cursor is 400) — needs a finished answer (tests/test_p4_copy_context_usages.py)"},
+      "responses": {
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}},
+        "409": {"media": "json", "schema": {"$ref": "#/schemas/Error"}},
+        "410": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"query": {"id": "nope"}, "status": 410},
+                 {"query": {"id": "nope", "after": "[1]"}, "status": 400},
+                 {"query": {"id": "nope"}, "status": 409, "demo": true}]
+    },
+    {
+      "path": "/api/usages/discard", "method": "POST", "kind": "action",
+      "params": {"body": {"id": "the answer's id (this page lets go of it)", "all": "true: the page is leaving — release every result it owns or waits for"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"type": "object", "required": ["discarded"], "properties": {"discarded": {"type": "boolean"}}}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"body": {"id": "nope"}, "status": 200}, {"body": {"all": true}, "status": 200}, {"body": {}, "status": 400}]
+    },
+    {
+      "path": "/api/copy-context", "method": "POST", "kind": "action",
+      "params": {"body": {"path": "a repo-relative name", "lo": "first line", "hi": "last line", "job": "the job this page waited for"}},
+      "unprobed": {"200": "{id, shapes: {full, summary: {bytes, tokens, replaced, sensitive}}, cut, lexical, complete, radii, acs, acs_why, ...} — re-asked with `job` (tests/test_p4_copy_context_usages.py)"},
+      "responses": {
+        "202": {"media": "json", "schema": {"$ref": "#/schemas/P4Handle"}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}},
+        "409": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"body": {"path": "src/app/core.py", "lo": 7, "hi": 8}, "status": 202},
+                 {"body": {"path": "src/app/core.py"}, "status": 400},
+                 {"body": {"path": "src/app/core.py", "lo": 1}, "status": 409, "demo": true}]
+    },
+    {
+      "path": "/api/copy-context/text", "method": "GET", "kind": "read",
+      "params": {"query": {"id": "the answer's id", "shape": "full | summary", "offset": "byte offset"}},
+      "unprobed": {"200": "{text, offset, next, size} — needs a finished answer (tests/test_p4_copy_context_usages.py)"},
+      "responses": {
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}},
+        "409": {"media": "json", "schema": {"$ref": "#/schemas/Error"}},
+        "410": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"query": {"id": "nope", "shape": "full"}, "status": 410},
+                 {"query": {"id": "nope", "shape": "all"}, "status": 400},
+                 {"query": {"id": "nope", "shape": "full"}, "status": 409, "demo": true}]
+    },
+    {
+      "path": "/api/copy-context/discard", "method": "POST", "kind": "action",
+      "params": {"body": {"id": "the answer's id (this page lets go of it)", "all": "true: the page is leaving — release every result it owns or waits for"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"type": "object", "required": ["discarded"], "properties": {"discarded": {"type": "boolean"}}}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"body": {"id": "nope"}, "status": 200}, {"body": {"all": true}, "status": 200}, {"body": {}, "status": 400}]
+    }
+  ]
+}

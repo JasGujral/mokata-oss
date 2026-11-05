@@ -16,7 +16,7 @@ the AST/grep floor (A3) — never a silent wrong answer.
 from __future__ import annotations
 
 import warnings
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Callable, Dict, List, Optional, Protocol
 
 from ..errors import failure_class_of
 from .query import (BASIS_LEXICAL, BASIS_STRUCTURAL, QUERY_KINDS, BackendError,
@@ -106,11 +106,26 @@ class CodeReviewGraphBackend(GraphBackend):
         except Exception:                      # a client that misbehaves is not a refusal
             return True
 
+    def blast_radius_full(self, target: str, depth: int = 1,
+                          checkpoint: Optional[Callable[[], None]] = None) -> QueryResult:
+        """0.0.27 P4 (R2-1) — the graph's blast radius with the FULL budget: a client that has
+        one (`CodeReviewGraphClient.blast_radius_full`: no time budget, no expansion cap, the
+        shared reference ceiling) walks it; one that has none answers it as `query` does."""
+        full = getattr(self.client, "blast_radius_full", None)
+        if not callable(full):
+            return self.query("blast_radius", target, depth=depth)
+        return self._answer("blast_radius", target,
+                            lambda: full(target, root=self.root, depth=depth))
+
     def query(self, kind: str, target: str, depth: int = 1) -> QueryResult:
         if kind not in QUERY_KINDS:
             raise ValueError(f"unknown query kind '{kind}'; one of {QUERY_KINDS}")
+        return self._answer(kind, target,
+                            lambda: self.client.query(kind, target, root=self.root, depth=depth))
+
+    def _answer(self, kind: str, target: str, ask: Callable[[], Any]) -> QueryResult:
         try:
-            rows = self.client.query(kind, target, root=self.root, depth=depth)
+            rows = ask()
         except GraphIndexUnbuilt as unbuilt:
             raise GraphIndexUnbuilt(self.index_unbuilt_note(unbuilt)) from unbuilt
         except GraphNotIndexed:

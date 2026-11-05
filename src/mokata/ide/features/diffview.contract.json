@@ -1,0 +1,61 @@
+{
+  "routes": [
+    {
+      "path": "/api/diff/intraline", "method": "POST", "kind": "action",
+      "params": {"body": {"pairs": "[[old line text, new line text], ...] — the changed line pairs in view",
+                          "job": "the job this page waited for (its finished answer)",
+                          "sync_ms": "0 = answer the job's handle at once"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"$ref": "#/schemas/IntraLine"}},
+        "202": {"media": "json", "schema": {"$ref": "#/schemas/JobHandle"}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"body": {"pairs": [["    count = 1", "    counter = 1"], ["a\tb", "a    b"]]}, "status": 200},
+                 {"body": {"pairs": [["x = 1", "x = 2"]], "sync_ms": 0}, "status": 202},
+                 {"body": {"pairs": [["only one side"]]}, "status": 400},
+                 {"body": {"pairs": "nope"}, "status": 400}]
+    },
+    {
+      "path": "/api/diff/context", "method": "GET", "kind": "json",
+      "params": {"query": {"path": "the file (its NEW path for a rename)", "start": "first line (1-based, new side)",
+                           "count": "lines wanted (at most 500 a page)", "rev": "read the new side at this git revision",
+                           "snap": "or: from this snapshot", "session": "or: from this session's worktree",
+                           "sync_ms": "how long to wait before answering the job's handle"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"$ref": "#/schemas/ContextPage"}},
+        "202": {"media": "json", "schema": {"$ref": "#/schemas/JobHandle"}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"query": {"path": "src/app/core.py", "start": "2", "count": "3"}, "status": 200},
+                 {"query": {"path": "src/app/core.py", "start": "1", "count": "3", "rev": "HEAD"}, "status": 200},
+                 {"query": {"path": "src/app/core.py", "start": "1", "sync_ms": "0"}, "status": 202},
+                 {"query": {"path": "../outside.py"}, "status": 400},
+                 {"query": {"path": "src/app/core.py", "rev": "--output=x"}, "status": 400},
+                 {"query": {"path": "src/app/core.py", "start": "0"}, "status": 400},
+                 {"query": {"path": "src/app/core.py", "rev": "HEAD", "snap": "x"}, "status": 400}]
+    }
+  ],
+  "schemas": {
+    "IntraLine": {
+      "type": "object", "required": ["pairs", "tokens", "cost", "job", "sample"],
+      "properties": {
+        "pairs": {"type": "array", "items": {"type": "object", "required": ["old", "new", "basis", "tokens"],
+          "properties": {"old": {"type": "array"}, "new": {"type": "array"}, "tokens": {"type": "integer"},
+                         "basis": {"enum": ["same", "token", "span"]}}}},
+        "tokens": {"type": "integer"}, "cost": {"type": "integer"}, "job": {"type": "null"},
+        "sample": {"type": "boolean"}
+      }
+    },
+    "ContextPage": {
+      "type": "object", "required": ["path", "start", "lines", "eof", "next", "state", "sample"],
+      "properties": {
+        "path": {"type": "string"}, "start": {"type": "integer"},
+        "lines": {"type": "array", "items": {"type": "string"}},
+        "cut": {"type": "array", "items": {"type": "array", "items": {"type": "integer"}}},
+        "eof": {"type": "boolean"}, "next": {"type": ["integer", "null"]},
+        "state": {"enum": ["ok", "unavailable"]}, "note": {"type": "string"},
+        "sample": {"type": "boolean"}
+      }
+    }
+  }
+}

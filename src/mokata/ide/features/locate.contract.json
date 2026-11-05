@@ -1,0 +1,18 @@
+{
+  "routes": [
+    {
+      "path": "/api/locate", "method": "POST", "kind": "action",
+      "params": {"body": {"text": "path, path:line or path:line:col (absolute paths and Windows drive letters allowed; the file must be inside the workspace)"}},
+      "responses": {
+        "200": {"media": "json", "schema": {
+          "type": "object",
+          "required": ["path", "line", "col"],
+          "properties": {"path": {"type": "string"}, "line": {"type": "number"},
+                         "col": {"type": ["number", "null"]}}}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"body": {"text": "src/app/core.py:2:5"}, "status": 200},
+                 {"body": {"text": "/etc/passwd:1"}, "status": 400}]
+    }
+  ]
+}

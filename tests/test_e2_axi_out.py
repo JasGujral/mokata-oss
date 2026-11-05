@@ -182,7 +182,8 @@ class TestEmptyStateLint(unittest.TestCase):
                 (R.recall(path=d, subject="nope"), "items"),
                 (R.skills(path=d, query="zzz-no-such"), "skills"),
                 (R.skills(path=d), "skills"),
-                (R.suggest(path=d), "suggestions"),
+                (R.suggest(path=d), "hints"),                    # 0.0.27 P14: derived
+                (R.suggest(path=d, spec=True), "suggestions"),   # as you described it
                 (R.sessions(path=d), "sessions"),
                 (R.plan_list(path=d), "plans"),
                 (R.session_list(path=d), "bundles"),

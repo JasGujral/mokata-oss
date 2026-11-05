@@ -128,9 +128,10 @@ def cmd_query(args: argparse.Namespace) -> int:
         print(f"  ({result.note})")
     if result.kind == "blast_radius" and result.truncated and not full:
         # 0.0.26 O7 — a cut radius offers the on-request full walk instead of leaving it there.
-        from ..knowledge.ast_backend import BLAST_RADIUS_FULL_TIME_BUDGET_S as ceiling
+        from ..knowledge.ast_backend import BLAST_RADIUS_FULL_MAX_REFS as ceiling
         print(f"  → the default bound cut this radius; `mokata query blast_radius {result.target}"
-              f" --depth {args.depth} --full` walks it with the full budget (hard ceiling {ceiling:g} s)")
+              f" --depth {args.depth} --full` walks it with the full budget (no time limit — "
+              f"Ctrl-C stops it; at most {ceiling:,} references)")
     # GRAPH-FIRST-IMPACT (d) — a lexical blast radius names itself degraded, with ITS remedy.
     from ..knowledge.layer import impact_degrade
     deg = impact_degrade(layer, result)
@@ -192,33 +193,74 @@ def cmd_spec_check(args: argparse.Namespace) -> int:
     return 0 if outcome.proceeded else 1
 
 
+#: `ci-check` exits 0 on a verdict (pass, absent or --no-fail'd block), 1 on a block and this when
+#: it COULD NOT RUN: a base git cannot resolve is not an empty diff, and a check that did not run
+#: must not look like one that passed. `--no-fail` does not soften it.
+REFUSED_EXIT = 2
+
+
+def base_refusal(base: str) -> str:
+    """The plain-words refusal, shared by stderr, the PR comment and the action's step summary."""
+    return (f"mokata could not resolve the base `{base}` to a git diff, so NOTHING was checked "
+            f"(this is not a pass). Fix: check the ref name, and make sure the base is fetched. "
+            f"In GitHub Actions a shallow checkout is the usual cause: use `actions/checkout` "
+            f"with `fetch-depth: 0`, or run `git fetch origin <base-branch>` first. Or pass "
+            f"--files.")
+
+
 def cmd_ci_check(args: argparse.Namespace) -> int:
     # Stage 58 — mokata as a CI / PR check: run the completeness gate + spec-awareness over a PR's
     # changed files. READ-ONLY (surfaces blocks; never posts to GitHub). DEGRADE-CLEAN: nothing to
-    # check → PASS (never false-block). Reuses the existing engines (no logic duplicated).
+    # check → that leg is ABSENT (never a pass, never a false block). Reuses the existing engines (no logic duplicated).
     from .. import ci_check as CI
     files = _split_csv(args.files)
     if args.base and not files:
         files = _git_changed_files(args.path, args.base)
+        if files is None:
+            text = base_refusal(args.base)
+            print("error: " + text, file=sys.stderr)
+            if args.comment_file:           # the PR comment names the ref and the fix too
+                try:
+                    with open(args.comment_file, "w", encoding="utf-8", newline="\n") as fh:
+                        fh.write("## ➖ mokata PR check — **NOT RUN**\n\n" + text + "\n")
+                except OSError as exc:
+                    print(f"warning: could not write comment file: {exc}", file=sys.stderr)
+            return REFUSED_EXIT
     symbols = _split_csv(args.symbols) if args.symbols else None
     result = CI.run_ci_check(args.path, files, changed_symbols=symbols)
     print(result.render(ascii_only=args.ascii))
-    if args.comment_file:
+    # G3-EVIDENCE — links point at this repo on GitHub at the checked-out SHA, and only when the
+    # base is https (from --link-base, else GITHUB_SERVER_URL + GITHUB_REPOSITORY).
+    import os
+    from ..ci_evidence import LinkContext
+    head = getattr(args, "link_sha", "") or ""
+    if not head and not os.environ.get("GITHUB_SHA"):
+        from ..session_worktrees import _git
+        code, out = _git(args.path, "rev-parse", "HEAD")
+        head = out.strip() if code == 0 else ""
+    link = LinkContext.from_env(os.environ, link_base=getattr(args, "link_base", "") or "",
+                                head_sha=head)
+    for dest, render, what in ((args.comment_file, result.comment_body, "comment"),
+                               (getattr(args, "evidence_file", None), result.evidence_markdown,
+                                "evidence")):
+        if not dest:
+            continue
         try:
-            with open(args.comment_file, "w", encoding="utf-8") as fh:
-                fh.write(result.comment_body() + "\n")
+            with open(dest, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(render(link) + "\n")
         except OSError as exc:
-            print(f"warning: could not write comment file: {exc}", file=sys.stderr)
+            print(f"warning: could not write {what} file: {exc}", file=sys.stderr)
     # `--no-fail` makes it report-only (the workflow still posts the comment but the job stays
-    # green); the default fails the check on a real block so it gates the PR.
+    # green) -- on a verdict only; a refusal (exit 2, above) is never softened. The default fails
+    # the check on a real block so it gates the PR.
     if args.no_fail:
         return 0
     return result.exit_code
 
 
 def _git_changed_files(root: str, base: str) -> list:
-    r"""The files changed since `base` (`git diff --name-only base...HEAD`). Degrade-clean — any
-    git failure yields an empty list (→ nothing to check → PASS), never a crash.
+    r"""The files changed since `base` (`git diff --name-only base...HEAD`). A git failure
+    yields None (the caller refuses, exit 2), never a crash or a pass; an empty diff is `[]`.
 
     🔴 REVIEW FINDING 4-6 — THE SAME BLINDNESS AS `knowledge/freshness.py`'s READERS, IN THE ONE
     PLACE IT GATES A MERGE. `core.quotePath` is on by default and git quotes any path with a
@@ -238,17 +280,23 @@ def _git_changed_files(root: str, base: str) -> list:
     ⚠ `-c core.quotePath=false` was here too and is GONE (§7f, §7d): with `-z` git does not quote at
     all, so no input distinguishes the two and nothing can grade the flag. (The measurement lived
     in `freshness._no_quote_path`, since deleted; `git log -S _no_quote_path` finds it.)"""
+    # SPEC-TRISTATE H1 -- `None` means git could NOT resolve `base` (a typo, an unfetched ref, a
+    # shallow checkout). That is not "no files changed": the caller must refuse, because an empty
+    # list here used to flow into grading and print PASSED over a diff nobody looked at. A resolved,
+    # genuinely empty diff is `[]`, which the spec-awareness leg reports as ABSENT.
     import subprocess
+    if base.lstrip().startswith("-"):
+        return None             # a base is a ref, never an option: `--output=X` makes git WRITE X
     for spec in (f"{base}...HEAD", base):
         try:
             out = subprocess.run(
                 ["git", "-C", root, "diff", "--name-only", "-z", spec],
                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
         except (OSError, subprocess.SubprocessError):
-            return []
+            return None
         if out.returncode == 0:
             return [p for p in (out.stdout or "").split("\0") if p]
-    return []
+    return None
 
 
 def register(sub, common):
@@ -288,7 +336,7 @@ def register(sub, common):
     p_query.add_argument(
         "--full", action="store_true",
         help="blast_radius only: a radius the default bound cut (20k references / 2 s) is walked "
-             "again with the full budget (hard ceiling 60 s; Ctrl-C cancels)",
+             "again with the full budget (no time limit; Ctrl-C cancels)",
     )
     p_query.add_argument(
         "--json", action="store_true",
@@ -333,8 +381,17 @@ def register(sub, common):
                       help="git base ref/SHA to diff against (changed files via `git diff`)")
     p_ci.add_argument("--comment-file", default=None,
                       help="write the PR review comment body (markdown) to this path")
+    p_ci.add_argument("--evidence-file", default=None,
+                      help="write the evidence render (markdown, for the job's step summary) "
+                           "to this path")
+    p_ci.add_argument("--link-base", default="",
+                      help="https://host/owner/repo for evidence links (default: from "
+                           "GITHUB_SERVER_URL + GITHUB_REPOSITORY)")
+    p_ci.add_argument("--link-sha", default="",
+                      help="the commit evidence links point at (default: GITHUB_SHA, else HEAD)")
     p_ci.add_argument("--no-fail", action="store_true",
-                      help="report-only: print/post the verdict but always exit 0")
+                      help="report-only: print/post the verdict and exit 0 unless the check could not "
+                           "run (an unresolvable --base), which exits 2")
     p_ci.add_argument("--ascii", action="store_true",
                       help="ASCII-only glyphs in the printed report")
     p_ci.set_defaults(func=cmd_ci_check)

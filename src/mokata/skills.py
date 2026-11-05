@@ -596,9 +596,14 @@ WORKTREE_MERGE_READY_HANDOFF = (
     "owns), close it out by handing the human a MERGE-READY BRANCH rather than a worktree they have "
     "to reason about. As part of the landing options in step 3: NAME the branch, name the worktree "
     "path the work sits in, and name the EXACT next action to land it — commit anything outstanding "
-    "on that branch, then from the MAIN checkout run `git merge <branch>`. mokata never merges, so "
-    "that command is the human's to run and only after they choose it; PR creation is out of scope "
-    "here. The worktree stays until the human removes it — do not clean it up unasked. "
+    "on that branch, run the FULL suite there with mokata's runner (`mokata worktree test "
+    "<worktree>`), then the GATED merge: `mokata worktree merge <worktree>` (or Merge… on the IDE's "
+    "Worktrees screen) — it refuses unless the suite passed and the review passed AT the branch's "
+    "head, and it lands only after the human approves exactly that merge in their own terminal "
+    "(`mokata approve <id>`). mokata never merges on its own, so that approval is the human's to "
+    "give and only after they choose it; an in-chat approval does not license a merge. PR creation "
+    "is out of scope here. The worktree stays until the human removes it — do not clean it up "
+    "unasked. "
     "SYNC BEFORE YOU LAND (always — merge OR pull request): the base branch moved while this "
     "worktree lived, so FIRST bring the branch up to date with it — fetch the base (`git fetch "
     "origin <base>` when it has a remote), then, inside the worktree, `git rebase <base>` (or "
@@ -633,14 +638,25 @@ FIX_BREAKER_CLAUSE = (
     "lifts it (`mokata gate override fix-breaker`)."
 )
 
+# 0.0.27 P13 round 8 (L4) — the RED this phase produces, and the GREEN a bug fix produces, are
+# the evidence the Proof screen reads: record them the same way /mokata:develop does.
+TEST_RUN_RECORD_CLAUSE = (
+    " Record every test run you make: `mokata progress test-run --passed|--failed --command "
+    "\"<the command>\" --test tests/test_x.py::TestX::test_y --ac <AC>=tests/test_x.py::TestX::test_y`"
+    " — each test by its FULL id, the node id pytest prints with `-rA` (or pass that output with "
+    "`--runner-report <file>`); a bare name never proves."
+)
+
 # R1 (0.0.26) — the Stop evidence gate, said where the claim is made. Enforced by the Stop and
 # SubagentStop hooks (gate `stop-evidence`, fail-closed) from RECORDED state; this is the WHY the
 # model reads first, and the one command that records the evidence.
 STOP_EVIDENCE_CLAUSE = (
     "\n\n## \"Done\" is a claim the run's record must back\n"
     "Record every test run as you make it: `mokata progress test-run --passed|--failed --command "
-    "\"<the command>\" --test <test id> --ac <AC>=<test id>` (a failed run records the tests RED, a "
-    "passed run records them GREEN). Do not end a turn saying the work is done, complete or that "
+    "\"<the command>\" --test tests/test_x.py::TestX::test_y --ac <AC>=tests/test_x.py::TestX::test_y` — each test by its "
+    "FULL id `path::Class::test`, the node id pytest prints with `-rA` (or pass that output with "
+    "`--runner-report <file>`); a bare name never proves (a failed run records "
+    "the tests RED, a passed run records them GREEN). Do not end a turn saying the work is done, complete or that "
     "all tests pass unless that record shows it: no test still RED, every acceptance criterion of "
     "the emitted spec mapped to a test recorded GREEN, a last recorded test run that PASSED and is "
     "newer than your last write, and — once the run is in review — a recorded review verdict. "
@@ -852,6 +868,7 @@ _SKILLS: List[Skill] = [
             "the maximum, and a hostile key or name. These are the approved AC evaluated "
             "honestly; a case that changes what is REQUIRED is a new AC and still needs an "
             "amendment. If you cannot reach a consumer or a boundary, SAY which and why."
+            + TEST_RUN_RECORD_CLAUSE
         ),
         gate=Gate("red-before-green",
                   "Tests must be shown to FAIL before any implementation exists. "
@@ -1014,6 +1031,7 @@ _SKILLS: List[Skill] = [
             "before fixing; don't guess at code you haven't read. Labels progress "
             "reported -> reproduced -> fixing -> verified; the fix is gated behind a "
             "reproducer."
+            + TEST_RUN_RECORD_CLAUSE
         ),
         gate=Gate("reproducer-required",
                   "A bug fix requires a reproducer and a failing test before the fix.",
@@ -1064,7 +1082,10 @@ _SKILLS: List[Skill] = [
             "unfinished work.\n"
             "2. SUMMARIZE what shipped: the spec and its acceptance-criteria-to-tests "
             "mapping, the diff surface (files/symbols changed), the decisions captured to "
-            "memory, and the audit trail — so landing it is a reviewed decision.\n"
+            "memory, and the audit trail — so landing it is a reviewed decision. OFFER, in one "
+            "line, a cited review page of the change (`/mokata:explain session <id>` or "
+            "`range <base> <head>`) — an offer only: it never blocks or delays landing, and "
+            "skipping it changes nothing.\n"
             "3. PRESENT the landing options and let the HUMAN choose: merge, open a PR, keep "
             "the branch, or discard. You may PREPARE (stage a commit/branch, draft a PR "
             "description), but run a git action ONLY after the human's explicit confirmation "

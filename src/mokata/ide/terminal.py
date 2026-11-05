@@ -41,7 +41,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..billing_env import terminal_preface
 from ..errors import MokataError
-from ..quiet_spawn import hidden
+from ..quiet_spawn import hidden, signal_group
 
 MAX_TERMINALS = 4                  # alive at once, per server
 MAX_BUFFER = 512 * 1024            # bytes of output kept per terminal (in memory only)
@@ -106,6 +106,32 @@ def _shell() -> List[str]:
     if sh and os.path.isabs(sh) and os.access(sh, os.X_OK):
         return [sh]
     return ["/bin/sh"]
+
+
+def explain_re(cmd: str):
+    """The safe set for the hand-off: EXACTLY `<cmd> <ids/SHAs/words>` for this route's `cmd` —
+    the other route's spelling is not accepted."""
+    return re.compile(re.escape(cmd) + r" [A-Za-z0-9_ -]+\Z")
+
+
+def explain_prompt(target: Any, root: Optional[str] = None) -> str:
+    """`<slash explain> <target>` (`/mokata:explain` on the plugin route, `/explain` after init) for the embedded `claude` (0.0.27 P46). The target is re-parsed
+    here and a range must already be two commit SHAs (the route resolved them), so the one argument
+    carries only `[A-Za-z0-9_ -]`, `/` and `:` — nothing cmd.exe (`^ & | % < >`), PowerShell or a
+    POSIX shell reads as syntax, which is what makes the `cmd /c claude.cmd` path safe."""
+    from ..explain.bundle import SHA_RE, BundleRefused, parse_target, target_text
+    try:
+        spec = parse_target(target)
+    except BundleRefused as exc:
+        raise TerminalRefused(str(exc))
+    if spec["kind"] == "range" and not (SHA_RE.match(spec["base"]) and SHA_RE.match(spec["head"])):
+        raise TerminalRefused("an explain range is two commit SHAs (resolved before the hand-off)")
+    from ..plugin_runtime import slash_command
+    cmd = slash_command("explain", root)    # the form THIS route installed — never the other one
+    out = f"{cmd} {target_text(spec)}"
+    if not explain_re(cmd).match(out):
+        raise TerminalRefused("the explain argument has characters outside the safe set")
+    return out
 
 
 def default_programs() -> Dict[str, Callable[[Optional[str]], Optional[List[str]]]]:
@@ -284,7 +310,8 @@ class Terminal:
         if not self._closed and self.proc.poll() is None:
             for sig, wait in ((signal.SIGHUP, KILL_GRACE), (signal.SIGKILL, KILL_GRACE)):
                 try:
-                    os.killpg(self.proc.pid, sig)
+                    if not signal_group(self.proc.pid, sig):
+                        raise ProcessLookupError("not a group mokata may signal")
                 except (ProcessLookupError, PermissionError):
                     # no group yet: the launcher has not reached setsid() — signal the process
                     try:
@@ -300,7 +327,7 @@ class Terminal:
             # the leader is gone; anything left in its group (a job that ignored SIGHUP, like a
             # `nohup` child) dies with the terminal too — no orphan outlives its window
             try:
-                os.killpg(self.proc.pid, signal.SIGKILL)
+                signal_group(self.proc.pid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 pass
         with self._cond:
@@ -436,7 +463,7 @@ class TerminalHost:
                      "started": t.started} for t in self._terms.values()]
 
     def open(self, program: Any, cols: Any = 100, rows: Any = 30,
-             resume: Optional[str] = None) -> Terminal:
+             resume: Optional[str] = None, explain: Optional[str] = None) -> Terminal:
         ok, why = self.enabled
         if not ok:
             raise TerminalRefused(why)
@@ -445,9 +472,16 @@ class TerminalHost:
         if resume is not None and (program != "claude" or not isinstance(resume, str)
                                    or not _SID.match(resume)):
             raise TerminalRefused("resume takes a session id, and only with claude")
+        prompt = explain_prompt(explain, self.root) if explain is not None else None
+        if prompt is not None and (program != "claude" or resume is not None):
+            raise TerminalRefused("an explain request starts a fresh claude, never a resume")
         argv = self.programs[program](resume)
         if not argv:
             raise TerminalRefused(f"{program} is not on PATH")
+        if prompt is not None:
+            # P46: the SAME `claude` program (so the billing notice always fires), interactive,
+            # with ONE server-built argument — never `-p`, never anything the page sent.
+            argv = [*argv, prompt]
         with self._lock:
             if sum(1 for t in self._terms.values() if t.alive) >= MAX_TERMINALS:
                 raise TerminalRefused(f"at most {MAX_TERMINALS} terminals are open at once — "

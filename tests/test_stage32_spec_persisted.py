@@ -51,14 +51,14 @@ def _persist_spec(store, criteria):
 class TestSpecPersistedGate(unittest.TestCase):
     def test_blocks_when_no_spec(self):
         with tempfile.TemporaryDirectory() as d:
-            res = check_spec_persisted(_store(d))
+            res = check_spec_persisted(_store(d), run_id="test-run")
             self.assertFalse(res.passed)
             self.assertEqual(res.reason, SPEC_PERSISTED_MESSAGE)
             self.assertEqual(res.ac_count, 0)
             self.assertEqual(res.gate_id, SPEC_PERSISTED_GATE_ID)
 
     def test_blocks_when_store_is_none(self):
-        res = check_spec_persisted(None)
+        res = check_spec_persisted(None, run_id="test-run")
         self.assertFalse(res.passed)
         self.assertIn("no saved spec", res.reason)
 
@@ -66,7 +66,7 @@ class TestSpecPersistedGate(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             store = _store(d)
             _persist_spec(store, [])               # persisted but zero ACs
-            res = check_spec_persisted(store)
+            res = check_spec_persisted(store, run_id="test-run")
             self.assertFalse(res.passed)
             self.assertEqual(res.reason, SPEC_PERSISTED_MESSAGE)
 
@@ -74,7 +74,7 @@ class TestSpecPersistedGate(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             store = _store(d)
             _persist_spec(store, [("AC-1", "log in")])
-            res = check_spec_persisted(store)
+            res = check_spec_persisted(store, run_id="test-run")
             self.assertTrue(res.passed)
             self.assertEqual(res.ac_count, 1)
 
@@ -82,10 +82,10 @@ class TestSpecPersistedGate(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             store = _store(d)
             led = AuditLedger(os.path.join(d, "ledger.jsonl"))
-            blocked = check_spec_persisted(store, ledger=led, phase="develop")
+            blocked = check_spec_persisted(store, ledger=led, phase="develop", run_id="test-run")
             self.assertFalse(blocked.passed)
             _persist_spec(store, [("AC-1", "log in")])
-            passed = check_spec_persisted(store, ledger=led, phase="develop")
+            passed = check_spec_persisted(store, ledger=led, phase="develop", run_id="test-run")
             self.assertTrue(passed.passed)
 
             gate_entries = [e for e in led.entries()

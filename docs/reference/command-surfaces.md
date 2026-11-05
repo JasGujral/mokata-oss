@@ -25,7 +25,7 @@ truth). A CI parity test derives the command set from the live CLI parser and **
 command lacks a Claude Code surface *or* an explicit exemption — so this can never silently
 regress.
 
-**The MCP surface today: 70 tools — 46 read, 23 write, and 1 approve** (the default-off in-chat
+**The MCP surface today: 74 tools — 47 read, 26 write, and 1 approve** (the default-off in-chat
 approval described below). The registry in `mokata.mcp.registry` is the single source of that
 count.
 
@@ -66,7 +66,7 @@ interactive phase → a `/mokata:…` **slash** command.
 | `audit` | — | `audit` (`team=true` → team-wide who-did-what over the **shared** log; NO telemetry) | `audit_share` — publish your new local entries to the team's **own** shared log (Stage 71): append-only + per-actor + namespaced (conflict-free), secret-scanned egress, human-gated; opt-in + local-first; the DSN secret is never stored |
 | `preview` | — | `preview` | — |
 | `progress` | `/mokata:progress` | `progress`, `lanes` | — |
-| `watch` | `/mokata:watch` | `watch` | — |
+| `watch` | `/mokata:watch` (runs `mokata watch --open`: the IDE's Sessions screen) | `lanes`, `ide_sessions` (the data; an MCP call starts no server) | — |
 | `govern` | `/mokata:govern` | `govern` | — |
 | `rules` | — | `rules` | — |
 | `skills` | — | `skills` | — |

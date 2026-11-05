@@ -764,7 +764,7 @@ class TestNothingElseMoved(_NoPinnedSession):
         # R4 itself added no tool; the total moved 58 -> 59 at WT-LIST (`worktree_list`) and
         # 59 -> 61 at M-4/R5 (`consolidate_proposals` + `consolidate`), which is what this now
         # pins. R4's own "nothing moved" property is the signature checks above.
-        self.assertEqual(len(REG.TOOLS), 70)   # 61 -> 62 at CM.S5: `events_share`; -> 64 at C1; -> 65 at D2; -> 67 at 0.0.23 E3: `worktree_clean` + `worktree_remove`; -> 70 at 0.0.25 ID3: `ide_status` + `ide_open` + `ide_sessions`
+        self.assertEqual(len(REG.TOOLS), 74)   # -> 75 at 0.0.27 G3-EVIDENCE (on top of P21): `evidence_commit` (gated write); 61 -> 62 at CM.S5: `events_share`; -> 64 at C1; -> 65 at D2; -> 67 at 0.0.23 E3: `worktree_clean` + `worktree_remove`; -> 70 at 0.0.25 ID3: `ide_status` + `ide_open` + `ide_sessions`; -> 73 at 0.0.27 P46: `explain_bundle` + `explain_save` (read) + `explain_commit` (gated write); -> 74 at 0.0.27 P21: `worktree_merge` (gated write); -> 74 at 0.0.27 WATCH-FOLD (`watch` deleted)
 
 
 # ======================================================= 7 · the callers state the new contract

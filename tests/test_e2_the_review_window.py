@@ -91,10 +91,14 @@ class TheSnapshotStore(unittest.TestCase):
             _repo(d)
             _write(other, "secret.txt", "nope")
             os.symlink(os.path.join(other, "secret.txt"), os.path.join(d, "link.txt"))
-            for p in (os.path.join(other, "secret.txt"), "link.txt", ".mokata/manifest.json",
-                      "../x.py"):
+            for p in (os.path.join(other, "secret.txt"), "link.txt", "../x.py"):
                 with self.subTest(p=p):
                     self.assertIsNone(S.capture(d, p, S.AFTER, "S1"))
+            # 0.0.27 CASEFOLD-FIX r2 (verify M1 ruling): a write into mokata's own record is
+            # RECORDED - path only; its content is never captured.
+            snap = S.capture(d, ".mokata/manifest.json", S.AFTER, "S1")
+            self.assertEqual((S.PRIVATE, "", 0), (snap.state, snap.sha, snap.size))
+            self.assertIsNone(S.content_of(d, snap))
 
     def test_too_large_keeps_no_content(self):
         with tempfile.TemporaryDirectory() as d:
@@ -298,9 +302,12 @@ class SampleNeverPassesForReal(unittest.TestCase):
         self.assertIn('id="sample-banner"', html)
         # P33: the session list's empty state is the Sessions screen's (`s1-empty`) — the
         # left-panel list (`sessions-empty`) is gone, one session list remains.
-        # P34: the bottom timeline is gone — a write is picked on the Sessions screen (`tl-empty`).
-        for section in ("s1-empty", "tl-empty", "compare-empty", "diff-empty"):
+        # UX-SIMPLIFY: a write is picked on Sessions › Timeline, whose empty state is drawn by
+        # the view itself (features/activity_panel.js), not a static block.
+        for section in ("s1-empty", "compare-empty", "diff-empty"):
             self.assertIn(f'id="{section}"', html, f"no empty state for {section}")
+        with open(os.path.join(STATIC, "features", "activity_panel.js"), encoding="utf-8") as fh:
+            self.assertIn("Pick a session on the left to see its timeline.", fh.read())
 
     def test_the_wordmarks_are_the_canonical_brand_files_not_redrawn(self):
         brand = os.path.join(HERE, "..", "assets", "brand")

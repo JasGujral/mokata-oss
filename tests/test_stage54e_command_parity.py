@@ -266,7 +266,7 @@ class TestConfigSetGated(unittest.TestCase):
     def test_propose_only_without_approval(self):
         with tempfile.TemporaryDirectory() as d:
             _repo(d)
-            res = M.config_set(path=d, key="settings.ux.progress", value="dashboard")
+            res = M.config_set(path=d, key="settings.ux.progress", value="ide")
             self.assertEqual(res["status"], "proposed")
             self.assertNotEqual(res.get("committed"), True)
             # nothing was written
@@ -278,10 +278,10 @@ class TestConfigSetGated(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             _repo(d)
             res = mcp_commit(M.config_set, path=d, key="settings.ux.progress",
-                             value="dashboard")
+                             value="ide")
             self.assertTrue(res["committed"])
             got = M.config_get(path=d, key="settings.ux.progress")
-            self.assertEqual(got["value"], "dashboard")
+            self.assertEqual(got["value"], "ide")
 
     def test_secret_is_hard_blocked_even_when_approved(self):
         # the approval is REAL (human-minted, SI.3) and still cannot license a credential — a

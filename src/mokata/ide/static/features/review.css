@@ -1,0 +1,46 @@
+/* mokata ide — review context (0.0.26 P7): tests by AC, hunk blame, rendered Markdown diffs. */
+.rv-tests { padding: 8px 12px 40px; }
+.rv-head { display: flex; align-items: center; gap: 8px; }
+.rv-head .combo { min-width: 280px; }
+.rv-approval { margin: 8px 0; color: var(--text2); }
+.rv-totals { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; margin: 6px 0; }
+.rv-st-green { color: var(--accent-ink); } .rv-st-red { color: var(--del); }
+.rv-st-unrun { color: var(--muted); } .rv-st-untested { color: var(--amber); }
+.rv-cmdbar { display: flex; align-items: center; gap: 8px; margin: 8px 0 2px; }
+.rv-cmdbar code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text2); }
+.rv-tests .filters { margin: 10px 0 6px; }
+.rv-acs { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.rv-ac { border-bottom: 1px solid var(--line); padding: 6px 0; }
+.rv-ac-head { display: flex; align-items: center; gap: 8px; }
+.rv-ac-toggle { flex: 1; min-width: 0; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rv-ac-toggle b { color: var(--text); margin-right: 4px; }
+.rv-dot { width: 14px; text-align: center; }
+.rv-flag { font-size: 11px; color: var(--amber); border: 1px solid var(--amber-line); border-radius: 999px; padding: 0 7px; }
+.rv-tests-list { list-style: none; margin: 4px 0 2px 22px; padding: 0; }
+.rv-test { display: flex; align-items: center; gap: 8px; padding: 2px 0; font-size: 12px; }
+.rv-tid { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rv-chip { font-size: 10.5px; border: 1px solid currentColor; border-radius: 4px; padding: 0 5px; min-width: 46px; text-align: center; }
+.rv-hist { display: inline-flex; gap: 2px; }
+.rv-h { font: 10px var(--mono); width: 15px; height: 15px; display: inline-flex; align-items: center; justify-content: center; border-radius: 3px; }
+.rv-h-green { background: var(--add-bg); color: var(--accent-ink); }
+.rv-h-red, .rv-h-error { background: var(--del-bg); color: var(--del); }
+.rv-pager { display: flex; align-items: center; gap: 10px; padding: 10px 0; }
+.rv-unmapped { margin-top: 12px; font-size: 12px; }
+.rv-job { margin: 6px 0; }
+.rv-job-tests { list-style: none; margin: 4px 0; padding: 0; font-size: 12px; }
+.rv-job-tests li { display: flex; gap: 8px; align-items: center; }
+.rv-out { max-height: 280px; overflow: auto; background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 8px; font-size: 11.5px; white-space: pre-wrap; }
+.rv-md-btn { margin-left: 6px; }
+.rv-blame { border-bottom: 1px solid var(--line); padding: 6px 10px; background: var(--panel2); }
+.rv-blame-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.rv-commits { list-style: none; margin: 4px 0; padding: 0; }
+.rv-commits li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rv-history { margin-top: 6px; }
+.rv-md-bar { display: flex; gap: 8px; align-items: center; padding: 6px 10px; }
+.rv-md-preview { padding: 10px 0; }
+.rv-dialog { width: 1100px; max-width: calc(100vw - 32px); }
+.rv-dialog-body { overflow: auto; padding: 8px 14px 20px; }
+.rv-spec-pick { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0 8px; }
+.rv-vers { display: inline-flex; gap: 4px; }
+.rv-ac-changes { list-style: none; padding: 0; margin: 0 0 10px; }
+.rv-chg { color: var(--blue); }

@@ -1,0 +1,35 @@
+{
+ "skill": "explain",
+ "triggers": [
+  "Explain a change set",
+  "cited review page"
+ ],
+ "positive": [
+  "Explain the changes this session made as a review page",
+  "Generate a cited review page for the commit range main..feature",
+  "Explain a change set with a flow diagram and the edge cases",
+  "Make an explainer page for this run's changes with the blast radius",
+  "Write up what changed in my working tree as a review page with diagrams"
+ ],
+ "near_miss": [
+  {
+   "prompt": "Run the two-pass review of this implementation",
+   "expect": "review"
+  },
+  {
+   "prompt": "Pop open the live review window on this session's diff",
+   "expect": "review-window"
+  },
+  {
+   "prompt": "Explain how a hash map works"
+  },
+  {
+   "prompt": "Where is the run in the pipeline right now",
+   "expect": "progress"
+  },
+  {
+   "prompt": "Are the docs still true to the code after the rename",
+   "expect": "docsync"
+  }
+ ]
+}

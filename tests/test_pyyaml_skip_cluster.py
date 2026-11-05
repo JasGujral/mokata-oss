@@ -569,6 +569,23 @@ class TestEveryJobRunningTheSuiteInstallsTheParser(unittest.TestCase):
         self.assertGreaterEqual(len(corpus), 9)
         self.assertIn("embeddings-leg.yml", corpus)
 
+    def test_the_sharded_gates_are_still_in_the_sweeps_view(self):
+        """Both gates run the whole unit suite as shards (ci.yml since 0.0.26 O6, release.yml since
+        0.0.27 R3). A sweep that only read `python -m unittest` would see neither — and a sharded
+        job that dropped requirements/ci.txt would read clean."""
+        corpus = self._corpus()
+        for name in ("ci.yml", "release.yml"):
+            with self.subTest(workflow=name):
+                job = (wp.safe_load(corpus[name]) or {})["jobs"]["test"]
+                self.assertTrue(any(SWEEP.runs_the_whole_unit_suite(a)
+                                    for a in SWEEP._test_invocations(job)))
+        planted = PLANTED_WORKFLOW_OFFENDER.replace(
+            "python -m unittest discover -s tests -t tests\n",
+            "python scripts/shard_tests.py run --shard 1 --of 4 -s tests -t tests\n", 1)
+        self.assertNotEqual(planted, PLANTED_WORKFLOW_OFFENDER, "the planted anchor moved")
+        self.assertEqual([("planted.yml", "broken")],
+                         SWEEP.jobs_without_the_parser({"planted.yml": planted}, wp.safe_load))
+
     def test_the_sweep_catches_a_planted_parser_less_job(self):
         """§7i — the tree is clean, so the guard is graded on a violation that is not in it."""
         offenders = SWEEP.jobs_without_the_parser({"planted.yml": PLANTED_WORKFLOW_OFFENDER},

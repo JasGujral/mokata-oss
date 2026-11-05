@@ -15,7 +15,7 @@ A route entry:
                  "schema": {"$ref": "#/schemas/Error"}}},
    "probes": [{"query": {...}, "status": 200}, {"body": {...}, "status": 400, "demo": true}]}
 
-`media` is one of json, html, text, js, css, svg, sse, redirect, empty. The schema dialect is
+`media` is one of json, html, text, js, css, svg, image (any image/*), sse, redirect, empty. The schema dialect is
 the subset `validate` implements (type, properties, required, items, enum, nullable via a type
 list, `$ref` into the top-level `schemas`) — no dependency, so the IDE never needs one.
 """
@@ -31,7 +31,7 @@ from ..errors import MokataError
 HERE = os.path.dirname(os.path.abspath(__file__))
 CORE_FILE = os.path.join(HERE, "api_contract.json")
 FEATURES_DIR = os.path.join(HERE, "features")
-MEDIA = ("json", "html", "text", "js", "css", "svg", "sse", "redirect", "empty")
+MEDIA = ("json", "html", "text", "js", "css", "svg", "image", "sse", "redirect", "empty")
 
 
 class ContractError(MokataError, ValueError):

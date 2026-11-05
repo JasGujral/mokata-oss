@@ -135,8 +135,9 @@ class Surfaces(unittest.TestCase):
     def test_mcp_without_intent_byte_identical_shape(self):
         res = tools_read.suggest(diff=True)
         # E2 (AXI-OUT) adds a `count` to every list answer; the intent-less SHAPE is otherwise
-        # exactly the pre-G-3 one.
-        self.assertEqual(res, {"suggestions": [
+        # exactly the pre-G-3 one — plus 0.0.27 P14's `basis` (the no-argument call now derives
+        # from recorded state, so the described-state answer says it is one).
+        self.assertEqual(res, {"basis": "as you described it", "suggestions": [
             {"skill": "review", "reason": "a diff is present — review against the spec"}],
             "count": 1})
 

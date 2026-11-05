@@ -84,12 +84,38 @@ DEGRADE_FAMILY = {
 # and `failure_class` is "" — honest, because there is no remediation to name. Listed explicitly
 # so that adding a class forces a decision about which side of the line it is on.
 HARD_ERRORS = {
+    # 0.0.27 P46 CHANGE-EXPLAINER. HARD, each refusing with a message and writing nothing: a target
+    # that is not session/run/range/live (BundleRefused), a page that fails the allowlist or a
+    # document for an unknown bundle (PageRefused, SaveRefused), and a store directory that is a
+    # link / reparse point / unsafe name, or a repo nobody set up (UnsafeStore). There is no floor
+    # to fall back to: the only "fallback" would be writing through a link or showing an
+    # unvalidated page.
+    "BundleRefused", "PageRefused", "SaveRefused", "UnsafeStore",
+    # 0.0.27 P21 — the gated merge. HARD, each named to the caller and never retried: git cannot be
+    # run the safe way (`GitSafeError`), the index lock is busy/lost (`LockError`), a merge request
+    # that cannot be answered as asked (`MergeGateError`), the full suite cannot run (`SuiteError`).
+    # A merge has no floor to fall back to — a degraded merge is a wrong merge.
+    "GitSafeError", "LockError", "MergeGateError", "SuiteError",
     # 0.0.26 P0 — the IDE contract and route registry. HARD: a route two features own, or a
     # contract that does not parse, refuses to build the app — there is no floor to fall back to.
     "ContractError", "RouteConflict",
+    # 0.0.27 P14 — a next-step hint built with no cited fact. HARD: a bug in a rule (a hint is
+    # derived, never guessed); there is no floor to fall back to.
+    "HintRefused",
+    # 0.0.27 P5 — an "expand context" page whose side cannot be read (binary, gone, not in the
+    # rev). HARD: nothing falls back — the route answers `state: "unavailable"` with the reason and
+    # the gap stays unexpanded; there is no floor of lines it could show instead.
+    "ContextUnavailable",
+    # 0.0.27 P9 — one side of a changed image that cannot be shown (not on that side, too large,
+    # not the image its name claims, unreadable). HARD: the route answers it with its state and the
+    # words the page shows ("too large to diff - 200.0 MB, open externally"); there is no floor.
+    "ImageUnavailable",
     # 0.0.26 R5 — an unbalanced `<private>` tag on a memory write. HARD: the write is refused; the
     # only "fallback" would be storing text the author marked private.
     "UnbalancedPrivateTag",
+    # 0.0.27 P13 — a proof trace asked of a target that cannot be traced (no such run, a bad ref).
+    # HARD: the route answers it as a refusal; a trace of a guessed target would be a false proof.
+    "TraceRefused",
     "MokataError", "AuthoringError", "BrainstormError", "BrainstormGateError", "BugError",
     # 0.0.23 D15 — an intention's due condition that cannot be STORED (no condition, a date that
     # is not a date). HARD: the remember call returns an error and writes nothing — there is no
@@ -161,6 +187,14 @@ HARD_ERRORS = {
     # inside the repository (traversal, absolute, drive, symlink out). HARD: answered 400, nothing
     # is opened, and there is no weaker-but-true answer to fall back to.
     "PathRefused",
+    # 0.0.27 P4 — Copy Ref / Copy with Context / Find Usages. HARD, all three: `RefRefused` (a ref,
+    # path, line or symbol id that names no one place — answered 400, never a guessed location),
+    # `Expired` (a replaced, discarded or pre-restart result — answered 410, never another result's
+    # rows) and `SpillFull` (the spill could not be written — the job FAILS; a result is complete
+    # or absent, never cut at the byte the disk ran out). None has a weaker-but-true answer.
+    "RefRefused",
+    "Expired",
+    "SpillFull",
     # 0.0.23 C2 — a regex the user typed that does not compile. HARD: the reason is shown; a silent
     # switch to a literal search would answer a question nobody asked.
     "BadPattern",
@@ -186,6 +220,22 @@ HARD_ERRORS = {
     # file, bad lines, still a secret after redaction). HARD: answered 400, nothing is stored; a
     # partial send would put text the human did not choose (or a secret) into the session.
     "ContextRefused",
+    # 0.0.27 P12 — the activity timeline refuses a bad question (no session id, a `before` that is
+    # not the previous page's `next` cursor). HARD: answered 400 with the reason
+    # (`ide/features/activity.py`); nothing is served, and there is no weaker page to return —
+    # a guessed cursor would show a slice of the history nobody asked for.
+    "ActivityRefused",
+    # 0.0.27 P24 — the read-only LSP bridge (`ide/lsp.py`). HARD, all three: `MethodRefused` (a
+    # write-shaped LSP method was about to be sent — it was not; there is no weaker write to make),
+    # `ServerGone` (the language server exited with a question pending — the question fails at
+    # once; the route's graph answer is LABELLED `source: graph` + `lsp.state: crashed`, never
+    # passed off as the server's) and `ServerError` (the server answered a JSON-RPC error, shown
+    # with its code). None of them falls back silently.
+    "MethodRefused", "ServerGone", "ServerError",
+    # 0.0.27 P8 — a file that cannot be shown as a table (NUL bytes, UTF-32, unreadable). HARD:
+    # answered as a 200 whose `state` + `note` say why in plain words (`ide/features/table.py`);
+    # there is no weaker rendering to fall back to — a guess at the encoding is garbage on screen.
+    "NotATable",
 }
 
 # Hard errors that fail CLOSED (nothing degrades to a floor) but are still ABOUT a schema, so
@@ -216,7 +266,15 @@ CLASSED_HARD_ERRORS = {"ProvisionError": FAILURE_SCHEMA,
 #                   checkpoint of the walk doing the work (`knowledge.cancel.checkpoint`) and caught
 #                   by the job runner that armed the flag, which marks the job `cancelled`. Nothing
 #                   failed; an `except MokataError` in the layer must not swallow it and carry on.
-CONTROL_SIGNALS = {"_GroupRollback", "Cancelled"}
+#   _Unknown        0.0.27 P14 — a fact the next-step ladder needed could not be settled (an
+#                   unreadable store, a read bound reached). Caught one frame up in
+#                   `hints.derive_batch`, where it becomes the answer `status: unknown` naming the
+#                   store. Nothing is swallowed: the reason IS the answer.
+# 0.0.27 P46 r5 N3 — an oversize bundle whose spill was released (NeedsRebuild) or whose spill
+# file vanished under a read (SpillGone, caught in explain/store.py and turned into NeedsRebuild).
+# Neither is an error a user sees: both ROUTE the request to a rebuild that runs as a job with
+# progress and Cancel — the tool answers `building`, never a failure and never an inline build.
+CONTROL_SIGNALS = {"_GroupRollback", "Cancelled", "_Unknown", "NeedsRebuild", "SpillGone"}
 
 
 def _exception_classes():
@@ -573,6 +631,14 @@ def _live_classes():
     from mokata.knowledge import crg_client, query
     # 0.0.26 P0 — `ContractError` (the IDE contract), `RouteConflict` (the IDE route registry).
     from mokata.ide import contract as _ide_contract, routes as _ide_routes  # noqa: F401
+    # 0.0.27 P13 — `TraceRefused` (a proof trace of a target that cannot be traced).
+    from mokata.ide import proof as _ide_proof  # noqa: F401
+    # 0.0.27 P46 — `BundleRefused`, `PageRefused`, `SaveRefused`, `UnsafeStore` (the explainer).
+    from mokata.explain import bundle as _xb, render as _xr, safedir as _xs, store as _xst  # noqa: F401
+    # 0.0.27 P46 r5 — `SpillGone` (the oversize bundle's spill), a control signal.
+    from mokata.explain import spill as _xsp  # noqa: F401
+    # 0.0.27 P21 — the gated merge's four hard errors.
+    from mokata import git_safe, merge_gate, merge_lock, merge_suite  # noqa: F401
     # 0.0.26 P32 — `ActionFailed` (a health action's job), `Cancelled` (a job's cancel signal).
     from mokata.ide import health as _ide_health  # noqa: F401
     # 0.0.26 P39 — `ConsentStale`, `Unavailable` (the Welcome screen's gate).
@@ -589,12 +655,26 @@ def _live_classes():
     from mokata.mcp import validation as mcp_validation
     # 0.0.23 C1 — `PathRefused`, the IDE's path containment refusal.
     from mokata.ide import nav as ide_nav
+    # 0.0.27 P4 — `RefRefused`, `Expired`, `SpillFull`.
+    from mokata.ide import usages as ide_usages
     # 0.0.23 C2 — `BadPattern`, the IDE search's bad-regex refusal.
     from mokata.ide import search as ide_search
     # 0.0.23 C3 — `BadRequest`, the IDE server's bad-parameter refusal.
     from mokata.ide import server as ide_server
     # 0.0.25 ID2 — `TerminalRefused` (the embedded terminal) and `ContextRefused` (IDE → session).
     from mokata.ide import context as ide_context, terminal as ide_terminal
+    # 0.0.27 P12 — `ActivityRefused` (the activity timeline's bad-question refusal).
+    from mokata.ide import activity as _ide_activity  # noqa: F401
+    # 0.0.27 P24 — the read-only LSP bridge's `MethodRefused`, `ServerGone`, `ServerError`.
+    from mokata.ide import lsp as _ide_lsp  # noqa: F401
+    # 0.0.27 P8 — `NotATable` (the CSV view's refusal of a file that is not delimited text).
+    from mokata.ide import tableview as _ide_tableview  # noqa: F401
+    # 0.0.27 P5 — `ContextUnavailable` (an "expand context" page with no readable side).
+    from mokata.ide import diffview as _ide_diffview  # noqa: F401
+    # 0.0.27 P9 — `ImageUnavailable` (one side of a changed image that cannot be shown).
+    from mokata.ide import imagediff as _ide_imagediff  # noqa: F401
+    # 0.0.27 P14 — `HintRefused` (a cite-less hint) and `_Unknown` (the ladder's control signal).
+    from mokata import hints as _hints  # noqa: F401
 
     mods = (netguard, oslock, skills, stacks, teamdb, team_audit, team_events, team_journal,
             vault, config,
@@ -606,12 +686,19 @@ def _live_classes():
             migrate, reembed, mshare, store, vector, bug, debug, optimize, mcp_validation,
             progress_events, harvest, harness_cert, intentions)
     mods += (ide_nav,)
+    mods += (ide_usages,)
     mods += (ide_search,)
     mods += (ide_server,)
     mods += (ide_terminal, ide_context)
     mods += (_ide_contract, _ide_routes)
     mods += (_ide_health, _cancel, _ide_firstrun)
     mods += (_private,)
+    mods += (_ide_activity,)
+    mods += (_ide_lsp, _ide_tableview, _ide_proof)
+    mods += (_xb, _xr, _xs, _xst, _xsp)
+    mods += (_ide_diffview, _ide_imagediff)
+    mods += (_hints,)
+    mods += (git_safe, merge_gate, merge_lock, merge_suite)
     live = {"MokataError": MokataError}
     for mod in mods:
         for name in dir(mod):

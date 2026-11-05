@@ -182,6 +182,10 @@ def cmd_status(args: argparse.Namespace) -> int:
     # Stage 25 Part B — actionable code-graph hint (active queries, or how to wire one).
     from ..knowledge import graph_guidance
     print(graph_guidance(surface))
+    from ..ide import trust as ide_trust
+    line = ide_trust.status_line(surface.root)
+    if line:
+        print(line)
     return 0
 
 

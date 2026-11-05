@@ -16,7 +16,7 @@ import _support  # noqa: F401 - puts src/ on the path
 # the full ordered tool set the server registers (read tools, then the 19 write tools, then approve).
 SNAPSHOT_FULL = [
     'query', 'recall', 'doctor', 'coverage', 'budget', 'audit', 'status', 'preview', 'progress',
-    'lanes', 'watch', 'govern', 'rules', 'skills', 'suggest', 'lat_check', 'index_status', 'tour',
+    'lanes', 'govern', 'rules', 'skills', 'suggest', 'lat_check', 'index_status', 'tour',
     'ci_check', 'baseline', 'sessions', 'session_windows',
     # WT-LIST (FR-WT-1, 0.0.16) — the read-only worktree×session join, registered beside the
     # window listing it joins to. APPENDED to the snapshot, not a reorder: every pre-existing
@@ -41,6 +41,8 @@ SNAPSHOT_FULL = [
     # 0.0.25 ID3 — ID.S3's `ide_*` tools (read: a loopback UI round trip / a derived listing),
     # appended to the READ tail (`tools_read` imports `tools_ide` last), so no position moves.
     'ide_status', 'ide_open', 'ide_sessions',
+    # 0.0.27 P46 — the change explainer's read pair, APPENDED to the READ tail after ide_*.
+    'explain_bundle', 'explain_save',
     'remember', 'import_stack', 'reset', 'apply_proposal', 'memory_export', 'memory_import',
     'vault_push', 'session_push', 'session_pull', 'session_name', 'audit_share', 'spec_emit',
     'spec_amend', 'spec_check', 'init', 'reconfigure', 'config_set', 'export_stack',
@@ -58,6 +60,10 @@ SNAPSHOT_FULL = [
     # WT.S3 (0.0.23 E3) — `worktree_clean` + `worktree_remove`, the gated destructive half of the
     # worktree surface. APPENDED to the WRITE tail (same rule as the notes above).
     'worktree_clean', 'worktree_remove',
+    'explain_commit',                  # 0.0.27 P46 — a page into the repo (gated), appended
+    # 0.0.27 P21 — `worktree_merge`, the gated merge. APPENDED to the WRITE tail (same rule).
+    'worktree_merge',
+    'evidence_commit',                 # 0.0.27 G3-EVIDENCE — a run record (gated), appended
     'approve',
 ]
 SNAPSHOT_WRITE = [
@@ -68,6 +74,9 @@ SNAPSHOT_WRITE = [
     'consolidate',                     # M-4/R5 — appended, see SNAPSHOT_FULL
     'events_share',                    # CM.S5 — appended, see SNAPSHOT_FULL
     'worktree_clean', 'worktree_remove',  # WT.S3 (0.0.23 E3) — appended, see SNAPSHOT_FULL
+    'explain_commit',                  # 0.0.27 P46 — appended, see SNAPSHOT_FULL
+    'worktree_merge',                  # 0.0.27 P21 — appended, see SNAPSHOT_FULL
+    'evidence_commit',                 # 0.0.27 G3-EVIDENCE — appended, see SNAPSHOT_FULL
 ]
 
 

@@ -1,17 +1,18 @@
-"""P31 SESSION-WORKTREES — the worktree facts the IDE's Worktrees panel shows, and the three durable
-actions it offers (merge back, delete, clean merged). Claude Code creates the worktrees; this module
-reads them and, on a HUMAN-MINTED approval only, merges / removes them (rulings by Jas, 2026-10-22:
-merging back is approved by the user in the IDE; the worktree is cleaned after a merge).
+"""P31 SESSION-WORKTREES — the worktree facts the IDE's Worktrees panel shows, and the durable
+actions it offers (sync, delete, clean merged). Claude Code creates the worktrees; this module
+reads them and, on a HUMAN-MINTED approval only, rebases / removes them. MERGING back is not here:
+0.0.27 P21 moved it to `merge_gate` — the gated merge, one implementation for the IDE, the CLI and
+MCP, which keeps the worktree (delete it separately).
 
   * `rows`   — every linked worktree: session/run (from the P31 bindings), branch, base, ahead/behind
                the main checkout's HEAD, dirty count, last activity, merged?, locked?, the resume
                command. Bounded (MAX_ROWS, a deadline on the per-worktree `git status`), on request
                only — nothing runs at idle.
   * `size`   — disk size of ONE worktree, on request (bounded walk).
-  * `plan_*` — read-only previews: what a merge / delete / clean would do, and why it may not
-               (dirty worktree, unmerged work, conflicts via `git merge-tree`, a lock held by a
-               running Claude Code session). The IDE turns a plan into an approval proposal.
-  * `merge` / `delete` / `clean` — the writes. Called ONLY after `approval.redeem` granted the exact
+  * `plan_*` — read-only previews: what a sync / delete / clean would do, and why it may not
+               (dirty worktree, unmerged work, a lock held by a running Claude Code session). The
+               IDE turns a plan into an approval proposal.
+  * `sync` / `delete` / `clean` — the writes. Called ONLY after `approval.redeem` granted the exact
                proposal (the IDE feature does that); each re-checks its plan first, so a worktree
                that changed since the human approved is refused, not merged.
 
@@ -26,7 +27,7 @@ import re
 import time
 from typing import Any, Dict, List, Optional
 
-from .repo_identity import canonical_repo_root, worktree_toplevel
+from .repo_identity import canonical_repo_root
 from .session_worktrees import (_git, base_commit, bindings, branch_of, head_of, is_git, _gitdir_of,
                                 _session_run, NOT_GIT)
 
@@ -34,11 +35,9 @@ MAX_ROWS = 50
 DIRTY_DEADLINE_SECS = 8.0
 SIZE_MAX_ENTRIES = 300_000
 SIZE_DEADLINE_SECS = 10.0
-MERGE_TIMEOUT = 120.0
 
 APPROVAL_RUN = "ide-worktrees"
 _SAFE_BRANCH = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./-]{0,200}$")
-TOOL_MERGE = "worktree_merge"
 TOOL_DELETE = "worktree_delete"
 TOOL_CLEAN = "worktree_clean_merged"
 TOOL_SYNC = "worktree_sync"
@@ -191,60 +190,6 @@ def size(root: str, path: str) -> Dict[str, Any]:
 
 
 # ================================================================================ plans
-def _conflicts(main: str, into_head: str, head: str) -> Dict[str, Any]:
-    """`git merge-tree --write-tree` (git ≥ 2.38): conflicts WITHOUT touching any tree."""
-    code, out = _git(main, "merge-tree", "--write-tree", "--name-only", "--no-messages",
-                     into_head, head)
-    if code == 0:
-        return {"checked": True, "files": []}
-    if code == 1:
-        lines = [ln for ln in out.splitlines() if ln.strip()]
-        return {"checked": True, "files": lines[1:]}
-    return {"checked": False, "files": [],
-            "note": "conflicts not pre-checked (needs git 2.38+ `merge-tree --write-tree`)"}
-
-
-def plan_merge(root: str, path: str) -> Dict[str, Any]:
-    row = find(root, path)
-    if row is None:
-        return {"ok": False, "reason": "not a linked worktree of this repo"}
-    main = canonical_repo_root(root)
-    plan = {"action": "merge", "path": row["path"], "branch": row["branch"], "head": row["head"],
-            "into": branch_of(main), "into_head": head_of(main), "ahead": row["ahead"],
-            "dirty": row["dirty"], "locked": row["locked"]}
-    why = []
-    if row["branch"] and not _SAFE_BRANCH.match(row["branch"]):
-        why.append(f"refusing an unusual branch name {row['branch']!r}")
-    if not row["branch"]:
-        why.append("the worktree is on a detached HEAD — there is no branch to merge")
-    if not plan["into"]:
-        why.append("the main checkout is on a detached HEAD — check out the branch to merge into")
-    if row["dirty"]:
-        why.append(f"{row['dirty']} uncommitted change(s) in the worktree — commit them in the "
-                   f"session (or discard) first; a merge takes commits only")
-    if row["dirty"] is None:
-        why.append("the worktree's status could not be read")
-    if row["ahead"] == 0:
-        why.append("nothing to merge — the branch has no commits the main checkout lacks")
-    if not why and plan["into_head"] and row["head"]:
-        c = _conflicts(main, plan["into_head"], row["head"])
-        plan["conflicts"] = c
-        if c["files"]:
-            why.append(f"{len(c['files'])} file(s) conflict: " + ", ".join(c["files"][:10]))
-    # SYNC-BEFORE-SHIP (Jas 2026-10-27): "always first rebase the worktree from develop, so we
-    # don't lose changes between worktree creation and the PR". A branch BEHIND its base was tested
-    # against a base that no longer exists; merging it lands code nobody ran with what landed since.
-    behind = row.get("behind") or 0
-    if behind > 0:
-        why.append(f"{behind} commit(s) landed on {plan['into'] or 'the base'} since this worktree "
-                   f"branched — Sync it first (rebase onto {plan['into'] or 'the base'}), re-run its "
-                   f"tests, then merge")
-        plan["behind"] = behind
-    plan["blocked"] = why
-    plan["ok"] = not why
-    return plan
-
-
 def plan_sync(root: str, path: str) -> Dict[str, Any]:
     """Rebase a session worktree's branch onto the main checkout's current branch — the step every
     merge and every PR now starts with (SYNC-BEFORE-SHIP). Local only: the IDE never goes online, so
@@ -345,28 +290,6 @@ def _remove(main: str, path: str, branch: str, force: bool) -> List[str]:
     return problems
 
 
-def merge(root: str, approved: Dict[str, Any]) -> Dict[str, Any]:
-    """Merge the approved branch into the main checkout's branch, then remove the worktree + branch.
-    Re-plans first: anything that moved since the approval (either head) refuses."""
-    plan = plan_merge(root, str(approved.get("path", "")))
-    if not plan.get("ok"):
-        return {"merged": False, "reason": "; ".join(plan.get("blocked") or [plan.get("reason", "")])}
-    for k in ("head", "into", "into_head", "branch"):
-        if plan.get(k) != approved.get(k):
-            return {"merged": False, "reason": f"the worktree changed since you approved ({k}) — "
-                                               f"review and approve again"}
-    main = canonical_repo_root(root)
-    code, out = _git(main, "merge", "--no-ff", "--no-edit", plan["branch"],
-                     timeout=MERGE_TIMEOUT)
-    if code != 0:
-        _git(main, "merge", "--abort")
-        return {"merged": False, "reason": f"git merge failed (aborted, nothing changed): "
-                                           f"{out.strip()[:400]}"}
-    problems = _remove(main, plan["path"], plan["branch"], force=False)
-    return {"merged": True, "into": plan["into"], "merge_head": head_of(main),
-            "removed": not problems, "problems": problems}
-
-
 def delete(root: str, approved: Dict[str, Any]) -> Dict[str, Any]:
     plan = plan_delete(root, str(approved.get("path", "")))
     if not plan.get("ok"):
@@ -396,6 +319,6 @@ def clean(root: str, approved_paths: List[str]) -> Dict[str, Any]:
     return {"removed": done, "skipped": skipped}
 
 
-__all__ = ["rows", "find", "size", "plan_merge", "plan_sync", "plan_delete", "plan_clean", "merge",
-           "sync", "delete", "clean", "APPROVAL_RUN", "TOOL_MERGE", "TOOL_SYNC", "TOOL_DELETE",
+__all__ = ["rows", "find", "size", "plan_sync", "plan_delete", "plan_clean",
+           "sync", "delete", "clean", "APPROVAL_RUN", "TOOL_SYNC", "TOOL_DELETE",
            "TOOL_CLEAN"]

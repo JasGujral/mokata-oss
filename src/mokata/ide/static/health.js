@@ -17,9 +17,13 @@
   function chip(data) {
     const n = (data && data.problems) || 0;
     const b = $("health-chip");
+    // a first run (mokata not set up here) is a start, not a fault: the chip says "Get started"
+    const first = !!(data && data.initialized === false);
+    $("health-label").textContent = first ? "Get started" : "health";
+    $("health-n").hidden = first;                // Get started lists what each capability needs
     $("health-n").textContent = data && !data.checking ? String(n) : (data ? "…" : "?");
     b.classList.toggle("has-problems", n > 0);
-    b.title = data && data.initialized === false ? "mokata is not set up in this repo — open to see what `mokata setup claude` adds"
+    b.title = data && data.initialized === false ? `mokata is not set up in this repo — open Get started to see what \`mokata setup claude\` adds${n ? ` (${n} thing(s) need attention)` : ""}`
       : n ? `${n} thing(s) missing, degraded or out of sync — open for details`
       : "nothing missing or degraded — open for updates and re-sync";
   }
@@ -46,12 +50,23 @@
     if (full) render(res);
   }
 
+  // The dedupe drops a duplicate HINT only (round 2, M2): a row that says nothing but "not ready,
+  // run <fix>" when Get started already prints that same fix. A FAILURE is never hidden — a broken
+  // row, a capability failing at use, a row with Retry renders in full, its fix line included.
+  function duplicateHint(r, shown) {
+    if (r.key === "mokata" || !r.fix || r.state === "ok" || !shown.has(r.fix)) return false;
+    const failure = r.state === "broken" || !!r.retry || !!(r.failing && r.failing.length);
+    return !failure;
+  }
+
   function render(res) {
     const ul = $("hp-rows");
     ul.replaceChildren();
     $("hp-sub").textContent = res.checking ? "checking…"
       : res.problems ? `${res.problems} thing(s) need attention` : "everything answers";
+    const shown = MK.welcomeFixes ? MK.welcomeFixes() : new Set();
     for (const r of res.rows || []) {
+      if (duplicateHint(r, shown)) continue;   // Get started already prints this hint
       const li = el("li", "hp-row " + (STATE_CLS[r.state] || ""));
       const head = el("div", "hp-head");
       head.append(el("span", "hp-state", r.state), el("b", "", r.label));
@@ -183,15 +198,32 @@
     if (res && res.update) { H.update = res.update; paintUpdate(res.update); }
   }
 
-  function open() {
+  // Health holds four things (UX-SIMPLIFY §5 #11/#9/#24): Get started (features/welcome.js), what
+  // is missing or degraded, the language servers (features/lsp.js), and About (the engines, and
+  // "read-only · no API key" — what the status footer said).
+  let opener = null;
+  function open(section) {
+    opener = document.activeElement;
     $("hp").hidden = false;
     $("hp-sub").textContent = "checking…";
     load(true);
+    const w = MK.welcomeLoad ? MK.welcomeLoad() : null;
+    if (MK.lspLoad) MK.lspLoad();
+    const target = section === "welcome" ? $("hp-welcome") : section === "lsp" ? $("hp-lsp") : null;
+    Promise.resolve(w).then(() => {
+      if (H.data && !H.data.checking) render(H.data);        // drop rows Get started now shows
+      if (target) target.scrollIntoView({ block: "start" });
+    });
+    $("hp-close").focus();
   }
-  function close() { $("hp").hidden = true; }
+  function close() {
+    $("hp").hidden = true;
+    if (opener && opener.focus && document.contains(opener)) opener.focus();
+    opener = null;
+  }
 
   MK.wireHealth = function wireHealth() {
-    $("health-chip").onclick = open;
+    $("health-chip").onclick = () => open();
     $("hp-close").onclick = close;
     $("hp").onclick = (ev) => { if (ev.target === $("hp")) close(); };
     $("hp-check").onclick = checkUpdate;
@@ -211,4 +243,5 @@
     load(false);                                 // the cheap pass: fills the chip, no spawn, no network
   };
   MK.openHealth = open;
+  MK.closeHealth = close;
 })();

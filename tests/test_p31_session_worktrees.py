@@ -332,25 +332,44 @@ class MergeAndDeleteAreGated(_Repo):
         self.assertEqual("proposed", r["stage"], r)
         return r["proposal_id"]
 
-    def test_merge_waits_for_the_human_then_merges_and_cleans_up(self):
+    def _merged(self, c, r):
+        """A started `git.merge` job, polled to its end through the jobs feature."""
+        self.assertEqual("started", r["stage"], r)
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            body = c.get(f"/api/jobs/{r['id']}").json()
+            job = body["job"]
+            if job["state"] in ("done", "failed", "cancelled"):
+                return {**job, "result": body.get("result") or {}}
+            time.sleep(0.05)
+        self.fail("the merge job never ended")
+
+    def test_merge_waits_for_the_human_then_merges_and_keeps_the_worktree(self):
+        """P21: a worktree with no mokata run is BLOCKED (no evidence) until a human files an
+        override for that head; then the merge is proposed, waits for `mokata approve`, runs as a
+        job, and the worktree is KEPT (removal is its own gated action)."""
+        from mokata import merge_gate as MG
         wt = self.worktree("a")
         _hook("session-start", {"session_id": "S1", "cwd": wt, "source": "startup"})
         tip = self.commit(wt, "src/feature.py", "F = 1\n", "feature")
         before = _git(self.main, "rev-parse", "HEAD").strip()
         c = self.ide()
+        r = self.post(c, "/api/worktree/merge", {"path": wt})
+        self.assertEqual("blocked", r["stage"], r)
+        self.assertIn("no-run", [b["code"] for b in r["blocked"]])
+        MG.file_override(self.main, wt, "a human's reason for landing it", actor="jas")
         pid = self._proposed(c, "merge", {"path": wt})
         self.assertEqual(before, _git(self.main, "rev-parse", "HEAD").strip(), "proposing merged")
         r = self.post(c, "/api/worktree/merge", {"path": wt, "proposal_id": pid})
         self.assertEqual(("refused", approval.REFUSED_NOT_APPROVED), (r["stage"], r["code"]))
         approval.approve(self.main, pid)                       # what `mokata approve <id>` does
-        r = self.post(c, "/api/worktree/merge", {"path": wt, "proposal_id": pid})
-        self.assertEqual("done", r["stage"], r)
-        self.assertTrue(r["result"]["merged"] and r["result"]["removed"], r)
+        job = self._merged(c, self.post(c, "/api/worktree/merge", {"path": wt, "proposal_id": pid}))
+        self.assertEqual("done", job["state"], job)
+        self.assertTrue(job["result"]["merged"], job)
         _git(self.main, "merge-base", "--is-ancestor", tip, "HEAD")      # the work is in main
-        self.assertFalse(os.path.exists(wt), "the worktree was not removed after the merge")
-        self.assertEqual("", _git(self.main, "branch", "--list", "worktree-a").strip())
+        self.assertTrue(os.path.isdir(wt), "the merge removed the worktree")
         r = self.post(c, "/api/worktree/merge", {"path": wt, "proposal_id": pid})
-        self.assertNotEqual("done", r["stage"], "an approval merged twice")
+        self.assertEqual("refused", r["stage"], "an approval merged twice")
 
     def test_a_dirty_worktree_is_not_merged_and_conflicts_are_shown_first(self):
         wt = self.worktree("a")
@@ -359,21 +378,26 @@ class MergeAndDeleteAreGated(_Repo):
         c = self.ide()
         r = self.post(c, "/api/worktree/merge", {"path": wt})
         self.assertEqual("blocked", r["stage"])
-        self.assertIn("conflict", r["reason"])
-        self.assertIn("src/app.py", r["reason"])
+        self.assertIn("landed on main since this branch", r["reason"])
+        self.assertIn("Sync", r["reason"])
         _write(wt, "README.md", "dirty\n")
         r = self.post(c, "/api/worktree/merge", {"path": wt})
         self.assertIn("uncommitted", r["reason"])
 
     def test_a_merge_approved_then_moved_is_refused(self):
+        from mokata import merge_gate as MG
         wt = self.worktree("a")
         self.commit(wt, "src/f.py", "F = 1\n", "f")
+        MG.file_override(self.main, wt, "a human's reason for landing it", actor="jas")
         c = self.ide()
         pid = self._proposed(c, "merge", {"path": wt})
         approval.approve(self.main, pid)
         self.commit(wt, "src/g.py", "G = 1\n", "g after approval")
         r = self.post(c, "/api/worktree/merge", {"path": wt, "proposal_id": pid})
-        self.assertEqual(("refused", approval.REFUSED_CONTENT_CHANGED), (r["stage"], r["code"]))
+        if r["stage"] == "started":
+            r = self._merged(c, r)["result"]
+        self.assertNotEqual(True, r.get("merged"), r)
+        self.assertNotIn("src/g.py", _git(self.main, "ls-files"))
         self.assertTrue(os.path.isdir(wt))
 
     def test_delete_refuses_unmerged_work_unless_approved_with_discard(self):

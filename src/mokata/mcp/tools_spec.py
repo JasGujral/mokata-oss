@@ -270,8 +270,10 @@ def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
     shared `spec_corpus`, in ONE human-gated commit. The in-harness half of `/mokata:spec`, and the
     only way a spec reaches disk.
 
-    `criteria` is `[{"id": "AC1", "text": "..."}]` and `tests` is `[{"name": "test_x",
-    "ac_ids": ["AC1"]}]` — every acceptance criterion must map to a test or the COMPLETENESS GATE
+    `criteria` is `[{"id": "AC1", "text": "..."}]` and `tests` is `[{"name": "tests/test_x.py::test_x",
+    "ac_ids": ["AC1"]}]` (a repo that commits its specs records each test as `file::test`, a path
+    relative to the repo root: a bare name is resolved to its one file, and refused if it is in none
+    or in several) — every acceptance criterion must map to a test or the COMPLETENESS GATE
     refuses the emit outright (no proposal: a human approving an incomplete spec could not make it
     complete). A UI criterion is `{"id", "text": "Given/When/Then", "kind": "ui", "states":
     {"default", "loading", "empty", "error", "disabled"}}` — what the user sees in each state (or
@@ -333,7 +335,7 @@ def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
                "approach": approach, "domains": domains or [], "scope": scope,
                "tasks": tasks, "clarifications": clarifications, "assumptions": assumptions}
     try:
-        spec, test_refs = spec_for_emit(payload)
+        spec, test_refs = spec_for_emit(payload, surface.root)
     except ValueError as exc:
         return {"status": "error", "committed": False, "reason": str(exc),
                 "hint": ("send the spec as title + criteria [{id, text}] + tests "
@@ -483,6 +485,10 @@ def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
         # MCP-R.D2's awaiting head leads the result: data that arrives buried is data a model reads
         # as absent. Absent entirely (not `false`) on the attached path — no new noise there.
         payload: Dict[str, Any] = {"standalone": alone} if alone else {}
+        from ..committed_specs import resolution_lines
+        resolved = resolution_lines(test_refs)
+        if resolved:                      # L9 r4 — a bare name resolved to a file is NAMED
+            payload["test_resolutions"] = resolved
         payload.update({"ac_count": len(spec.criteria), "test_count": len(test_refs),
                         "gate": "completeness", "completeness": gr.reason})
         from ..engine.emit import _new_warnings
@@ -505,7 +511,7 @@ def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
         # hardening of it. Empty blocks drop out, so a first, attached emit's preview is byte-
         # identical to what it was.
         preview = "\n\n".join(b for b in (alone, replaces, _spec_preview(spec, test_refs),
-                                           _committed_line(store, run_id)) if b)
+                                           _committed_line(store, run_id, surface.root)) if b)
         proposed = _propose(
             path, EMIT_TOOL, args, payload,
             target="state/emitted_spec.json", summary=summary, preview=preview,
@@ -514,8 +520,9 @@ def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
         return proposed
 
     out = _gated_write(_mokata_dir(path), EMIT_KIND, EMIT_TARGET,
-                       preview_content(store, spec),
-                       lambda: spec_commit(store, spec, run_id=run_id, tests=test_refs),
+                       preview_content(store, spec, test_refs),
+                       lambda: spec_commit(store, spec, tree=surface.root, run_id=run_id,
+                                           tests=test_refs),
                        gate, _policy(path, EMIT_TOOL, human_approved=True, surface=surface))
     out["ac_count"] = len(spec.criteria)
     out["corpus_size"] = out.pop("result", None)
@@ -573,6 +580,7 @@ def spec_amend(path: str = ".", title: str = "", criteria: Optional[list] = None
 
     A user asking for something the spec deferred is authorization to ASK — which is this tool —
     never authorization to build. Do not work around a block; amend, or stop."""
+    from ..committed_specs import resolution_lines
     from ..engine.amend import AMEND_TOOL, begin_amend, finish_amend
     from ..engine.emit import spec_for_emit
 
@@ -581,7 +589,7 @@ def spec_amend(path: str = ".", title: str = "", criteria: Optional[list] = None
                "approach": approach, "domains": domains or [], "scope": scope,
                "tasks": tasks, "clarifications": clarifications, "assumptions": assumptions}
     try:
-        spec, test_refs = spec_for_emit(payload)
+        spec, test_refs = spec_for_emit(payload, surface.root)
     except ValueError as exc:
         return {"status": "error", "committed": False, "reason": str(exc)}
 
@@ -646,7 +654,9 @@ def spec_amend(path: str = ".", title: str = "", criteria: Optional[list] = None
                      f"{' — releases: ' + item if item else ''}"),
             preview=("\n\n".join(b for b in (plan.diff.render(),
                                               f"why: {reason or '(none given)'}",
-                                              _committed_line(store, run_id)) if b)),
+                                              "\n".join(f"test resolved to its file: {x}"
+                                                        for x in resolution_lines(test_refs)),
+                                              _committed_line(store, run_id, surface.root)) if b)),
             # MCP-R.D2 (B-AMEND-STUCK): the regression rides the SHARED awaiting head, as
             # `awaiting_blocks`, instead of being appended afterwards as `note`. Two reasons, both
             # bugs in the old line: (1) it landed LAST, under the payload, which is exactly how the
@@ -688,12 +698,14 @@ def _impact_summary(impact: Any) -> Optional[Dict[str, Any]]:
             "degraded": impact.degraded, "note": impact.note}
 
 
-def _committed_line(store: Any, run_id: Any) -> str:
+def _committed_line(store: Any, run_id: Any, tree: str) -> str:
     """L7b — the TRACKED write an approval also makes when `settings.specs.commit` is on, named in
-    the preview so the human approves it knowingly. "" when the setting is off (byte-identical)."""
-    from ..committed_specs import committed_path_for
+    the preview so the human approves it knowingly. "" when the setting is off (byte-identical).
+    Judged in the tree the spec will be written into (`tree`, 0.0.27 SEC-HARDEN)."""
+    from ..committed_specs import committed_path_for, tree_root
     from ..engine.emit import _repo_root, _reemit_run
     root = _repo_root(store)
+    root = tree_root(tree, root) if root else ""
     where = committed_path_for(root, _reemit_run(store, run_id or "")) if root else None
     return (f"also commits the approved spec to {where} (settings.specs.commit — tracked in git)"
             if where else "")
@@ -723,6 +735,9 @@ def _spec_preview(spec: Any, tests: List[Any]) -> str:
         lines.append(f"  {q.id}: {q.question} -> {q.answer or '(unanswered)'}")
     for a in getattr(spec, "assumptions", None) or []:
         lines.append(f"  assumption {a.id}: {a.text}")
+    from ..committed_specs import resolution_lines
+    for line in resolution_lines(tests):
+        lines.append(f"  test resolved to its file: {line}")
     return "\n".join(lines)
 
 

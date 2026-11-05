@@ -1,0 +1,108 @@
+/* mokata ide — THE colour tokens (0.0.27 P6, ID-THEMES-FULL). Every colour in the IDE comes from a
+   variable defined HERE, once per theme; no other stylesheet or script holds a colour literal
+   (tests/test_p6_ide_themes.py greps for one). theme.js sets <html data-theme="…"> to the theme
+   in force — dark, light, hc-dark or hc-light — and "follow the system" is resolved there, live
+   (prefers-color-scheme + prefers-contrast), so nothing below is a media query.
+
+   Brand (assets/brand/BRAND.md): green is the ONLY accent — #3df58c on dark, #22c55e on light,
+   never a third green. A green used as TEXT or as a focus ring on a light surface is the darker
+   ink green (--accent-ink / --focus) because #22c55e does not reach WCAG AA against white; that
+   ink is the --add green this file always had. WCAG AA (4.5:1 text, 3:1 focus ring) in every
+   theme, 7:1 in the two high-contrast themes, is computed from these values by the test.
+   Amber = "needs attention / untested"; blue = "lexical / modified". */
+
+:root, :root[data-theme="dark"] {
+  --bg: #0b0f0d; --panel: #111714; --panel2: #0e1411; --line: #1f2a24; --line2: #2c3a33;
+  --text: #d8e2dc; --text2: #b6c2bb; --muted: #8a978f; --faint: #7d8a83;
+  --accent: #3df58c; --accent-ink: #3df58c; --focus: #3df58c; --sel: #1a2620; --on-accent: #04140a;
+  --add-bg: rgba(61, 245, 140, .10); --add: #8ff5bb;
+  --del-bg: rgba(255, 99, 99, .10); --del: #ff9b9b;
+  --amber: #ffb454; --amber-line: #6b4a1f; --blue: #8ab4ff; --sample: #3df58c; --edge: #2f6e4a;
+  --amber-bg: rgba(255, 180, 84, .10); --amber-bg-strong: rgba(255, 180, 84, .14);
+  --ix-add: rgba(61, 245, 140, .26); --ix-del: rgba(255, 99, 99, .28);
+  --find-hit: rgba(61, 245, 140, .22);
+  --heat-1: rgba(61, 245, 140, .22); --heat-2: rgba(61, 245, 140, .36); --heat-3: rgba(61, 245, 140, .65);
+  --scrim: rgba(0, 0, 0, .55); --shadow: rgba(0, 0, 0, .35); --shadow-lg: rgba(0, 0, 0, .5);
+  --tk-kw: #3df58c; --tk-con: #ff9e64; --tk-ty: #7dcfff; --tk-str: #e6c07b;
+  --tk-doc: #9fb0a6; --tk-esc: #ff9e64; --tk-num: #ff9e64; --tk-com: #8e9b94; --tk-pre: #c792ea;
+  --tk-fn: #8ab4ff; --tk-cls: #f0c674; --tk-dec: #c792ea; --tk-bi: #7dcfff;
+  --tk-tag: #3df58c; --tk-attr: #f0c674; --tk-var: #d8e2dc; --tk-op: #b6c2bb;
+  --tk-pun: #8a978f; --tk-hd: #3df58c; --tk-err: #ff6b6b;
+  --ansi-0: #1b1f1d; --ansi-1: #ff6b6b; --ansi-2: #3df58c; --ansi-3: #ffb454; --ansi-4: #8ab4ff;
+  --ansi-5: #d78bff; --ansi-6: #5fd7d7; --ansi-7: #d8e2dc; --ansi-8: #8a978f; --ansi-9: #ff9b9b;
+  --ansi-10: #8ff5bb; --ansi-11: #ffd28a; --ansi-12: #b4ceff; --ansi-13: #e6b4ff;
+  --ansi-14: #9af0f0; --ansi-15: #ffffff;
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --bg: #fafbfa; --panel: #ffffff; --panel2: #f3f6f4; --line: #e3e8e5; --line2: #d3dbd6;
+  --text: #18201c; --text2: #34403a; --muted: #5d6963; --faint: #66726b;
+  --accent: #22c55e; --accent-ink: #116a35; --focus: #116a35; --sel: #e6f6ec; --on-accent: #04140a;
+  --add-bg: rgba(34, 197, 94, .12); --add: #116a35;
+  --del-bg: rgba(220, 38, 38, .08); --del: #a11d1d;
+  --amber: #8a4b00; --amber-line: #e7c08a; --blue: #2756b8; --sample: #22c55e; --edge: #6fbf8f;
+  --amber-bg: rgba(138, 75, 0, .08); --amber-bg-strong: rgba(138, 75, 0, .12);
+  --ix-add: rgba(34, 197, 94, .28); --ix-del: rgba(220, 38, 38, .20);
+  --find-hit: rgba(34, 197, 94, .28);
+  --heat-1: rgba(34, 197, 94, .22); --heat-2: rgba(34, 197, 94, .42); --heat-3: rgba(34, 197, 94, .65);
+  --scrim: rgba(10, 20, 15, .40); --shadow: rgba(20, 30, 25, .18); --shadow-lg: rgba(20, 30, 25, .28);
+  --tk-kw: #116a35; --tk-con: #a3480d; --tk-ty: #0b6e99; --tk-str: #8a5300;
+  --tk-doc: #5f6b64; --tk-esc: #a3480d; --tk-num: #a3480d; --tk-com: #5d6963; --tk-pre: #7a3e9d;
+  --tk-fn: #2756b8; --tk-cls: #8b4513; --tk-dec: #7a3e9d; --tk-bi: #0b6e99;
+  --tk-tag: #116a35; --tk-attr: #8b4513; --tk-var: #18201c; --tk-op: #34403a;
+  --tk-pun: #5d6963; --tk-hd: #116a35; --tk-err: #b91c1c;
+  --ansi-0: #18201c; --ansi-1: #b91c1c; --ansi-2: #116a35; --ansi-3: #8a5300; --ansi-4: #2756b8;
+  --ansi-5: #7a3e9d; --ansi-6: #0b6e99; --ansi-7: #4b5651; --ansi-8: #5d6963; --ansi-9: #a11d1d;
+  --ansi-10: #0f5a2d; --ansi-11: #7a4a00; --ansi-12: #1d46a0; --ansi-13: #6a2f8a;
+  --ansi-14: #085c80; --ansi-15: #000000;
+  color-scheme: light;
+}
+
+:root[data-theme="hc-dark"] {
+  --bg: #000000; --panel: #000000; --panel2: #0a0a0a; --line: #b6c2bb; --line2: #ffffff;
+  --text: #ffffff; --text2: #ffffff; --muted: #e6ece8; --faint: #c3cfc8;
+  --accent: #3df58c; --accent-ink: #3df58c; --focus: #ffffff; --sel: #1d3a2a; --on-accent: #000000;
+  --add-bg: rgba(61, 245, 140, .16); --add: #b8ffd6;
+  --del-bg: rgba(255, 99, 99, .16); --del: #ffb4b4;
+  --amber: #ffd28a; --amber-line: #ffd28a; --blue: #b3ccff; --sample: #3df58c; --edge: #8ff5bb;
+  --amber-bg: rgba(255, 210, 138, .16); --amber-bg-strong: rgba(255, 210, 138, .24);
+  --ix-add: rgba(61, 245, 140, .20); --ix-del: rgba(255, 99, 99, .22);
+  --find-hit: rgba(61, 245, 140, .34);
+  --heat-1: rgba(61, 245, 140, .18); --heat-2: rgba(61, 245, 140, .32); --heat-3: rgba(61, 245, 140, .80);
+  --scrim: rgba(0, 0, 0, .75); --shadow: rgba(255, 255, 255, .25); --shadow-lg: rgba(255, 255, 255, .35);
+  --tk-kw: #3df58c; --tk-con: #ffb27a; --tk-ty: #a6e3ff; --tk-str: #ffd98a;
+  --tk-doc: #d0dcd5; --tk-esc: #ffb27a; --tk-num: #ffb27a; --tk-com: #c3cfc8; --tk-pre: #e0b3ff;
+  --tk-fn: #b3ccff; --tk-cls: #ffe08a; --tk-dec: #e0b3ff; --tk-bi: #a6e3ff;
+  --tk-tag: #3df58c; --tk-attr: #ffe08a; --tk-var: #ffffff; --tk-op: #ffffff;
+  --tk-pun: #e6ece8; --tk-hd: #3df58c; --tk-err: #ff8a8a;
+  --ansi-0: #000000; --ansi-1: #ff8a8a; --ansi-2: #3df58c; --ansi-3: #ffd28a; --ansi-4: #b3ccff;
+  --ansi-5: #e0b3ff; --ansi-6: #9af0f0; --ansi-7: #ffffff; --ansi-8: #c3cfc8; --ansi-9: #ffb4b4;
+  --ansi-10: #8ff5bb; --ansi-11: #ffe08a; --ansi-12: #cfe0ff; --ansi-13: #f0d4ff;
+  --ansi-14: #c4f8f8; --ansi-15: #ffffff;
+  color-scheme: dark;
+}
+
+:root[data-theme="hc-light"] {
+  --bg: #ffffff; --panel: #ffffff; --panel2: #f5f5f5; --line: #3a443f; --line2: #000000;
+  --text: #000000; --text2: #000000; --muted: #1a1f1c; --faint: #2b332f;
+  --accent: #22c55e; --accent-ink: #0a4d24; --focus: #000000; --sel: #cdeedb; --on-accent: #000000;
+  --add-bg: rgba(10, 77, 36, .12); --add: #0a4d24;
+  --del-bg: rgba(138, 0, 0, .10); --del: #8a0000;
+  --amber: #6b3a00; --amber-line: #6b3a00; --blue: #102f80; --sample: #22c55e; --edge: #0a4d24;
+  --amber-bg: rgba(107, 58, 0, .10); --amber-bg-strong: rgba(107, 58, 0, .12);
+  --ix-add: rgba(10, 77, 36, .08); --ix-del: rgba(138, 0, 0, .07);
+  --find-hit: rgba(34, 197, 94, .38);
+  --heat-1: rgba(10, 77, 36, .22); --heat-2: rgba(10, 77, 36, .42); --heat-3: rgba(10, 77, 36, .65);
+  --scrim: rgba(0, 0, 0, .55); --shadow: rgba(0, 0, 0, .40); --shadow-lg: rgba(0, 0, 0, .55);
+  --tk-kw: #0a4d24; --tk-con: #7a2e00; --tk-ty: #00476b; --tk-str: #5c3700;
+  --tk-doc: #2b332f; --tk-esc: #7a2e00; --tk-num: #7a2e00; --tk-com: #3a443f; --tk-pre: #4f1f6b;
+  --tk-fn: #102f80; --tk-cls: #5a2a00; --tk-dec: #4f1f6b; --tk-bi: #00476b;
+  --tk-tag: #0a4d24; --tk-attr: #5a2a00; --tk-var: #000000; --tk-op: #000000;
+  --tk-pun: #1a1f1c; --tk-hd: #0a4d24; --tk-err: #8a0000;
+  --ansi-0: #000000; --ansi-1: #8a0000; --ansi-2: #0a4d24; --ansi-3: #5c3700; --ansi-4: #102f80;
+  --ansi-5: #4f1f6b; --ansi-6: #00476b; --ansi-7: #2b332f; --ansi-8: #3a443f; --ansi-9: #6e0000;
+  --ansi-10: #063a1a; --ansi-11: #4a2c00; --ansi-12: #0b2263; --ansi-13: #3d1553;
+  --ansi-14: #003650; --ansi-15: #000000;
+  color-scheme: light;
+}

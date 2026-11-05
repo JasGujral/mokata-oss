@@ -602,6 +602,10 @@ GATED = {
     ("committed_specs.py", "write_committed"): "WriteGate @engine/emit.py commit_spec / "
                                                "mcp spec_emit / engine/amend.py finish_amend "
                                                "(via spec_commit, settings.specs.commit on)",
+    # 0.0.27 G3-EVIDENCE — the committed run record `.mokata/runs/<run>/`: since round 3 its
+    # `commit_run_record._commit` closure writes through `explain/safedir.py:SafeDir.write` (no link
+    # followed on any component), so it is DERIVED — classified by the writer it reaches and pinned
+    # as that writer's caller in CALLER_PINS — and carries no hand-written entry here.
     ("knowledge/graph_adopt.py", "adopt_graph._commit"): "WriteGate @knowledge/graph_adopt.py "
                                              "(adopt_graph pins the code graph into the manifest "
                                              "— GR.S2)",
@@ -825,6 +829,10 @@ GATED = {
 
 # ---- register 2: UNGATED BY DESIGN. Not a governed durable write. Each carries its reason.
 UNGATED_BY_DESIGN = {
+    ("explain/safedir.py", "SafeDir.write"): "0.0.27 P46 CHANGE-EXPLAINER — the explainer STORE under gitignored temp_local/reviews/ (pages, their sidecars, the fact-bundle cache, hand-off requests, MCP job status files), written through a directory opened component-by-component with no link followed (O_NOFOLLOW, fstat-matched). The PAGE is model-authored content: Claude Code writes the narrative, mokata grounds every claim, drops the uncited, renders it with zero scripts and validates it against a positive allowlist before this write. Ungated by design (ruled D3, the review_record precedent): an OBSERVATION of a review, never read back as an instruction, touching no committed file; gating it would put an approval on every explanation. Committing a page INTO the repo is the separate, gated `explain_commit` (_gated_write). Bounded by count (KEEP_PAGES/KEEP_BUNDLES/KEEP_REQUESTS/KEEP_JOBS); losing it loses a page, not code. ⚠ The primitive has a SECOND user whose write is NOT by-design-ungated: 0.0.27 G3-EVIDENCE round 3 routes the committed run record `.mokata/runs/<run>/` through it from `run_record.commit_run_record._commit`, a closure handed to WriteGate.submit (pinned in CALLER_PINS) — that write is GATED by its caller, and this entry's by-design reason covers only the explainer store's calls.",
+    ("explain/safedir.py", "SafeDir.unlink"): "0.0.27 P46 CHANGE-EXPLAINER — the explainer store's VISIBLE count-based prune under gitignored temp_local/reviews/: removes one exact generated file name (never a directory, never through a link) through the verified directory descriptor, and every answer that prunes says how many it removed. Committed pages are never touched (they are outside temp_local). Ungated by design for the reason SafeDir.write is: store maintenance of derived, gitignored runtime state.",
+    ('git_safe.py', 'Git.close'): "0.0.27 P21 — removes the private, empty `core.hooksPath` directory this `Git` made for one job (`tempfile.mkdtemp`, 0700, under the OS temp dir). mokata's own scratch; never the repo, nothing approved lives in it.",
+    ('merge_lock.py', 'IndexLock.release'): "0.0.27 P21 — gives back `.git/index.lock` that THIS process created moments earlier (O_EXCL, our owner record inside) when the merge stops BEFORE its commit point (dirty, base moved, cancelled): the unlink returns git's lock exactly as it was. No index, ref or file the human approved is touched.",
     ("harness_cert.py", "StdioMcpClient._pump"): "0.0.23 D12 — NOT a durable write: `self._q` is an in-process `queue.Queue` carrying the MCP server's stdout lines from the reader thread to the request loop of the certification client. `.put` is the queue's, the detector matches the method name. Nothing reaches disk.",
     ("harness_cert.py", "record_result"): "0.0.23 D12 — the OWNER's explicit `scripts/harness_cert.py record` action writing one observed certification result into the repo doc `docs/reference/harness-cert-matrix.json` (atomic tmp + replace). It is evidence the owner types and then COMMITS — git review is its gate — not governed memory, not a model-reachable path (no MCP tool, no hook calls it). It refuses an unevidenced pass and an unparseable matrix rather than overwriting it.",
     ("session_index.py", "_write_file"): "0.0.26 P33 SESSION-INDEX — one small JSON row per Claude Code session under gitignored temp_local/sessions/ (the snapshot store's sibling): when it started/ended, its first prompt (secret-scanned), its cwd/branch/process. Ungated by design: it OBSERVES a session (written by mokata's own SessionStart/UserPromptSubmit/SessionEnd hooks), touches no committed or user file, is never read back as an instruction, and gating it would put a human approval on every session start. Losing it loses the IDE's history list, not code.",
@@ -861,6 +869,7 @@ UNGATED_BY_DESIGN = {
     ("ide/workspace.py", "save"): '0.0.26 P2 (ID-TABS) — the IDE WORKSPACE (open tabs, scroll, explorer dirs, mode/panel, focused session) under gitignored temp_local/ide/, beside the server record. UI state, not the repo: it touches no committed file and approves nothing. Bounded (MAX_BYTES, every list capped). `load` only MOVES a corrupt file aside (never deletes or overwrites it — the user-owned-data rule).',
     ("ide/firstrun.py", "_move_record"): '0.0.26 P39 (FIRST-RUN) — after the human ran `mokata init` from the Welcome screen\'s consent (a gated job), the IDE\'s own SERVER RECORD moves from the user profile into the now-governed repo\'s gitignored temp_local/ide/ (via `_write_record`) and the profile copy is removed, so `mokata ide` / `/mokata:review-window` find the open window where they now look. Only this process\'s own record (pid-checked); no repo file.',
     ("ide/statedir.py", "note_repo"): '0.0.26 P29 (IDE-UNINITIALIZED-REPO) — a one-line `repo.txt` label in the USER profile (~/.mokata/ide-repos/<key>/) naming which repo an un-set-up repo\'s IDE scratch state belongs to. Written once, beside the server record; touches no repo file and approves nothing.',
+    ("ide/usages.py", "_unlink"): "0.0.27 P4 (ID-COPY-CONTEXT) — removes a Find Usages / Copy with Context SPILL file (owner-only, under gitignored temp_local/ide/spill/, or the user-profile IDE dir on an un-set-up repo) that this IDE wrote: on replace, discard, Cancel, failure and IDE stop, and a dead process's leftovers at the next start (pid in the name, `sweep`). Scratch for one answer — no committed file, nothing approved; losing it costs one re-run.",
     ("ide/server.py", "_write_record"): '0.0.22 E2 — the review-window SERVER RECORD (port, pid, token) under gitignored temp_local/ide/, mode 0600, removed on exit. Transient run-state: it says whether a window is open so `/mokata:review-window` re-focuses it instead of starting another.',
     ("ide/server.py", "_remove_record"): '0.0.22 E2 — the review-window SERVER RECORD (port, pid, token) under gitignored temp_local/ide/, mode 0600, removed on exit. Transient run-state: it says whether a window is open so `/mokata:review-window` re-focuses it instead of starting another.',
     ("notify.py", "_debounced"): "Lane F — the notification RATE LIMITER's stamp, under gitignored "
@@ -1004,6 +1013,22 @@ UNGATED_BY_DESIGN = {
         "two orderings are two contracts, and a flag that inverts one silently is how a publisher "
         "loses the middle of its backlog), so it earns its own register key rather than hiding "
         "under its sibling's.",
+    ("events/store.py", "EventStore.window"):
+        "0.0.27 P12 — the activity timeline's PAGE read: one `SELECT … ORDER BY seq DESC LIMIT ?` "
+        "subquery per session id and one for the run, merged by an outer `SELECT … UNION`, over "
+        "`_read_connect` (the reader connection, which runs no DDL). Same reading as `query`: a "
+        "SELECT caught by a sweep that classifies by RECEIVER rather than by leading verb; "
+        "nothing in it writes.",
+    ("events/store.py", "EventStore.read_run_readonly"):
+        "0.0.27 P14 — the next-step hints' per-run read: one `SELECT … ORDER BY seq DESC LIMIT ?` "
+        "subquery per session id and one for the run, merged by `UNION`, over "
+        "`connect_sqlite_readonly` (`mode=ro`, and `immutable=1` when no WAL side file exists, so "
+        "not even a `-shm` is created). Bracketed by a before/after signature; a SELECT caught by a "
+        "sweep that classifies by RECEIVER rather than by leading verb — nothing in it writes.",
+    ("events/store.py", "EventStore.count_for"):
+        "0.0.27 P12 — the timeline's total: `SELECT COUNT(*)` per session id plus one for the run "
+        "(excluding the sessions already counted), over `_read_connect`. Same reading as `count`: "
+        "a read in the receiver net, nothing in it writes.",
     ("state.py", "StateStore._atomic_write"): "StateStore — process/run state under temp_local/",
     ("state.py", "StateStore.delete"): "StateStore — process/run state under temp_local/",
     ("knowledge/ast_backend.py", "AstBackend._save_cache"): "GR.S1 — the incremental AST edge cache under "
@@ -1128,9 +1153,7 @@ UNGATED_BY_DESIGN = {
     ("visibility.py", "capture_session_snapshot"): "session baseline snapshot under temp_local/",
     ("plans.py", "write_plan_file"): "plan drafts under temp_local/ (the PLAN is gated, not the "
                                      "draft file)",
-    ("dashboard.py", "write_dashboard"): "derived HTML under temp_local/ — rendered FROM governed "
-                                         "data",
-    ("dashboard.py", "write_governance_dashboard"): "derived HTML under temp_local/",
+    ("governance_view.py", "write_governance_dashboard"): "derived HTML under temp_local/",
     ("plugin_cache.py", "record_plugin_root"): "machine-local cache under ~/.mokata (outside the "
                                                "repo)",
     ("plugin_runtime.py", "_write"): "0.0.26 L8 — the plugin route's runtime records under "
@@ -1385,6 +1408,10 @@ UNGATED_BY_DESIGN = {
 # record at the flow that drives them, and `_remove` via a user-scoped TOMBSTONE that survives the
 # deletion of the repo ledger (the unsetup answer). Consent is UNCHANGED everywhere.
 LEDGERED = {
+    ('merge_gate.py', '_checkout'): "0.0.27 P21 (ID-MERGE-GATED) — the GATED MERGE's writes into the main checkout's git dir: the temp index copied beside `.git/index` and `read-tree -m -u` through it (s6), removed after; the result is committed onto the index only through `IndexLock.commit_index`. LEDGERED, not GATED: its consent is not a WriteGate `commit=` closure but a human-minted approval of exactly this merge, redeemed (burned) in `merge_gate._execute` just before the compare-and-swap, refused when it was relayed in chat; the landing is recorded on the audit ledger (`gated_merge`, decision `merged` / `recovered` / `unlocked`). There is no content to secret-scan: git's own objects, already committed on the branch that was tested and reviewed.",
+    ('merge_gate.py', '_finish'): "0.0.27 P21 (ID-MERGE-GATED) — the GATED MERGE's writes into the main checkout's git dir: Recover's finish of a merge whose branch already moved: the files of the change that still hold the BASE's content are brought to the merge's (a file that is neither is KEPT as an unstaged change), then the index — under a fresh index lock. LEDGERED, not GATED: its consent is not a WriteGate `commit=` closure but a human-minted approval of exactly this merge, redeemed (burned) in `merge_gate._execute` just before the compare-and-swap, refused when it was relayed in chat; the landing is recorded on the audit ledger (`gated_merge`, decision `merged` / `recovered` / `unlocked`). There is no content to secret-scan: git's own objects, already committed on the branch that was tested and reviewed.",
+    ('merge_lock.py', 'IndexLock.commit_index'): "0.0.27 P21 (ID-MERGE-GATED) — the GATED MERGE's writes into the main checkout's git dir: the new index bytes written into OUR `.git/index.lock` and renamed onto `.git/index` — only after `_assert_index_bytes` proves they are a git index and not our owner record. LEDGERED, not GATED: its consent is not a WriteGate `commit=` closure but a human-minted approval of exactly this merge, redeemed (burned) in `merge_gate._execute` just before the compare-and-swap, refused when it was relayed in chat; the landing is recorded on the audit ledger (`gated_merge`, decision `merged` / `recovered` / `unlocked`). There is no content to secret-scan: git's own objects, already committed on the branch that was tested and reviewed.",
+    ('merge_lock.py', 'remove_stale'): "0.0.27 P21 (ID-MERGE-GATED) — the GATED MERGE's writes into the main checkout's git dir: the removal of mokata's OWN stale `.git/index.lock`, under its own approval (`worktree_merge_unlock`, bound to the lock's content hash) and re-verified at removal (host, boot id, pid + start time, never on a network filesystem). LEDGERED, not GATED: its consent is not a WriteGate `commit=` closure but a human-minted approval of exactly this merge, redeemed (burned) in `merge_gate._execute` just before the compare-and-swap, refused when it was relayed in chat; the landing is recorded on the audit ledger (`gated_merge`, decision `merged` / `recovered` / `unlocked`). There is no content to secret-scan: git's own objects, already committed on the branch that was tested and reviewed.",
     ("memory/migrate.py", "_drop_source"): "0.0.17 STAGE 16 (MIGRATE-DROP-SOURCE-UNLEDGERED, doc "
         "84) — the `--drop-source` DELETE, and the entry exists at all because the drop was split "
         "out of `migrate_memory` to earn it. It DESTROYS every migrated item from the source store "
@@ -1458,6 +1485,20 @@ LEDGERED = {
         "(~/.mokata/removals.json via `_write_tombstone`) that SURVIVES the deletion of the repo's "
         "own ledger — repo identity + when + actor, no repo content. The MCP `reset` already gated "
         "it; the CLI/library path now audits it too (parity).",
+    ("ide/trust.py", "_write"): "0.0.27 P24 (ID-LSP-READONLY-EARLIER, R3; verification M2) — the "
+        "WORKSPACE TRUST record in the USER profile (~/.mokata/ide-repos/<key>/trust.json): whether a "
+        "human let the IDE run this repo's language servers (they execute project code). Bespoke "
+        "consent, fail-closed off a TTY: in the window a one-time code printed to the server's own "
+        "terminal (the P38 bar), in a terminal `mokata ide --trust` behind `human_terminal` (never "
+        "inside a Claude Code session); REVOKE is the fail-safe direction and needs no code. The "
+        "only caller is `trust.decide`, which appends the `workspace_trust` ledger row (actor, the "
+        "real path, the decision) BEFORE this record is written through `atomic_write_text`. "
+        "WHY LEDGERED AND NOT GATED: no WriteGate commit closure and nothing to content-review — "
+        "the file carries a boolean, a path and a ledger seq, never repo content; routing a human's "
+        "own trust decision through a proposal would gate the gate. WHY NOT UNGATED_BY_DESIGN: it "
+        "is a GOVERNED decision (what may execute), not derived cache or UI state. Never a repo "
+        "file: a repo cannot ship its own trust, and a clone at another real path is another "
+        "decision.",
 }
 
 # ---- register 4: KNOWN BYPASS. Real durable writes that genuinely bypass the WriteGate AND leave
@@ -1589,6 +1630,24 @@ GATED_CALLER_EXCEPTIONS = {
 # covers those is `DECLARED_CALLERS` above, checked by `gate_enclosure` instead of by the graph.
 # The 77 are counted and printed every run rather than left as an impression of completeness.
 CALLER_PINS = {
+    # 0.0.27 P46 — the explainer store's prune has ONE resolvable caller: `SafeDir.write`, removing its
+    # own temp file when the write fails (the count-based prunes reach it through a `with` receiver,
+    # which rule (e) does not bind). Derived by `_writegraph.derive_callers`.
+    ("explain/safedir.py", "SafeDir.unlink"): (("explain/safedir.py", "SafeDir.write"),),
+    # 0.0.27 G3-EVIDENCE round 3 — the one RESOLVABLE caller of `SafeDir.write` is the run record's
+    # GATED commit closure (the explainer store's own calls go through an `open_chain` return,
+    # which rule (e) does not type). A new caller reds here and re-opens the entry's reason.
+    ("explain/safedir.py", "SafeDir.write"): (("run_record.py", "commit_run_record._commit"),),
+    # 0.0.27 P21 — the gated merge's sites, derived from `_writegraph.derive_callers`. Every
+    # justification is about WHAT is written (the merge's own temp index / lock / hooks dir) and
+    # under which consent, not who calls it. (`IndexLock.commit_index` has no resolvable caller:
+    # `_checkout` / `_finish` reach it through the `lock` they are handed — counted unpinnable.)
+    ("git_safe.py", "Git.close"): (("git_safe.py", "Git.__enter__"), ("git_safe.py", "Git.__exit__")),
+    ("merge_gate.py", "_checkout"): (("merge_gate.py", "_execute"),),
+    ("merge_gate.py", "_finish"): (("merge_gate.py", "_recover"),),
+    ("merge_lock.py", "IndexLock.release"): (("merge_gate.py", "_execute"),
+                                             ("merge_lock.py", "IndexLock.acquire")),
+    ("merge_lock.py", "remove_stale"): (("merge_gate.py", "_recover"),),
     # 0.0.26 L7b — the committed spec has ONE caller, the spec committer, which only ever runs inside
     # a spec-emit/amend WriteGate commit closure (derived by `_writegraph.derive_callers`).
     ("committed_specs.py", "write_committed"): (("engine/emit.py", "spec_commit"),),
@@ -1664,10 +1723,20 @@ CALLER_PINS = {
     # 0.0.26 P2 — the IDE workspace file (derived the same way).
     ("ide/workspace.py", "load"): (("ide/features/tabs.py", "routes"),),
     ("ide/server.py", "_remove_record"): (("ide/server.py", "serve"),),
+    # 0.0.27 P4 — the spill remover, derived from `_writegraph.derive_callers`. Its entry is about
+    # WHAT it removes (this IDE's own spill files), not who calls it.
+    # 0.0.27 P46 r5 — `explain/spill.py:BundleSpill.drop` removes the oversize-bundle spill it
+    # wrote through P4's `SpillWriter` (released on a hash change, idle, or exit): P4's own rule.
+    ("ide/usages.py", "_unlink"): (("explain/spill.py", "BundleSpill.drop"),
+                                   ("ide/usages.py", "SpillWriter.discard"),
+                                   ("ide/usages.py", "_drop_files"), ("ide/usages.py", "sweep")),
     ("ide/server.py", "_write_record"): (("ide/firstrun.py", "_move_record"),
                                          ("ide/server.py", "serve"),),
     # 0.0.26 P29 — the user-level state dir's `repo.txt` label (derived the same way).
-    ("ide/statedir.py", "note_repo"): (("ide/server.py", "_write_record"),),
+    ("ide/statedir.py", "note_repo"): (("ide/server.py", "_write_record"),
+                                       ("ide/trust.py", "_write"),),
+    # 0.0.27 P24 — the workspace-trust record (LEDGERED): written only by `trust.decide`.
+    ("ide/trust.py", "_write"): (("ide/trust.py", "decide"),),
     ("ide/firstrun.py", "_move_record"): (("ide/firstrun.py", "_init_job"),),
     ("ide/bus.py", "ensure_bridge"): (("harness_setup.py", "apply_setup"),),
     # 0.0.26 P33 — the session index row (derived the same way).
@@ -1715,6 +1784,7 @@ CALLER_PINS = {
         ("flush_liveness.py", "update_state"),
         ("govern/calibration.py", "save_cursor"),
         ("govern/secret_ignore.py", "_gated_write._commit"),
+        ("ide/trust.py", "_write"),
         ("init.py", "InitPlan.write_files"),
         ("knowledge/anchor_fingerprints.py", "_write_record"),
         ("knowledge/graph_adopt.py", "adopt_graph._commit"),
@@ -1733,11 +1803,7 @@ CALLER_PINS = {
         ("visibility.py", "capture_session_snapshot"),
         ("worktree_setup.py", "_append_lines"),
     ),
-    ("dashboard.py", "write_dashboard"): (
-        ("cli_commands/runviews.py", "cmd_watch"),
-        ("mcp/tools_read.py", "watch"),
-    ),
-    ("dashboard.py", "write_governance_dashboard"): (
+    ("governance_view.py", "write_governance_dashboard"): (
         ("cli_commands/runviews.py", "cmd_govern"),
         ("mcp/tools_read.py", "govern"),
     ),
@@ -2430,7 +2496,7 @@ class TestZeroBypass(unittest.TestCase):
                           "than leaving a stale one in the report.")
 
     def test_rule_e_yield_is_stated_not_left_as_a_silent_ratio(self):
-        """RULE (e) RESOLVES 113 CALLS AND ADDS 8 DERIVED SITES, and the ratio is one a reader of
+        """RULE (e) RESOLVES 120 CALLS AND ADDS 8 DERIVED SITES, and the ratio is one a reader of
         a derived report is entitled to have explained rather than left to wonder at.
 
         THE EXPLANATION, and it is checkable, not a hand-wave: the rule's job is to resolve calls
@@ -2444,6 +2510,13 @@ class TestZeroBypass(unittest.TestCase):
         than by hand (doc 85 §7b: "I am only measuring, not mutation-testing" is not an exemption):
         rule (e) ON gives 118 derived sites, the M05-shape mutation OFF gives 116.
 
+        113 -> 120 AT 0.0.27 P24 (ID-LSP-READONLY-EARLIER), re-derived from `_write_closure()`'s
+        receiver-edge list filtered to `ide/lsp.py` / `ide/features/lsp.py`: `Host.start` makes four
+        calls on its local `Server` (start, kill, stderr_tail, status) and the feature's `routes`
+        closures three on their local `Host` (stop_all, status, server_for). Every target is an
+        in-memory process-manager method (a language server's stdio, never a file in the repo or
+        the profile — the trust RECORD is written by `trust.decide`, a registered direct site):
+        `productive` is unchanged — seven resolutions, no site.
         114 -> 113 AT 0.0.26 P37 (paging; merged after INT-2a — P37's own net is +6 −7 = −1): `ripple` became the
         resumable `_Ripple` (a page resumes where the last stopped — no hard cap). Its ten receiver
         calls on a local `_G` (payload ×5, confirm, edge ×2, drop_unconfirmed, node) moved into
@@ -2625,21 +2698,84 @@ class TestZeroBypass(unittest.TestCase):
         graph, closure = _write_closure()
         reaching = set(closure.direct) | set(closure.derived)
 
+        # 113 -> 115 AT 0.0.27 P8, re-derived rather than bumped: `ide/tableview.py` calls
+        # `out.close()` and (in its inner `change`) `out.add(...)` on a locally-built `Diff` — the two
+        # receiver edges `_diff_tables -> Diff.close` and `_diff_tables.change -> Diff.add`.
+        # 115 -> 117 AT 0.0.27 P8 round 2: `make_view` calls `out.add(...)` twice (the filter and the sorted
+        # merge, `make_view -> Diff.add`). `Diff` owns an anonymous temp file (`tempfile.TemporaryFile`, no `open(..., "w")`), so
+        # neither target writes a registered durable file and `productive` below is unchanged.
         self.assertEqual(len(graph.receiver_edges), graph.receiver_calls,
                          "the rule-(e) COUNT and the rule-(e) EDGE LIST disagree — a count with no "
                          "list can only be re-asserted, never re-graded")
-        self.assertEqual(graph.receiver_calls, 113,
+        # 117/120 -> 124 AT the 0.0.27 P8 merge into integration, re-derived from `_write_closure()`:
+        # 113 + P24's 7 (lsp) + P8's 4 (`_diff_tables` x2, `make_view` x2 -> Diff.close/Diff.add).
+        # 124 -> 132 AT the 0.0.27 P4 merge into integration, re-derived from `_write_closure()`
+        # (not summed): P4's own receiver calls on locally-constructed objects — `SpillWriter`
+        # close/discard in `ide/usages.py:copy_context` (2; `scan_spill` closes) and
+        # `ide/features/usages.py:routes.usages.make.work` (2), `Store.close` in
+        # `routes.store.close` (1), `GrepBackend.iter_refs` / `RefsScope.line` in `_floor_usages` (2)
+        # and `RefsScope.line` in `GrepBackend._query` (1). The three that reach a write all reach
+        # `ide/usages.py:_unlink` (spill removal, UNGATED_BY_DESIGN) and are the three P4 rows
+        # added to `productive` below.
+        # 132 -> 185 AT the 0.0.27 P46 merge of integration (P4+P5 in), re-derived from `_write_closure()` (185 = 132 + P46's 53, matching): 53 receiver edges, none
+        # write-reaching (`productive` unchanged). 46 are the page builder `p = _Page()` then
+        # `p.w(...)`/`p.diagram(...)` in `explain/render.py` (an in-memory list of HTML parts), 4 are
+        # `facts = _Facts()` then `facts.add(...)` in `explain/bundle.py:build` (an in-memory dict),
+        # 1 is `runner.start -> BundleJob.start` (a thread), 1 is `open_chain -> SafeDir.close` (a
+        # descriptor). The store's two real writers are registered UNGATED_BY_DESIGN above.
+        # 185 -> 194 AT 0.0.27 P46 round 5, re-derived from `_write_closure()` (194 = 185 + 9): 4 are
+        # `pipe = _Pipe(proc, ...)` then `pipe.readline()` / `pipe.read()` / `pipe.skip()` in
+        # `explain/bundle.py:cat_blobs` (the bounded git reader, N4; in-memory buffer), 5 are
+        # `w = U.SpillWriter(...)` then `w.row(...)` x3 / `w.close()` / `w.discard()` in
+        # `explain/spill.py:write` (N3). The spill rows reach P4's own owner-only spill file, the
+        # same writer P4's productive rows already reach — no new write target; `explain/spill.py:write`
+        # joins `productive` (via `w.discard()` -> P4's `_unlink`, UNGATED_BY_DESIGN).
+        # (P21 history) 132 -> 140 AT 0.0.27 P21 (ID-MERGE-GATED), re-derived from `_write_closure()`'s
+        # receiver-edge list filtered to `merge_gate.py`: `_execute` calls its local
+        # `merge_lock.IndexLock` six times (`acquire`, `release` x4, `keep`) and `_recover` twice
+        # (`acquire`, `keep`). `acquire`/`release` reach `IndexLock.release`'s unlink (UNGATED_BY_
+        # DESIGN: giving back the lock this process just took), so `productive` gains `_execute`
+        # and `_recover`; `keep` only closes a handle.
+        # 194 -> 202 AT the 0.0.27 P21 merge of integration (P46/P14/P9-FIX/L11 in), re-derived from
+        # `_write_closure()` (not summed): 202 receiver edges, of which exactly 8 have a
+        # `merge_gate.py` caller — the eight P21 edges above, unchanged by the merge.
+        # 202 -> 205 AT the 0.0.27 G3-EVIDENCE merge of integration (P21 in), re-derived from
+        # `_write_closure()` (not summed): 205 receiver edges, of which exactly 3 have a
+        # `run_record.py` caller — `plan_run_record -> _Projector.row` and `-> _Projector.evidence`
+        # (an in-memory projection) and `commit_run_record -> WriteGate.submit` (the GATE itself).
+        # None of the three is write-reaching; `productive` is unchanged.
+        # 205 -> 207 AT 0.0.27 G3-EVIDENCE round 3, re-derived from `_write_closure()` (not summed):
+        # exactly 2 new receiver edges, both `held = SafeDir(...)` in
+        # `run_record.commit_run_record._commit` -> `SafeDir._lstat` (a read) and `SafeDir.write`
+        # (the gated record write). The write-reaching one adds `commit_run_record._commit` to
+        # `productive` below.
+        # 207 -> 216 AT 0.0.27 SMALL-FIX r2, re-derived from `_write_closure()` (not summed): the
+        # GIF frame walker (`imagediff.gif_extent` / `_Seq`) and the file/git chunk streams add 9
+        # receiver edges, all reads of an in-memory buffer or a read-only file/pipe; none reaches a
+        # write, so `productive` below is unchanged.
+        # 216 -> 217 AT 0.0.27 CI-FIX round 2 (winlsp), re-derived from `_write_closure()` (not
+        # summed): exactly 1 new receiver edge, `review_context.run_tests` calling `job.terminate()`
+        # on the `WinJob` it just built (a Windows Job Object handle: TerminateJobObject/CloseHandle,
+        # no file write); `productive` below is unchanged.
+        self.assertEqual(graph.receiver_calls, 217,
                          "rule (e)'s resolution count moved; re-derive its yield before trusting "
                          "any number in the audit report that depends on it")
         productive = sorted({caller for caller, _ln, target in graph.receiver_edges
                              if target in reaching})
         self.assertEqual(
             productive,
-            [("govern/calibration.py", "observe"), ("harvest.py", "decide"),
+            [("explain/spill.py", "write"),        # P46 r5: P4's SpillWriter -> P4's _unlink
+             ("govern/calibration.py", "observe"), ("harvest.py", "decide"),
              ("harvest.py", "harvest"), ("hook_cli.py", "user_prompt_submit_main"),
+             ("ide/features/usages.py", "routes.store.close"),
+             ("ide/features/usages.py", "routes.usages.make.work"),
+             ("ide/usages.py", "copy_context"),
              ("mcp/tools_read.py", "session_save"),
+             ("merge_gate.py", "_execute"), ("merge_gate.py", "_recover"),
              ("run_intent.py", "bind_registered"), ("run_intent.py", "carry_claim"),
-             ("run_intent.py", "mark_resumed"), ("stop_gate.py", "_reset"),
+             ("run_intent.py", "mark_resumed"),
+             ("run_record.py", "commit_run_record._commit"),   # G3-EVIDENCE r3: -> SafeDir.write
+             ("stop_gate.py", "_reset"),
              ("team_journal.py", "_floor_rows"), ("test_runs.py", "record_test_run")],
             "of rule (e)'s 80 resolutions, exactly these reach a durable write — every other one "
             "binds a receiver whose class writes nothing (or, since CM.S5, IS the WriteGate), "

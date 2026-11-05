@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..quiet_spawn import hidden
 from . import snapshots as S
+from ..repo_paths import is_private_name
 from ..repo_walk import under_python_env
 
 GIT_TIMEOUT = 10.0
@@ -47,6 +48,10 @@ class Line:
 class Hunk:
     header: str
     lines: List[Line] = field(default_factory=list)
+    # 0.0.27 P5: the line, on each side, that has NO newline at the end of the file (git's
+    # "\ No newline at end of file"): [old line no | None, new line no | None]. Without it a
+    # change that only adds or drops the final newline would show two identical lines.
+    noeol: List[Optional[int]] = field(default_factory=lambda: [None, None])
 
 
 @dataclass
@@ -59,6 +64,10 @@ class FileDiff:
     too_large: bool = False        # P33 (R10): changed, but over the snapshot cap — never dropped
     size: int = 0                  # bytes of the newest side, when known
     writes: int = 0                # how many recorded writes made this change (snapshots)
+    # 0.0.27 P5: where the NEW side's full text is read from, for an expanded context page:
+    # {"work": "1"} the working tree, {"rev": ref}, {"snap": id}, {"session": sid} (its worktree);
+    # {} = nowhere (a deleted file, the SAMPLE) — the page says why it cannot expand.
+    ctx: Dict[str, str] = field(default_factory=dict)
 
     @property
     def added(self) -> int:
@@ -83,9 +92,13 @@ class DiffSet:
                 "files": [{"path": f.path, "old_path": f.old_path, "status": f.status,
                            "binary": f.binary, "added": f.added, "removed": f.removed,
                            "too_large": f.too_large, "size": f.size, "writes": f.writes,
-                           "hunks": [{"header": h.header,
-                                      "lines": [[ln.op, ln.old, ln.new, ln.text]
-                                                for ln in h.lines]} for h in f.hunks]}
+                           "ctx": dict(f.ctx),
+                           "hunks": [dict({"header": h.header,
+                                           "lines": [[ln.op, ln.old, ln.new, ln.text]
+                                                     for ln in h.lines]},
+                                          **({"noeol": list(h.noeol)} if any(
+                                              x is not None for x in h.noeol) else {}))
+                                     for h in f.hunks]}
                           for f in self.files]}
 
 
@@ -109,12 +122,19 @@ def is_git(root: str) -> bool:
 
 
 def parse_unified(text: str) -> List[FileDiff]:
-    """`git diff` output → FileDiffs. Tolerant: an unexpected line is skipped, never raised on."""
+    """`git diff` output → FileDiffs. Tolerant: an unexpected line is skipped, never raised on.
+
+    Lines are split on "\n" ONLY (0.0.27 P5): a CRLF line keeps its "\r" (so a CRLF<->LF change
+    is a visible change, not two identical lines), and a bare "\r" inside a line stays inside it
+    (`str.splitlines` split there and lost the rest of the line and the numbering after it)."""
     files: List[FileDiff] = []
     cur: Optional[FileDiff] = None
     hunk: Optional[Hunk] = None
     old_no = new_no = 0
-    for raw in text.splitlines():
+    raws = text.split("\n")
+    if raws and raws[-1] == "":
+        raws.pop()
+    for raw in raws:
         if raw.startswith("diff --git "):
             m = re.match(r"diff --git a/(.*) b/(.*)$", raw)
             path = m.group(2) if m else raw[11:]
@@ -139,6 +159,12 @@ def parse_unified(text: str) -> List[FileDiff]:
             old_no, new_no = int(m.group(1)), int(m.group(3))
             hunk = Hunk(header=raw)
             cur.hunks.append(hunk)
+        elif hunk is not None and raw.startswith("\\") and hunk.lines:
+            last = hunk.lines[-1]               # "\ No newline at end of file": the line before
+            if last.op in (" ", "-"):
+                hunk.noeol[0] = last.old
+            if last.op in (" ", "+"):
+                hunk.noeol[1] = last.new
         elif hunk is not None and raw[:1] in (" ", "+", "-") and not raw.startswith(("+++", "---")):
             op, body = raw[0], raw[1:]
             if op == " ":
@@ -154,16 +180,63 @@ def parse_unified(text: str) -> List[FileDiff]:
     return files
 
 
+def _split_lines(s: str) -> Tuple[List[str], bool]:
+    """`s` as lines split on "\n" only ("\r" kept), and whether the last line ends in "\n"."""
+    if not s:
+        return [], True
+    parts = s.split("\n")
+    if parts[-1] == "":
+        parts.pop()
+        return parts, True
+    return parts, False
+
+
+def _rng(start: int, stop: int) -> str:
+    """A unified-diff range, as `difflib.unified_diff` writes it."""
+    beginning, length = start + 1, stop - start
+    if length == 1:
+        return str(beginning)
+    if not length:
+        beginning -= 1
+    return f"{beginning},{length}"
+
+
 def text_diff(path: str, old: Optional[str], new: Optional[str], status: str = "") -> FileDiff:
-    """Two texts → one FileDiff. None on either side = not text (binary / too large)."""
+    """Two texts → one FileDiff. None on either side = not text (binary / too large).
+
+    0.0.27 P5: line endings are compared as they are — a CRLF<->LF change and a dropped or added
+    final newline are changes (`str.splitlines` made both invisible: the two texts differed and
+    the diff showed nothing)."""
+    st = status or ("added" if old == "" and new else "deleted" if new == "" and old
+                    else "modified")
     if old is None or new is None:
         return FileDiff(path=path, status=status or "modified", binary=True)
-    lines = list(difflib.unified_diff(old.splitlines(), new.splitlines(), "a/" + path,
-                                      "b/" + path, lineterm="", n=3))
-    parsed = parse_unified("diff --git a/%s b/%s\n%s" % (path, path, "\n".join(lines)))
-    fd = parsed[0] if parsed else FileDiff(path=path, status="modified")
-    fd.status = status or ("added" if old == "" and new else
-                           "deleted" if new == "" and old else "modified")
+    a, a_eol = _split_lines(old)
+    b, b_eol = _split_lines(new)
+    ka: List[Any] = list(a)
+    kb: List[Any] = list(b)
+    if a and not a_eol:
+        ka[-1] = (a[-1], "noeol")
+    if b and not b_eol:
+        kb[-1] = (b[-1], "noeol")
+    fd = FileDiff(path=path, status=st)
+    for group in difflib.SequenceMatcher(None, ka, kb).get_grouped_opcodes(3):
+        i1, i2, j1, j2 = group[0][1], group[-1][2], group[0][3], group[-1][4]
+        h = Hunk(header=f"@@ -{_rng(i1, i2)} +{_rng(j1, j2)} @@")
+        for tag, x1, x2, y1, y2 in group:
+            if tag == "equal":
+                for k in range(x2 - x1):
+                    h.lines.append(Line(" ", x1 + k + 1, y1 + k + 1, a[x1 + k]))
+                continue
+            for k in range(x1, x2):
+                h.lines.append(Line("-", k + 1, None, a[k]))
+            for k in range(y1, y2):
+                h.lines.append(Line("+", None, k + 1, b[k]))
+        if a and not a_eol and i1 < len(a) <= i2:
+            h.noeol[0] = len(a)
+        if b and not b_eol and j1 < len(b) <= j2:
+            h.noeol[1] = len(b)
+        fd.hunks.append(h)
     return fd
 
 
@@ -285,12 +358,21 @@ def _live(root: str) -> DiffSet:
     code, untracked = _git(root, "ls-files", "--others", "--exclude-standard", "-z")
     if code == 0:
         for rel in [u for u in untracked.split("\0") if u]:
-            if rel.split("/", 1)[0] == ".mokata":
+            if is_private_name(rel):                 # 0.0.27: the one folded rule, any spelling
                 continue
             if under_python_env(root, rel):          # 0.0.23 B1: an un-ignored venv/ is not a change
                 continue
             files.append(text_diff(rel, "", _read_text(root, rel), status="added"))
-    return DiffSet("Live changes (working tree vs HEAD)", files)
+    return DiffSet("Live changes (working tree vs HEAD)", _sided(files, {"work": "1"}))
+
+
+def _sided(files: List[FileDiff], ctx: Dict[str, str]) -> List[FileDiff]:
+    """Name where each file's new side is read for an expanded context page (P5) — a deleted
+    file has no new side."""
+    for f in files:
+        if not f.ctx and f.status != "deleted" and not f.binary:
+            f.ctx = dict(ctx)
+    return files
 
 
 def _chain(root: str, session: str) -> List[str]:
@@ -348,6 +430,8 @@ def session_diff(root: str, session: str) -> DiffSet:
             continue
         fd = text_diff(path, old, new)
         fd.writes = writes.get(path, 0)
+        if fd.status != "deleted":
+            fd.ctx = {"snap": b2.id} if b2 is not None else {"work": "1"}
         files.append(fd)
     have = {f.path for f in files}
     shared: List[str] = []
@@ -360,7 +444,8 @@ def session_diff(root: str, session: str) -> DiffSet:
                 continue
             have.add(rel)
             bash += 1
-            files.extend(_working_tree_file(root, rel, v.get("status") == "A"))
+            files.extend(_sided(_working_tree_file(root, rel, v.get("status") == "A"),
+                                {"work": "1"}))
     title = f"What session {session[:8]} changed" + (" (resumed chain)" if len(ids) > 1 else "")
     note = ""
     if bash:
@@ -425,6 +510,7 @@ def _worktree_diff(root: str, session: str, b: Dict[str, Any]) -> DiffSet:
     files = parse_unified(out[:MAX_DIFF_BYTES]) + big
     for rel in untracked:
         files.append(text_diff(rel, "", _read_text(tree, rel), status="added"))
+    _sided(files, {"session": session})
     title = (f"Session {session[:8]} — worktree {b.get('branch') or tree} since "
              f"{(base or 'HEAD')[:10]}")
     note = "" if base else "base unknown — against HEAD"
@@ -461,6 +547,7 @@ def write_diff(root: str, snap_id: str) -> DiffSet:
                        meta={"write": n, "writes": total, "prev": prev.id if prev else ""})
     old = S.content_of(root, prev) if prev is not None else ""
     fd = text_diff(snap.path, old, S.content_of(root, snap))
+    _sided([fd], {"snap": snap.id})
     note = "" if prev is not None else "no earlier capture of this file by this session — " \
                                         "shown as created by this write"
     return DiffSet(title, [fd], note, meta={"write": n, "writes": total,
@@ -527,7 +614,9 @@ def between(root: str, a_id: str, b_id: str) -> DiffSet:
             return DiffSet("Point in time", note="both points must be snapshots of the same file")
         new = S.content_of(root, b)
         label = b.id
-    return DiffSet(f"{a.path}: {a.id} → {label}", [text_diff(a.path, S.content_of(root, a), new)])
+    fd = text_diff(a.path, S.content_of(root, a), new)
+    _sided([fd], {"work": "1"} if b_id == "work" else {"snap": b_id})
+    return DiffSet(f"{a.path}: {a.id} → {label}", [fd])
 
 
 _REF = re.compile(r"^[\w./@^~][\w./@^~-]{0,199}$")   # never a leading "-" (a git option)
@@ -543,7 +632,8 @@ def refs(root: str, base: str, head: str) -> DiffSet:
                      f"{base}...{head}")
     if code != 0:
         return DiffSet(f"{base}...{head}", note=out.strip()[:300])
-    return DiffSet(f"{base}...{head}", parse_unified(out[:MAX_DIFF_BYTES]))
+    return DiffSet(f"{base}...{head}", _sided(parse_unified(out[:MAX_DIFF_BYTES]),
+                                              {"rev": head}), meta={"base": base, "head": head})
 
 
 def branches(root: str) -> List[str]:

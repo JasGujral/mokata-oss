@@ -35,7 +35,7 @@ import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
 from .. import MOKATA_DIR as MOKATA_DIR_NAME, TEMP_LOCAL_DIRNAME
 from ..oslock import DEFAULT_TIMEOUT as LOCK_WAIT_SECONDS, LockTimeout, file_lock
@@ -374,6 +374,91 @@ class AuditLedger:
                 line = line.strip()
                 if line:
                     out.append(json.loads(line))
+        return out
+
+    def entries_by_seq(self, seqs: "Iterable[int]") -> Dict[int, Dict[str, Any]]:
+        """The entries with these `seq`s, WITHOUT reading the whole file (0.0.27 P12).
+
+        The ledger is append-only JSONL with a monotonic `seq`, so an entry is found by bisecting
+        the file's BYTES: seek to the middle, skip to the next line start, read that line's seq,
+        and halve. Each wanted seq gets its own bisect (P12 verification F2: one bisect to the
+        smallest seq then a forward read made a page with seqs spread over a 181 MB file cost
+        20 s); a wanted seq close behind the last one found is read forward instead (a page's
+        rows usually cluster). Read-only; a missing seq (a line removed after the fact) is simply
+        absent from the answer — the chain check (`verify`) is where that is a finding. CRLF-safe
+        (a line is split at `\n`, the `\r` is whitespace to `json.loads`)."""
+        want = sorted({int(s) for s in seqs if isinstance(s, int) and not isinstance(s, bool)})
+        out: Dict[int, Dict[str, Any]] = {}
+        if not want or not os.path.exists(self.path):
+            return out
+        NEAR = 256                                   # read forward (not re-bisect) within this
+        try:
+            size = os.path.getsize(self.path)
+            with open(self.path, "rb") as fh:
+
+                def parse(raw: bytes) -> Optional[Dict[str, Any]]:
+                    try:
+                        d = json.loads(raw.decode("utf-8"))
+                    except (ValueError, UnicodeDecodeError):
+                        return None
+                    return d if isinstance(d, dict) else None
+
+                def seq_at(off: int) -> Tuple[Optional[int], int]:
+                    """(seq of the first full line at/after `off`, that line's end offset)."""
+                    fh.seek(off)
+                    if off > 0:
+                        fh.readline()                 # finish the line we landed inside
+                    raw = fh.readline()
+                    d = parse(raw) if raw else None
+                    s = d.get("seq") if d else None
+                    return (s if isinstance(s, int) else None), fh.tell()
+
+                def bisect_to(target: int) -> int:
+                    """A byte offset from which reading forward reaches `target` (or proves it
+                    absent): the last probe whose line's seq is < target."""
+                    lo, hi = 0, size
+                    while hi - lo > 4096:
+                        mid = (lo + hi) // 2
+                        s, _end = seq_at(mid)
+                        if s is None:
+                            hi = mid
+                        elif s < target:
+                            lo = mid
+                        else:
+                            hi = mid
+                    return lo
+
+                pos: Optional[int] = None            # where the next forward read starts
+                last_seq: Optional[int] = None       # the seq of the line that read ended on
+                for target in want:
+                    if pos is None or last_seq is None or target < last_seq \
+                            or target - last_seq > NEAR:
+                        pos = bisect_to(target)
+                        fh.seek(pos)
+                        if pos > 0:
+                            fh.readline()
+                    else:
+                        fh.seek(pos)
+                    # forward: stop at the target, or past it (absent)
+                    while True:
+                        raw = fh.readline()
+                        if not raw:
+                            pos, last_seq = fh.tell(), None
+                            break
+                        d = parse(raw)
+                        s = d.get("seq") if d else None
+                        if not isinstance(s, int):
+                            continue
+                        if s == target:
+                            out[target] = d
+                            pos, last_seq = fh.tell(), s
+                            break
+                        if s > target:
+                            # not there; the NEXT target may still be ahead of this line
+                            pos, last_seq = fh.tell() - len(raw), s - 1
+                            break
+        except OSError:
+            return out
         return out
 
     def count(self) -> int:

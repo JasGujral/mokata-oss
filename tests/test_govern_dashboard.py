@@ -20,7 +20,7 @@ from _support import sample_manifest_data  # noqa: F401  (path fix side-effect)
 from mokata import MOKATA_DIR
 from mokata.cli import main
 from mokata.config import Surface
-from mokata.dashboard import (
+from mokata.governance_view import (
     build_governance_view,
     governance_path,
     render_governance_html,

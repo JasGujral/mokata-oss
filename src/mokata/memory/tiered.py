@@ -277,6 +277,32 @@ CANDIDATE_OVER_FETCH = LEXICAL_CANDIDATE_FLOOR
 CANDIDATE_UNION_CAP = 150
 
 
+
+#: The lexical tier's own ceiling: the declared union bound, FROZEN at import. Requests are sized
+#: against this, so a `top_k` the settings allow (`turn_top_k` up to 50) cannot ask past it. The
+#: union assert in `_nominate` reads the live `CANDIDATE_UNION_CAP`, so it still FIRES if a future
+#: tier widens the union (`test_db_s8_r1_candidates` R1-9 lowers the cap to prove it).
+LEXICAL_NOMINATION_MAX = CANDIDATE_UNION_CAP
+
+
+def nomination_window(top_k: int, seen: int = 0) -> "tuple":
+    """`(window, exclude_in_query)` — how many lexical nominees to fetch for a top-`top_k` recall
+    that must skip `seen` already-handed ids. R6 (0.0.27 TIERED-RECALL-SILENT-OFF).
+
+    The S4 exclusion used to be paid for by over-fetching `top_k + seen`. That is exact while
+    `(top_k + seen) * 4` fits the declared bound, and it is KEPT there, so a short session ranks
+    byte-identically to v0.0.26. Past the bound (about 33 handed items at the default k=5) the
+    over-fetch crossed `CANDIDATE_UNION_CAP`, the assert in `_nominate` fired on every turn, and
+    the per-turn pack fell back to the keyword floor for the rest of the session. There the
+    exclusion moves INSIDE the ranked query instead (`exclude_in_query`), and the window is the
+    plain `top_k` one. Either way the window never exceeds the bound: the bound is not raised to
+    hide the failure, the request is sized to respect it."""
+    over = max((top_k + seen) * 4, CANDIDATE_OVER_FETCH)
+    if seen and (top_k + seen) * 4 > LEXICAL_NOMINATION_MAX:
+        return min(max(top_k * 4, CANDIDATE_OVER_FETCH), LEXICAL_NOMINATION_MAX), True
+    return min(over, LEXICAL_NOMINATION_MAX), False
+
+
 def _kind_filter(items: List[Any], kinds: Optional[Sequence[str]]) -> List[Any]:
     """THE kind rule, in ONE place: keep only items whose `effective_kind` is in `kinds`.
 
@@ -335,7 +361,8 @@ def _nominate(store: Any, query: str, top_k: int,
               degrade_out: Optional[Callable[[str], None]],
               embedder: Optional[Embedder] = None, semantic: bool = True,
               kinds: Optional[Sequence[str]] = None,
-              count_read: bool = True) -> Optional[tuple]:
+              count_read: bool = True,
+              exclude: Optional[Any] = None) -> Optional[tuple]:
     """R-1 — the bounded candidate read: nominate in SQL, hydrate the union, return
     `(items, {id: lexical_score})`. `None` when this backend cannot nominate.
 
@@ -354,9 +381,15 @@ def _nominate(store: Any, query: str, top_k: int,
         return None
     backend = store.backend
     scope_path = store.candidate_scope_path()
+    window, in_query = nomination_window(top_k, len(exclude or ()))
     try:
-        ranked = backend.lexical_search(query, top_k=max(top_k * 4, CANDIDATE_OVER_FETCH),
-                                        scope_path=scope_path, statuses=(ACTIVE,), kinds=kinds)
+        if in_query:
+            ranked = backend.lexical_search(query, top_k=window, scope_path=scope_path,
+                                            statuses=(ACTIVE,), kinds=kinds,
+                                            exclude_ids=sorted(exclude))
+        else:
+            ranked = backend.lexical_search(query, top_k=window, scope_path=scope_path,
+                                            statuses=(ACTIVE,), kinds=kinds)
     except Exception as exc:
         # Identical posture, and identical breadth, to `lexical_tier`'s handler: this spans a
         # psycopg driver error (an OPTIONAL extra, not nameable at module scope), a sqlite3 error,
@@ -434,7 +467,8 @@ def tiered_recall(store: Any, query: str, *, embedder: Optional[Embedder] = None
                   now: Optional[str] = None,
                   expander: Optional[Callable] = None,
                   kinds: Optional[Sequence[str]] = None,
-                  count_read: bool = True) -> List[RetrievalHit]:
+                  count_read: bool = True,
+                  exclude_ids: Optional[Any] = None) -> List[RetrievalHit]:
     """Fuse lexical + graph + semantic + recency + usage into one ranked, top-k result (see the
     module docstring).
 
@@ -459,13 +493,20 @@ def tiered_recall(store: Any, query: str, *, embedder: Optional[Embedder] = None
         of it, exactly as the scope predicate is. A backend that ignores `kinds` returns a superset
         and this filter still produces the right answer.
       * `count_read=False` reads through the store's NON-COUNTING twins. For the per-turn
-        injection, which must move no durable state on a hook that fires every prompt."""
+        injection, which must move no durable state on a hook that fires every prompt.
+
+    R6 (0.0.27 TIERED-RECALL-SILENT-OFF) — `exclude_ids` (the S4 already-handed set) is never
+    returned. The result is the top `top_k + len(exclude_ids)` of the ranking with those ids
+    removed: exactly what the caller used to compute by over-fetching, so a short session is
+    byte-identical. The nomination stays inside its bound (`nomination_window`)."""
+    exclude = frozenset(exclude_ids or ())
+    rank_k = top_k + len(exclude)
     # R-1 (DB.S8) — CANDIDATE SELECTION. The store's tiers nominate their own ranked top-k in SQL
     # and only the union is materialized; `None` means this backend cannot nominate (the Jaccard
     # floor: any third-party adapter with no index of its own) and the full-set read
     # below is its correct tier, not a fallback it is being punished with.
     nominated = _nominate(store, query, top_k, degrade_out, embedder, semantic,
-                          kinds=kinds, count_read=count_read)
+                          kinds=kinds, count_read=count_read, exclude=exclude)
     if nominated is not None:
         items, lex = nominated
         items = _kind_filter(items, kinds)
@@ -489,7 +530,7 @@ def tiered_recall(store: Any, query: str, *, embedder: Optional[Embedder] = None
             return []
         # DB.S3 — the lexical tier is a SQL FTS query where the backend can run one, and the
         # Jaccard scan (this line's former body) only where it can't.
-        lex, _lexical_mode = lexical_tier(store, query, items, top_k, degrade_out)
+        lex, _lexical_mode = lexical_tier(store, query, items, rank_k, degrade_out)
 
     sem: dict = {}
     if semantic and embedder is not None:
@@ -503,7 +544,7 @@ def tiered_recall(store: Any, query: str, *, embedder: Optional[Embedder] = None
         if hasattr(backend, "semantic_search"):
             # index-backed top-k (e.g. pgvector) — no full-store scan
             try:
-                for it, score in backend.semantic_search(query, top_k=max(top_k, len(items))):
+                for it, score in backend.semantic_search(query, top_k=max(rank_k, len(items))):
                     sem[it.id] = score
             except Exception as exc:
                 # D5 — the semantic TIER just went away, and recall carried on ranking as if it had
@@ -617,6 +658,8 @@ def tiered_recall(store: Any, query: str, *, embedder: Optional[Embedder] = None
         # equivalent but identical, which is what makes the degrade byte-identical rather than
         # merely equal-scoring.
         hits.sort(key=lambda h: (-h.score, h.item.created_at, h.item.id))
+    if exclude:
+        return [h for h in hits[:rank_k] if h.item.id not in exclude]
     return hits[:top_k]
 
 

@@ -47,7 +47,7 @@ class TestMcpSdkIsDefaultDependency(unittest.TestCase):
         m = re.search(r"(?m)^dependencies = \[(?P<body>.*)\]", self.pyproject)
         self.assertIsNotNone(m, "pyproject.toml has no top-level [project].dependencies array")
         deps = m.group("body")
-        self.assertIn("mcp>=1.2", deps,
+        self.assertIn("mcp>=1.30", deps,
                       "the MCP SDK must be a DEFAULT dependency (plugin-first), not [mcp]-only")
         self.assertNotIn("python_version", deps,
                          "the SDK dependency must be unconditional — the 3.9 env marker is gone")

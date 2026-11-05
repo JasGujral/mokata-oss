@@ -37,7 +37,7 @@ class TheFirstMinuteWorks(H.IdeFlow):
 
     def test_3_the_graph_draws_a_symbols_caller(self):
         p = self.page
-        self.rail("graph")
+        self.go("graph")
         p.wait_for_selector("#view-graph:not([hidden])")
         p.fill("#g-symbol", "slugify")
         p.click("#g-go")

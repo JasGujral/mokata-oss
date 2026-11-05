@@ -29,20 +29,14 @@ from .selection import (  # noqa: F401 - re-export shim (import-compat)
     build_backend,
     select_memory_backend,
 )
-from .consolidation import (
-    ARCHIVE,
-    MERGE,
-    PRUNE,
-    SUMMARIZE,
-    ConsolidationProposal,
-    SummaryDrafter,
-    propose_archival,
-    propose_consolidations,
-    render_consolidation,
-)
-from .healing import (CONTRADICTION, CROSS_WRITER, INTENTION_DUE, REFRESH_VERBS, RETIRE_DUE,
-                      HealingProposal,
-                      detect_issues, render_proposal)
+# R6 (0.0.27 HOOK-BUDGET-1M-MARGIN) — `consolidation` and `healing` are imported INSIDE the
+# methods that use them (the heal / consolidate flows), never at module scope: the per-prompt hook
+# opens a store on every turn and runs neither, and their six dataclasses cost it ~4 ms of a 150 ms
+# budget. The annotations naming their types are strings (`from __future__ import annotations`).
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from .consolidation import ConsolidationProposal, SummaryDrafter
+    from .healing import HealingProposal
 from .item import ACTIVE, ARCHIVED, DECISION, DEFAULT_TOP_K, MEMORY_TYPES, STALE as STATUS_STALE
 from .item import SUPERSEDED, MemoryItem, approval_ledger_id_of, downgrade_refusal, now_iso
 from . import lifecycle
@@ -1068,7 +1062,8 @@ class MemoryStore:
         if self._ledger is not None:
             self._ledger.record("enforcement_change", subject=item.subject, item_id=item.id,
                                  gkind=item.governance_kind, direction=direction,
-                                 old=old, new=new, actor=actor, approval_seq=approval_seq)
+                                 old=old, new=new, actor=actor, approval_seq=approval_seq,
+                                 run=_current_run())
 
     def promote(self, item_id: str, to: str,
                 confirm: Optional[Callable[[str], bool]] = None,
@@ -1538,7 +1533,8 @@ class MemoryStore:
     def recall_relevant(self, query: str, top_k: int = DEFAULT_TOP_K, semantic: bool = True,
                         graph_scorer: Any = None, *, stamp: bool = True,
                         kinds: Optional[Sequence[str]] = None,
-                        degrade_out: Optional[Callable[[str], None]] = None) -> List[Any]:
+                        degrade_out: Optional[Callable[[str], None]] = None,
+                        exclude_ids: Optional[Sequence[str]] = None) -> List[Any]:
         """Stage 35e — tiered, by-relevance retrieval (lexical floor + optional graph +
         semantic when an embedder is wired), fused + ranked, top-k only (frugal). Returns
         a list of RetrievalHit. Degrades to lexical when the semantic/graph tiers are off.
@@ -1598,7 +1594,10 @@ class MemoryStore:
         and on a hook that fires every prompt the SAME notice would print on every turn — the one
         case `bootstrap.build_injection` already documents as "announcing it buys nothing and
         trains the user to ignore the channel". Default `None` is unchanged (stderr, once per
-        subsystem), so every existing caller keeps its notices."""
+        subsystem), so every existing caller keeps its notices.
+
+        R6 (0.0.27) — `exclude_ids` are never returned and are excluded INSIDE the bounded ranked
+        read once a long session would over-fetch past it (`tiered.nomination_window`)."""
         from .tiered import tiered_recall
         if graph_scorer is None and self.knowledge_layer is not None:
             # 0.0.26 O12 — LAZY: the live graph lookups (a server start, a freshness reconcile) run
@@ -1607,7 +1606,7 @@ class MemoryStore:
         hits = tiered_recall(self, query, embedder=self.embedder,
                              graph_scorer=graph_scorer, top_k=top_k, semantic=semantic,
                              expander=self._edge_expander(), kinds=kinds, count_read=stamp,
-                             degrade_out=degrade_out)
+                             degrade_out=degrade_out, exclude_ids=exclude_ids)
         # Only the TOP-K that were actually returned are stamped — the signal being recorded is
         # "this item was surfaced to someone", not "this item was considered by the ranker", and
         # every active item is considered on every recall. Counting candidates would make
@@ -1736,6 +1735,7 @@ class MemoryStore:
 
     # --- self-healing (C5, surfacing + gated resolution) --------------------
     def detect_issues(self, now: Optional[str] = None) -> List[HealingProposal]:
+        from .healing import detect_issues
         active = [i for i in self.backend.all(statuses=(ACTIVE,))
                   if i.mtype in self.enabled_types]
         return detect_issues(active, now=now, conflicts=self._cross_writer_conflicts(),
@@ -1939,6 +1939,7 @@ class MemoryStore:
             return set()
 
     def render_proposal(self, p: HealingProposal) -> str:
+        from .healing import render_proposal
         return render_proposal(p)
 
     def _record_healing(self, p: HealingProposal, decision: str, changed: bool) -> None:
@@ -1960,6 +1961,7 @@ class MemoryStore:
         longer settles conflicts itself: it asks, then calls this method, so there is exactly one
         implementation of "what happens when two writers disagree" and both entry points provably
         converge on the same end state."""
+        from .healing import CONTRADICTION, CROSS_WRITER, INTENTION_DUE, REFRESH_VERBS, RETIRE_DUE
         if decision not in ("approve", "edit", "reject", "defer", "discard"):
             raise MemoryError(f"unknown decision '{decision}'")
         if p.kind == CROSS_WRITER:
@@ -2076,7 +2078,7 @@ class MemoryStore:
           replace     — a NEW learning (`value`) supersedes it; grounded first
           delete      — remove the row (the audit ledger + git history are the archive)
         """
-        from .healing import REFRESH_VERBS
+        from .healing import REFRESH_VERBS, RETIRE_DUE
         if verb not in REFRESH_VERBS:
             raise MemoryError(f"unknown refresh verb '{verb}' (one of {', '.join(REFRESH_VERBS)})")
         if p.kind != RETIRE_DUE:
@@ -2260,6 +2262,7 @@ class MemoryStore:
         Read-only, and it returns `[p]` for a conflict with no approval group — a solo conflict is
         a group of one, so every caller can treat the group as the unit without first asking
         whether there is one."""
+        from .healing import CROSS_WRITER
         if p.kind != CROSS_WRITER or not p.conflict_id:
             return [p]
         by_conflict = {q.conflict_id: q for q in self.cross_writer_proposals()}
@@ -2299,6 +2302,7 @@ class MemoryStore:
         crash cannot leave the approval half-settled on disk. Combined with the pre-gate refusal,
         the group is all-or-nothing at both ends — nothing is written when it refuses, and what it
         does write lands together."""
+        from .healing import CROSS_WRITER
         if p.kind != CROSS_WRITER:
             raise MemoryError("apply_group_decision resolves a cross-writer conflict only "
                               f"(this proposal is '{p.kind}')")
@@ -2380,6 +2384,7 @@ class MemoryStore:
         the identical secret-scan → human gate → ledger → commit path in `apply_consolidation` that
         the placeholder rode. Omitted (the default, and every existing caller) the behaviour is
         byte-identical to the pre-M-4 build."""
+        from .consolidation import propose_consolidations
         led = ledger if ledger is not None else self._ledger
         active = [i for i in self.backend.all(statuses=(ACTIVE,))
                   if i.mtype in self.enabled_types]
@@ -2403,6 +2408,7 @@ class MemoryStore:
         budget that governs it, or a store would stay permanently "over budget" on the strength of
         items it already retired.
         """
+        from .consolidation import propose_archival
         led = ledger if ledger is not None else self._ledger
         active = [i for i in self.backend.all(statuses=(ACTIVE,))
                   if i.mtype in self.enabled_types and lifecycle.is_open(i)]
@@ -2415,6 +2421,7 @@ class MemoryStore:
         return proposals
 
     def render_consolidation(self, p: ConsolidationProposal) -> str:
+        from .consolidation import render_consolidation
         return render_consolidation(p)
 
     def apply_consolidation(self, p: ConsolidationProposal, decision: str,
@@ -2431,6 +2438,7 @@ class MemoryStore:
         store), no `write_gate` ledger record, and no WritePolicy seam. It now commits through
         `_gated_commit` like every other memory writer: the writes move into a `_commit` closure the
         gate runs, so scan → gate → ledger → commit is the ONLY order they can happen in."""
+        from .consolidation import ARCHIVE, MERGE, PRUNE, SUMMARIZE
         led = ledger if ledger is not None else self._ledger
         if decision not in ("approve", "edit", "reject", "defer"):
             raise MemoryError(f"unknown decision '{decision}'")
@@ -2574,3 +2582,10 @@ class _LazyLiveGraphScorer:
             except Exception:
                 self._scorer = None
         return self._scorer(query, item) if self._scorer is not None else 0.0
+
+
+def _current_run() -> str:
+    """G3-EVIDENCE — the run this ledger row belongs to (`session.current_run_id`), so a committed
+    run record can export it. Imported late: the session module must not load at import time here."""
+    from ..session import current_run_id
+    return current_run_id()

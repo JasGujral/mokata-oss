@@ -21,12 +21,13 @@ presence without touching the real environment.
 
 from __future__ import annotations
 
-import importlib.util
 import os
-import shutil
 import sys
-import sysconfig
 from typing import Dict, Optional
+
+# `shutil` (which pulls bz2/lzma/zlib), `sysconfig` and `importlib.util` are imported inside the
+# probes that use them (R6, 0.0.27 HOOK-BUDGET-1M-MARGIN): `config` imports this module for every
+# hook process, and a prompt whose graph tier is not consulted never resolves a command.
 
 from .repo_walk import prune_source_dirs
 
@@ -43,6 +44,7 @@ ENV_BOUND_COMMANDS = ("code-review-graph",)
 def env_scripts_dirs() -> tuple:
     """The scripts directories of the environment running mokata — where its own extras' commands
     land (`<prefix>/bin`, `<prefix>\\Scripts`), whether or not they are on PATH."""
+    import sysconfig
     dirs = []
     for d in (sysconfig.get_path("scripts"), os.path.dirname(sys.executable),
               os.path.join(sys.prefix, "Scripts" if os.name == "nt" else "bin")):
@@ -53,6 +55,7 @@ def env_scripts_dirs() -> tuple:
 
 def find_env_command(name: str) -> Optional[str]:
     """`name` in mokata's OWN environment's scripts dirs only — never PATH."""
+    import shutil
     for d in env_scripts_dirs():
         found = shutil.which(name, path=d)
         if found:
@@ -74,6 +77,8 @@ def find_command(name: str) -> Optional[str]:
     if name in ENV_BOUND_COMMANDS:
         from .crg_resolve import resolve_crg
         return resolve_crg().path
+    import shutil
+    import sysconfig
     hit = shutil.which(name)
     if hit:
         return hit
@@ -131,6 +136,7 @@ class Detector:
         if dtype == "python_module":
             if not name:
                 return False
+            import importlib.util
             try:
                 return importlib.util.find_spec(name) is not None
             except (ImportError, ValueError, ModuleNotFoundError):

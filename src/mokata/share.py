@@ -237,7 +237,9 @@ def apply_manifest(root: str, data: Any,
             # the same `write_gate` shape the gate itself records, so one query finds every blocked
             # write regardless of whether the gate or the boundary scan caught it. Named by KEY: the
             # ledger must not become the place the credential finally gets written down (P23).
+            from .session import current_run_id
             ledger.record("write_gate", write_kind="config", target=manifest_path, actor="human",
+                          run=current_run_id(),
                           decision="blocked",
                           reason=f"secret detected in an untrusted shared stack: {', '.join(blocked)}")
         return ApplyResult(

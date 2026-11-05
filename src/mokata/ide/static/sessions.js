@@ -1,22 +1,17 @@
-// mokata ide — the Sessions screen (S1; 0.0.26 P33, first cut 0.0.25 ID3): every session in one
-// paginated list, its changed files and diffs (cumulative or per write), the needs-you queue, the
-// session switcher, the replay (time-lapse) and the change treemap. The server derives and lays out
-// everything (`ide/session_views.py`); this file only draws it. Repo text goes in through
-// textContent / SVG attributes, never markup.
+// mokata ide — the Sessions screen (S1; 0.0.26 P33, first cut 0.0.25 ID3; 0.0.27 UX-SIMPLIFY):
+// every session in one paginated list (the left side), and the picked session's header — title,
+// facts, the run's lifecycle strip, "Review changes (n)", the resume command. Its history is the
+// Timeline view (features/activity_panel.js), its plan Plan & spec (plan.js), its worktree the
+// Worktree view (features/worktrees.js). Its diffs open in Review — one diff renderer, one place.
+// What waits on you goes to the waiting bar (approvals.js). The server derives everything
+// (`ide/session_views.py`); this file only draws it. Repo text goes in through textContent only.
 "use strict";
 
 (function () {
   const MK = window.MK;
   const { $, el, ui, api } = MK;
-  const SVG = "http://www.w3.org/2000/svg";
-  const sv = { data: null, tl: null, step: 0, timer: 0, size: "loc" };
-
-  const svgEl = (tag, attrs) => {
-    const n = document.createElementNS(SVG, tag);
-    for (const [k, v] of Object.entries(attrs || {})) n.setAttribute(k, String(v));
-    return n;
-  };
-  const ago = (secs) => secs < 90 ? `${secs}s` : secs < 5400 ? `${Math.round(secs / 60)}m` : `${Math.round(secs / 3600)}h`;
+  MK.svgNS = "http://www.w3.org/2000/svg";   // the one SVG namespace constant (P13 Proof draws with it)
+  const sv = { data: null };
 
   // ----------------------------------------------------------------------------- S1 list
   // 0.0.26 P33 — ONE session list: every session that ran in the repo (the durable index ∪
@@ -56,18 +51,18 @@
   MK.loadSessionList = loadList;
 
   async function loadBrowser() {
-    // needs-you badge + queue (risk-sorted); the list itself is `loadList`.
+    // the needs-you queue (risk-sorted) goes to the ONE waiting bar; the live count to the Sessions
+    // tab; the list itself is `loadList`.
     const d = await api("/api/sessions").catch(() => null);
     if (!d || d.error) return;
     MK.markSample(d);
     sv.data = d;
-    renderNeedsBadge(d);
-    // P34: "waiting on you" and "live" are part of the Activity chip (§5.3), not top-bar buttons.
-    if (MK.jobs && MK.jobs.setSessions) {
-      MK.jobs.setSessions({ waiting: d.waiting || 0, live: (d.sessions || []).filter((s) => s.status === "live").length,
-                            top: (d.needs_you || [])[0] || null });
-    }
-    if (ui.mode === "sessions") { renderNeeds(d); loadList(false); if (ui.focus) loadDetail(); }
+    if (MK.waiting) MK.waiting.setNeeds(d.needs_you || []);
+    const live = (d.sessions || []).filter((x) => x.status === "live").length;
+    const n = $("tab-sessions-n");
+    n.textContent = live ? String(live) : "";
+    n.title = live ? `${live} live session(s)` : "";
+    if (ui.tab === "sessions") { loadList(false); if (ui.focus) loadDetail(); }
   }
   MK.onRefreshSessions = loadBrowser;
 
@@ -75,8 +70,8 @@
   // screen shows a live row it re-asks every 30 s (never at idle: no live row, no timer).
   function armAging() {
     if (s1.timer) { clearTimeout(s1.timer); s1.timer = 0; }
-    if (ui.mode === "sessions" && s1.rows.some((r) => r.status === "live")) {
-      s1.timer = setTimeout(() => { s1.timer = 0; if (ui.mode === "sessions") loadList(false); }, 30000);
+    if (ui.tab === "sessions" && s1.rows.some((r) => r.status === "live")) {
+      s1.timer = setTimeout(() => { s1.timer = 0; if (ui.tab === "sessions") loadList(false); }, 30000);
     }
   }
 
@@ -102,8 +97,10 @@
     const ul = $("s1-rows");
     ul.replaceChildren();
     for (const r of s1.rows) {
-      const b = el("button", "item s1-row st-" + r.status + (ui.focus && (r.chain || [r.id]).includes(ui.focus) ? " active" : "") + (r.waiting ? " waiting" : ""));
+      const on = !!ui.focus && (r.chain || [r.id]).includes(ui.focus);
+      const b = el("button", "item s1-row st-" + r.status + (on ? " active" : "") + (r.waiting ? " waiting" : ""));
       b.type = "button";
+      b.setAttribute("aria-current", on ? "true" : "false");
       b.dataset.sid = r.id;
       const head = el("span", "s1-head");
       const dot = el("span", "st-dot st-" + r.status);
@@ -148,11 +145,16 @@
 
   function setFilter(f) {
     s1.filter = f;
-    for (const b of document.querySelectorAll("button.pill[data-s1filter]")) b.classList.toggle("active", b.dataset.s1filter === f);
+    for (const b of document.querySelectorAll("button.pill[data-s1filter]")) {
+      b.classList.toggle("active", b.dataset.s1filter === f);
+      b.setAttribute("aria-pressed", String(b.dataset.s1filter === f));
+    }
     loadList(false);
   }
 
   // ----------------------------------------------------------------------------- S1 detail
+  // ----------------------------------------------------------------------------- S1 detail
+  // The header: what the picked session is. Its changes open in Review ("Review changes (n)").
   async function loadDetail() {
     const sid = ui.focus;
     $("s1-pick").hidden = !!sid;
@@ -164,159 +166,32 @@
       when(row.started), dur(row.duration), row.branch ? "⎇ " + row.branch : "",
       row.run ? `run ${row.run}${row.stage ? " · " + row.stage : ""}` : "",
       (row.chain || []).length > 1 ? `resumed chain: ${row.chain.map((x) => String(x).slice(0, 8)).join(" ← ")}` : ""].filter(Boolean).join(" · ");
-    const slow = setTimeout(() => { if (ui.focus === sid && !s1.diff) MK.regionSay($("session-files"), "loading", "Reading this session's changes…"); }, 300);
-    s1.diff = null;
+    $("s1-review").textContent = "Review changes";
     const d = await api("/api/session?id=" + encodeURIComponent(sid)).catch((e) => ({ error: "unreachable", note: String(e && e.message || e) }));
-    clearTimeout(slow);
     if (ui.focus !== sid) return;
     if (!d || d.error) {
-      $("session-files").hidden = false;
-      MK.regionSay($("session-files"), "error", MK.whyFailed(d, "read this session's changes"), { retry: loadDetail });
+      $("s1-note").hidden = false;
+      $("s1-note").textContent = MK.whyFailed(d, "read this session's changes");
       return;
     }
     MK.markSample(d);
-    s1.diff = d;
+    const n = (d.files || []).length;
+    $("s1-review").textContent = `Review changes (${n})`;
+    $("s1-review").disabled = !n;
     ui.sessionPaths = { sid, paths: (d.files || []).map((f) => f.path) };   // the search scope (R28)
     if (MK.renderViewing) MK.renderViewing();
-    const note = [d.note, d.basis === "approximate" ? "basis: approximate (shared checkout)" : d.basis === "exact" ? `basis: exact (worktree ${d.branch || ""})` : ""].filter(Boolean).join(" · ");
+    const note = [d.note, d.basis === "approximate" ? "changes are approximate (a shared checkout)" : d.basis === "exact" ? `changes are exact (worktree ${d.branch || ""})` : ""].filter(Boolean).join(" · ");
     $("s1-note").hidden = !note;
     $("s1-note").textContent = note;
-    if (s1.mode === "write") loadWrites(); else renderFiles(d);
-  }
-
-  function renderFiles(d) {
-    $("session-files").hidden = false;
-    $("s1-writes").hidden = true;
-    $("s1-writes-hint").hidden = true;
-    $("s1-write-diff").hidden = true;
-    const ul = $("session-files");
-    ul.replaceChildren();
-    const files = d.files || [];
-    if (!files.length) {
-      const row = s1.rows.find((r) => (r.chain || [r.id]).includes(ui.focus));
-      ul.append(el("li", "empty", row && row.kind !== "changed" ? `${row.kind} — this session changed no file.` : "This session has not changed any file."));
-      return;
-    }
-    files.forEach((f, i) => {
-      const li = el("li", "s1-file");
-      const det = document.createElement("details");
-      if (i === 0) det.open = true;
-      const sum = el("summary", "mono");
-      const letter = MK.ST_LETTER[f.status] || "M";
-      sum.append(el("span", "st st-" + letter, letter), el("span", "", " " + f.path + " "),
-        el("span", "n-add small", f.too_large ? "" : `+${f.added}`), el("span", "n-del small", f.too_large ? "too large" : ` −${f.removed}`));
-      const open = el("button", "link small", "review");
-      open.type = "button";
-      open.title = "open this file's diff in Review";
-      open.onclick = (ev) => { ev.preventDefault(); openInReview(f.path); };
-      sum.append(document.createTextNode(" "), open);
-      det.append(sum);
-      det.addEventListener("toggle", () => { if (det.open && !det.dataset.drawn) { det.dataset.drawn = "1"; det.append(MK.renderFile(f)); } });
-      if (det.open) { det.dataset.drawn = "1"; det.append(MK.renderFile(f)); }
-      li.append(det);
-      ul.append(li);
-    });
-  }
-
-  async function loadWrites() {
-    $("session-files").hidden = true;
-    $("s1-writes").hidden = false;
-    $("s1-writes-hint").hidden = false;
-    const sid = ui.focus;
-    const d = await api("/api/timelapse?session=" + encodeURIComponent(sid)).catch(() => null);
-    if (!d || ui.focus !== sid) return;
-    const ul = $("s1-writes");
-    ul.replaceChildren();
-    const writes = (d.steps || []).filter((st) => st.kind === "write");
-    const nth = {};
-    for (const st of writes) {
-      nth[st.path] = (nth[st.path] || 0) + 1;
-      const b = el("button", "item mono small");
-      b.type = "button";
-      b.append(el("span", "", `${new Date(st.t * 1000).toLocaleTimeString()} · ${st.path} · write ${nth[st.path]}`),
-        el("span", "sub", st.measured ? `+${st.added} −${st.removed}` : "delta not measured"));
-      // Click = that write (the previous capture → this one); shift-click a second = the two
-      // moments compared, in Review (what the bottom timeline's "pick two" did).
-      b.onclick = (ev) => {
-        if (ev.shiftKey && s1.lastWrite && s1.lastWrite.snap !== st.snap) { compareWrites(s1.lastWrite, st); return; }
-        s1.lastWrite = st;
-        showWrite(st.snap, b);
-      };
-      ul.append(MK.wrapLi(b));
-    }
-    if (!writes.length) ul.append(el("li", "empty", "No Write/Edit was recorded for this session (Bash or worktree changes show under Cumulative)."));
-  }
-
-  function compareWrites(a, b) {
-    ui.picked = [a.snap, b.snap];
-    ui.pickedPaths[a.snap] = a.path; ui.pickedPaths[b.snap] = b.path;
-    ui.view = "between";
-    MK.setMode("review");
-    MK.refresh();
-  }
-
-  async function showWrite(snap, btn) {
-    for (const x of document.querySelectorAll("#s1-writes button.active")) x.classList.remove("active");
-    if (btn) btn.classList.add("active");
-    const d = await api("/api/session/write?snap=" + encodeURIComponent(snap)).catch(() => null);
-    const box = $("s1-write-diff");
-    box.hidden = false;
-    box.replaceChildren();
-    if (!d) return;
-    box.append(el("h3", "mono small", d.title || ""));
-    if (d.note) box.append(el("p", "small dim", d.note));
-    for (const f of d.files || []) box.append(MK.renderFile(f));
-    if (!(d.files || []).length || !(d.files[0].hunks || []).length && !d.files[0].too_large) box.append(el("p", "empty", "This write changed nothing."));
-  }
-
-  function openInReview(path) {
-    ui.view = "session";
-    MK.setMode("review");
-    MK.refresh().then(() => {
-      const i = ui.files.findIndex((f) => f.path === path);
-      if (i >= 0) MK.showFile(i);
-    });
-  }
-
-  function renderNeedsBadge(d) {
-    const b = $("needs-you");
-    b.hidden = !d.waiting;
-    $("needs-you-n").textContent = String(d.waiting || 0);
-    const top = (d.needs_you || [])[0];
-    b.title = top ? `${d.waiting} waiting on you — most urgent: ${top.text}` : "";
-  }
-
-  function needsLine(r) {
-    const s = el("span", "ny-reason", r.reason === "awaiting-approval" ? "AWAITING APPROVAL" : r.reason);
-    s.title = r.text;
-    return s;
-  }
-
-  function renderNeeds(d) {
-    const ny = $("ny-list");
-    ny.replaceChildren();
-    for (const q of d.needs_you || []) {
-      const li = el("li", "ny-item");
-      const b = el("button", "link", q.session ? `session ${q.short}` : "this repo");
-      b.type = "button";
-      b.onclick = () => { if (q.session) switchTo(q.session); };
-      li.append(needsLine(q), b, el("span", "dim small", ` waiting ${ago(q.waiting_secs)} · risk ${q.risk}`));
-      const det = q.detail || {};
-      if (det.command) li.append(el("code", "ny-cmd", det.command));
-      else if (det.gate) li.append(el("span", "small mono", ` ${det.gate}: ${det.decision} ${det.subject || ""}`));
-      ny.append(li);
-    }
-    $("ny-empty").hidden = (d.needs_you || []).length > 0;
-    $("ny-formula").textContent = d.risk_formula || "";
   }
 
   // ----------------------------------------------------------------------------- switcher
-  // Clicking a session ANYWHERE (a row, needs-you, `>`/`<`, `!`, the palette) opens it HERE: the
-  // Sessions screen with its changed files and diffs (B-F1). Focus is the server's, so the Code
-  // view and the Review pane read the same session (R28).
+  // Clicking a session ANYWHERE (a row, the waiting bar, `>`/`<`, `!`, the palette) picks it HERE:
+  // the Sessions screen, its header and the view last open (Timeline / Plan & spec / Worktree).
+  // Focus is the server's, so the Code view and the Review pane read the same session (R28).
   async function switchTo(sid) {
     if (!sid) return;
-    if (ui.mode !== "sessions") MK.setMode("sessions");
+    if (ui.tab !== "sessions") MK.setMode("sessions");
     if (sid !== ui.focus) {
       ui.focus = sid; ui.picked = [];
       await api("/api/focus", { session: sid });
@@ -325,146 +200,43 @@
     }
     for (const b of document.querySelectorAll("#s1-rows button.s1-row")) {
       const r = s1.rows.find((x) => x.id === b.dataset.sid);
-      b.classList.toggle("active", !!r && (r.chain || [r.id]).includes(sid));
+      const on = !!r && (r.chain || [r.id]).includes(sid);
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-current", on ? "true" : "false");
     }
     loadDetail();
-    loadTimelapse();
-    if ($("s1-map").open) loadTreemap();
+    if (MK.onSessionPicked) MK.onSessionPicked(sid);
   }
   MK.switchSession = switchTo;
 
   function cycle(delta) {
     const rows = s1.rows;
     if (!rows.length) return;
-    const i = rows.findIndex((s) => (s.chain || [s.id]).includes(ui.focus));
+    const i = rows.findIndex((x) => (x.chain || [x.id]).includes(ui.focus));
     switchTo(rows[(i + delta + rows.length) % rows.length].id);
   }
   function urgent() {
     const q = ((sv.data && sv.data.needs_you) || []).find((x) => x.session);
     if (q) switchTo(q.session);
   }
-
-  // ----------------------------------------------------------------------------- time-lapse
-  async function loadTimelapse() {
-    stop();
-    $("tl-empty").hidden = !!ui.focus;
-    $("tl-box").hidden = !ui.focus;
-    if (!ui.focus) return;
-    const d = await api("/api/timelapse?session=" + encodeURIComponent(ui.focus)).catch(() => null);
-    if (!d || d.error) return;
-    sv.tl = d;
-    const r = $("tl-range");
-    r.max = String(Math.max(0, d.steps.length - 1));
-    sv.step = Math.max(0, d.steps.length - 1);
-    r.value = String(sv.step);
-    const joined = (d.joined || []).length > 1 ? ` · joined with ${d.joined.slice(1).map((x) => String(x).slice(0, 8)).join(", ")} (resumed)` : "";
-    $("tl-note").textContent = `${d.count} step(s)${d.truncated ? " (newest shown)" : ""}${joined} · ${d.reads}`;
-    drawStep();
-  }
-
-  function drawStep() {
-    const d = sv.tl;
-    if (!d) return;
-    const st = d.steps[sv.step];
-    const touched = {};
-    for (const s of d.steps.slice(0, sv.step + 1)) {
-      if (!s.path) continue;
-      const t = touched[s.path] || (touched[s.path] = { writes: 0, lines: 0 });
-      if (s.kind === "write") { t.writes += 1; t.lines += (s.added || 0) + (s.removed || 0); }
-    }
-    const ul = $("tl-files");
-    ul.replaceChildren();
-    for (const p of d.files) {
-      const t = touched[p];
-      const li = el("li", "tl-file mono" + (t ? " lit" : "") + (st && st.path === p ? " now" : ""));
-      li.append(el("span", "", p), el("span", "dim small", t ? ` ${t.writes} write(s) · ${t.lines} line(s)` : " not yet"));
-      ul.append(li);
-    }
-    const lab = $("tl-label");
-    if (!st) { lab.textContent = "no steps recorded for this session"; return; }
-    const when = new Date(st.t * 1000).toLocaleTimeString();
-    lab.textContent = st.kind === "gate"
-      ? `${sv.step + 1}/${d.steps.length} · ${when} · gate ${st.gate}: ${st.decision}${st.blocked ? " (BLOCKED)" : ""}`
-      : st.kind === "resume"
-      ? `${sv.step + 1}/${d.steps.length} · ${when} · resumed — session ${String(st.session).slice(0, 8)}`
-        + (st.from && st.from !== st.session ? ` continues ${String(st.from).slice(0, 8)}` : "") + " (same run)"
-      : `${sv.step + 1}/${d.steps.length} · ${when} · ${st.kind} ${st.path}`
-        + (st.kind === "write" ? (st.measured ? ` (+${st.added} −${st.removed})` : " (delta not measured)") : "");
-    $("tl-show").disabled = !st.snap;
-  }
-
-  function stop() { if (sv.timer) { clearInterval(sv.timer); sv.timer = 0; } $("tl-play").textContent = "Play"; }
-  function play() {
-    if (sv.timer) { stop(); return; }
-    if (!sv.tl || !sv.tl.steps.length) return;
-    if (sv.step >= sv.tl.steps.length - 1) sv.step = 0;
-    $("tl-play").textContent = "Pause";
-    sv.timer = setInterval(() => {
-      if (!sv.tl || sv.step >= sv.tl.steps.length - 1) { stop(); return; }
-      sv.step += 1; $("tl-range").value = String(sv.step); drawStep();
-    }, 400);
-  }
-
-  // ----------------------------------------------------------------------------- treemap
-  async function loadTreemap() {
-    const qs = `?size=${sv.size}` + (ui.focus ? "&session=" + encodeURIComponent(ui.focus) : "");
-    const d = await api("/api/treemap" + qs).catch(() => null);
-    const svg = $("tm");
-    svg.replaceChildren();
-    if (!d || d.error) { $("tm-note").textContent = d ? `treemap unavailable: ${d.note || d.error}` : ""; return; }
-    svg.setAttribute("viewBox", `0 0 ${d.width} ${d.height}`);
-    for (const dr of d.dirs) {
-      const r = svgEl("rect", { x: dr.x, y: dr.y, width: dr.w, height: dr.h, class: "tm-dir" });
-      const t = svgEl("title"); t.textContent = dr.path + "/"; r.append(t);
-      svg.append(r);
-    }
-    for (const f of d.files) {
-      if (f.w <= 0 || f.h <= 0) continue;
-      const r = svgEl("rect", { x: f.x, y: f.y, width: f.w, height: f.h, class: "tm-file tm-h" + f.heat });
-      const t = svgEl("title");
-      t.textContent = `${f.path} · ${f.loc ?? "?"} LOC` + (f.writes ? ` · ${f.writes} write(s) · +${f.added} −${f.removed}` : " · unchanged");
-      r.append(t);
-      r.addEventListener("click", () => MK.openFile && MK.openFile(f.path, 1, null));
-      svg.append(r);
-      if (f.w > 60 && f.h > 14) {
-        const lab = svgEl("text", { x: f.x + 3, y: f.y + 11, class: "tm-label" });
-        lab.textContent = f.path.slice(f.path.lastIndexOf("/") + 1);
-        svg.append(lab);
-      }
-    }
-    $("tm-note").textContent = `${d.count} file(s) sized by ${d.sized_by}; ${d.changed} changed`
-      + `${ui.focus ? " by this session" : " by any session"}${d.omitted ? ` · ${d.omitted} small unchanged file(s) omitted` : ""}`;
-  }
+  MK.urgentSession = urgent;
 
   // ----------------------------------------------------------------------------- wiring
-  function renderAll() {
-    if (sv.data) renderNeeds(sv.data);
-    loadList(false);
-    loadDetail();
-    loadTimelapse();
-    if ($("s1-map").open) loadTreemap();        // the Map is asked for only when it is open
-  }
-  MK.onModeSessions = (mode) => {
-    if (mode === "sessions") renderAll();
-    else { stop(); if (s1.timer) { clearTimeout(s1.timer); s1.timer = 0; } }
+  let shown = false;
+  MK.onModeSessions = () => {
+    const on = ui.tab === "sessions" && $("sessions-head") && !$("sessions-head").hidden;
+    if (on && !shown) { loadList(false); loadDetail(); }
+    if (!on && s1.timer) { clearTimeout(s1.timer); s1.timer = 0; }
+    shown = on;
   };
-  MK.onRefreshSessionViews = () => { if (ui.mode === "sessions") { loadTimelapse(); if ($("s1-map").open) loadTreemap(); } };
 
   MK.wireSessions = function wireSessions() {
-    $("needs-you").onclick = () => { if (MK.jobs) MK.jobs.close(); urgent(); };
     $("s1-q").addEventListener("input", () => {
       clearTimeout(s1.debounce);
       s1.debounce = setTimeout(() => { s1.q = $("s1-q").value.trim(); loadList(false); }, 80);
     });
     for (const b of document.querySelectorAll("button.pill[data-s1filter]")) b.onclick = () => setFilter(b.dataset.s1filter);
     $("s1-more").onclick = () => loadList(true);
-    for (const b of document.querySelectorAll("button.pill[data-s1diff]")) {
-      b.onclick = () => {
-        s1.mode = b.dataset.s1diff;
-        for (const x of document.querySelectorAll("button.pill[data-s1diff]")) x.classList.toggle("active", x === b);
-        if (s1.mode === "write") loadWrites(); else if (s1.diff) renderFiles(s1.diff); else loadDetail();
-      };
-    }
     $("s1-review").onclick = () => { ui.view = "session"; MK.setMode("review"); MK.refresh(); };
     $("s1-resume").onclick = () => {
       if (!ui.focus) return;
@@ -473,22 +245,8 @@
       if (navigator.clipboard) navigator.clipboard.writeText(cmd).then(done, () => { $("s1-resume").textContent = cmd; });
       else $("s1-resume").textContent = cmd;
     };
-    $("tl-range").oninput = () => { stop(); sv.step = +$("tl-range").value; drawStep(); };
-    $("tl-play").onclick = play;
-    $("tl-show").onclick = () => {
-      const st = sv.tl && sv.tl.steps[sv.step];
-      if (st && st.snap && MK.pickSnapshot) MK.pickSnapshot({ id: st.snap, path: st.path });
-    };
-    $("s1-map").addEventListener("toggle", () => { if ($("s1-map").open) loadTreemap(); });
-    for (const b of document.querySelectorAll("button.pill[data-tmsize]")) {
-      b.onclick = () => {
-        sv.size = b.dataset.tmsize;
-        for (const x of document.querySelectorAll("button.pill[data-tmsize]")) x.classList.toggle("active", x === b);
-        loadTreemap();
-      };
-    }
     document.addEventListener("keydown", (ev) => {
-      if (MK.typing(ev) || ev.metaKey || ev.ctrlKey || ev.altKey || !$("qo").hidden) return;
+      if (MK.typing(ev) || ev.metaKey || ev.ctrlKey || ev.altKey || !$("qo").hidden || !MK.singleKeysOn()) return;
       if (ev.key === ">") { ev.preventDefault(); cycle(1); }
       else if (ev.key === "<") { ev.preventDefault(); cycle(-1); }
       else if (ev.key === "!") { ev.preventDefault(); urgent(); }

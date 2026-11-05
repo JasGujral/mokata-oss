@@ -24,7 +24,7 @@ import _support  # noqa: F401  (puts src/ on the path)
 from mokata import install_route as R
 
 ON_PATH = {"uv": "/usr/bin/uv", "pipx": "/usr/bin/pipx"}.get
-NO_EXTRAS = ["mcp>=1.2,<2"]                 # Requires-Dist with no extra installed
+NO_EXTRAS = ["mcp>=1.30,<2"]                 # Requires-Dist with no extra installed
 
 
 def _uv_env(d, requirements='[{ name = "mokata" }]'):

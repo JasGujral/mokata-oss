@@ -209,6 +209,16 @@ def escapes_root(name: str) -> bool:
     return text.startswith((os.pardir + NAME_SEP, os.pardir + FOREIGN_SEP))
 
 
+# THE PRIVATE-PATH RULE — `.git` and `.mokata`, by NAME (every component folded the same way on
+# every filesystem: case, Unicode canonical twins, trailing dots/spaces, an NTFS stream suffix) and by
+# IDENTITY (the same directory on disk, or a hard link to a file inside one). Single-sourced in the
+# stdlib-only hook front door (`mokata_emit`), which must apply it BEFORE it copies a written file's
+# bytes (0.0.27 SEC-HARDEN) and may import nothing from `mokata`; re-exported here so the engine keeps
+# one import site. See `mokata_emit.fold_component` / `aliases_private` for the rule in full.
+from mokata_emit import (PRIVATE_DIRS, aliases_private, fold_component,  # noqa: E402
+                         hardlinked_private, is_private_name, store_dirs)
+
+
 def names_of(paths: Iterable[str], root: str, *, ospath=os.path) -> List[RepoName]:
     """`name_of` over a sequence, sorted. The shape four producers wanted, so that "sorted list of
     names" is not spelled four ways with one of them forgetting the conversion."""
@@ -216,6 +226,7 @@ def names_of(paths: Iterable[str], root: str, *, ospath=os.path) -> List[RepoNam
 
 
 __all__ = [
-    "FOREIGN_SEP", "NAME_SEP", "NotARepoName", "RepoName",
-    "as_name", "escapes_root", "name_of", "names_of", "path_of", "split_path",
+    "FOREIGN_SEP", "NAME_SEP", "NotARepoName", "PRIVATE_DIRS", "RepoName",
+    "aliases_private", "as_name", "escapes_root", "fold_component", "hardlinked_private",
+    "is_private_name", "name_of", "names_of", "path_of", "split_path", "store_dirs",
 ]

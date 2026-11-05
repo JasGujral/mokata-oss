@@ -11,10 +11,9 @@
 
 (function () {
   const MK = window.MK;
-  const ACTIVE = new Set(["queued", "running", "partial"]);
+  const ACTIVE = new Set(["queued", "running", "partial", "cancelling"]);
   const A = { jobs: new Map(), followers: new Map(), retries: new Map(), whenDone: [], listeners: [],
-              seenFailed: new Set(), flash: 0, open: false, chip: null, drawer: null,
-              sessions: { waiting: 0, live: 0, top: null } };
+              seenFailed: new Set(), flash: 0, open: false, chip: null, drawer: null, started: new Set() };
 
   // ------------------------------------------------------------------------- one job, in words
   function secs(s) {
@@ -66,8 +65,10 @@
     for (const fn of A.listeners) fn(A.jobs.get(j.id));
     for (const f of A.followers.get(j.id) || []) deliver(f, A.jobs.get(j.id));
     if (j.state === "done" && (!prev || prev.state !== "done")) {
-      A.flash = Date.now();
-      setTimeout(paint, 5200);                   // the green tick goes back into history
+      // §6: "done" flashes only for work the person STARTED (a build, a test re-run) — a job that
+      // finished before the page looked, or the window's own background reads (impact, a search
+      // page), is not news: at rest the chip says "idle".
+      if (A.started.has(j.id)) { A.flash = Date.now(); setTimeout(paint, 5200); }
       const keep = [];
       for (const w of A.whenDone) { if (w.kind === j.kind) w.fn(j); else keep.push(w); }
       A.whenDone = keep;
@@ -151,7 +152,12 @@
   }
   async function start(kind, args) {
     const r = await MK.api("/api/jobs", { kind, args: args || {} }).catch(() => null);
-    if (r && r.job) update(r.job);
+    if (r && r.job) {
+      A.started.add(r.job.id);
+      const seen = A.jobs.get(r.job.id);            // its `done` event can beat this answer
+      if (seen && seen.state === "done") { A.flash = Date.now(); setTimeout(paint, 5200); }
+      update(r.job);
+    }
     return r;
   }
   function whenDone(kind, fn) { A.whenDone.push({ kind, fn }); }
@@ -211,17 +217,12 @@
       c.classList.add("done");
       label = "done";
     }
-    // P34 (§5.3): live sessions and "waiting on you" ride on the same chip (the top bar has no
-    // separate live dot / needs-you button any more).
-    const ss = A.sessions;
-    const extra = [ss.live ? `${ss.live} live` : "", ss.waiting ? `${ss.waiting} waiting` : ""].filter(Boolean);
-    if (extra.length) label = label === "idle" ? extra.join(" · ") : `${label} · ${extra.join(" · ")}`;
-    c.classList.toggle("waiting", ss.waiting > 0);
-    if (!count && ss.waiting) count = String(ss.waiting);
+    // 0.0.27: the chip is JOBS only — what waits on you is the waiting bar, live sessions are the
+    // Sessions tab's count.
     A.chipText.textContent = label;
     A.chipCount.textContent = count;
-    const why = ss.waiting && ss.top ? `\n${ss.waiting} waiting on you — most urgent: ${ss.top.text || ss.top.reason}` : "";
-    c.title = (act.length ? act.map(line).join("\n") : bad.length ? bad.map(line).join("\n") : "nothing running") + why + "\n. opens the Activity drawer";
+    c.setAttribute("aria-label", "Jobs: " + label);
+    c.title = (act.length ? act.map(line).join("\n") : bad.length ? bad.map(line).join("\n") : "nothing running") + "\n. opens the jobs list";
     if (A.open) renderDrawer();
   }
   function short(s) { s = String(s || ""); return s.length > 28 ? s.slice(0, 27) + "…" : s; }
@@ -284,6 +285,7 @@
   async function openDrawer() {
     A.open = true;
     A.drawer.hidden = false;
+    A.chip.setAttribute("aria-expanded", "true");
     if (MK.termCaps) MK.termCaps();          // G22: the Terminal button says why it is not there
     for (const j of A.jobs.values()) if (j.state === "failed") A.seenFailed.add(j.id);
     renderDrawer();
@@ -291,7 +293,14 @@
     if (r && r.active) { for (const j of r.active.concat(r.recent || [])) A.jobs.set(j.id, Object.assign({}, A.jobs.get(j.id) || {}, j)); }
     if (A.open) { for (const j of A.jobs.values()) if (j.state === "failed") A.seenFailed.add(j.id); paint(); }
   }
-  function closeDrawer() { A.open = false; if (A.drawer) A.drawer.hidden = true; paint(); }
+  function closeDrawer() {
+    const had = A.open && A.drawer && A.drawer.contains(document.activeElement);
+    A.open = false;
+    if (A.drawer) A.drawer.hidden = true;
+    if (A.chip) A.chip.setAttribute("aria-expanded", "false");
+    if (had && A.chip) A.chip.focus();
+    paint();
+  }
   function toggle() { if (A.open) closeDrawer(); else openDrawer(); }
 
   function mount() {
@@ -299,7 +308,9 @@
     if (!anchor || A.chip) return;
     const c = MK.el("button", "activity-chip");
     c.type = "button"; c.id = "activity-chip";
-    c.setAttribute("aria-haspopup", "true");
+    c.setAttribute("aria-haspopup", "dialog");
+    c.setAttribute("aria-expanded", "false");
+    c.setAttribute("aria-controls", "activity-drawer");
     A.chipDot = MK.el("span", "act-dot");
     A.chipText = MK.el("span", "act-label", "idle");
     A.chipCount = MK.el("b", "act-count", "");
@@ -309,14 +320,15 @@
     A.chip = c;
     const d = MK.el("div", "act-drawer");
     d.id = "activity-drawer"; d.hidden = true;
-    d.setAttribute("role", "dialog"); d.setAttribute("aria-label", "Activity");
+    d.setAttribute("role", "dialog"); d.setAttribute("aria-label", "Jobs");
     const head = MK.el("div", "act-dhead");
-    head.append(MK.el("h2", "", "Activity"));
+    head.append(MK.el("h2", "", "Jobs"));
     const x = MK.el("button", "link small", "close"); x.type = "button"; x.onclick = closeDrawer;
     head.append(x);
-    // The live half (Follow · Join · Terminal · waiting on you · live), static in index.html.
-    const live = document.getElementById("act-live");
-    if (live) { live.hidden = false; d.append(head, live, MK.el("ul", "act-list")); } else d.append(head, MK.el("ul", "act-list"));
+    // The jobs list, and the Terminal toggle (static in index.html) under it.
+    const term = document.getElementById("act-term");
+    d.append(head, MK.el("ul", "act-list"));
+    if (term) { term.hidden = false; d.append(term); }
     document.body.append(d);
     A.drawer = d;
     document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && A.open) closeDrawer(); });
@@ -349,13 +361,12 @@
   (MK.liveHooks = MK.liveHooks || []).push((es) => { es.addEventListener("job", onEvent); });
   MK.jobs = { follow, line, progress, cancel, start, strip, whenDone, onUpdate: (fn) => A.listeners.push(fn),
               get: (id) => A.jobs.get(id),
-              all: () => [...A.jobs.values()], keptRunning, open: openDrawer, close: closeDrawer,
-              setSessions: (s) => { A.sessions = Object.assign({ waiting: 0, live: 0, top: null }, s || {}); paint(); } };
+              all: () => [...A.jobs.values()], keptRunning, open: openDrawer, close: closeDrawer };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", mount); else mount();
 
   window.mokataIDE.register({
     id: "activity",
-    commands: [{ id: "activity.open", title: "Activity: show running jobs", run: toggle }],
+    commands: [{ id: "activity.open", title: "Jobs: show running and recent jobs", run: toggle }],
     keybindings: [{ keys: ".", command: "activity.open" }],
   });
 })();

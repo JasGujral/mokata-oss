@@ -100,6 +100,9 @@ KIND_REGISTER: Dict[str, Tuple[Optional[str], str]] = {
     "gate_override": (APPROVAL_DECISION, "a human overriding a soft gate — see the note above"),
     "rule_override": (APPROVAL_DECISION, "a human overriding a Sentinel soft block"),
     "graph_degraded_override": (APPROVAL_DECISION, "a human proceeding on a degraded graph"),
+    "workspace_trust": (APPROVAL_DECISION, "P24 — a human trusting (or revoking) a "
+                        "workspace so a language server may run its code: `decision` "
+                        "trusted|revoked, `target` the workspace realpath, `actor` ide-tty|cli"),
 
     # ---- tokens -----------------------------------------------------------------------------
     "exec_estimate": (TOKEN_SPEND, "an execution-mode ESTIMATE — `estimated=True` carries that"),
@@ -138,6 +141,9 @@ KIND_REGISTER: Dict[str, Tuple[Optional[str], str]] = {
     "update_check": (TOOL_CALL, "an update check reaching outbound"),
     "worktree_create": (TOOL_CALL, "an isolated worktree created"),
     "worktree_remove": (TOOL_CALL, "an isolated worktree removed"),
+    "gated_merge": (TOOL_CALL, "P21 — a human-approved gated merge carried out: the branch "
+                               "moved (merged), a stale merge lock removed on approval (unlocked), "
+                               "or an interrupted checkout finished (recovered)"),
     "team_flush": (TOOL_CALL, "a team-journal flush against the shared store"),
     "vault_integrity": (TOOL_CALL, "a vault artifact's integrity verdict on pull"),
 
@@ -172,6 +178,9 @@ KIND_REGISTER: Dict[str, Tuple[Optional[str], str]] = {
     "optimize": (UNMAPPED, "a dev-mode optimise step log"),
     "debug": (UNMAPPED, "a dev-mode debug step log"),
     "bug": (UNMAPPED, "a dev-mode bug-mode step log"),
+    "change_explained": (UNMAPPED, "P46 — a change-explainer page was stored (ids and "
+                                   "hashes, no prose). No typed event: the session history reads "
+                                   "the page sidecars directly, so a projection would be a copy"),
 }
 
 

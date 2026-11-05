@@ -365,9 +365,10 @@ class R25OneBasisWord(unittest.TestCase):
         src = _graph_js()
         self.assertIn("function basisWord(data) { return (data && data.basis)", src)
         status = src[src.index("  function status(data) {"):src.index("  function clearChrome")]
-        self.assertIn('"basis: " + word', status)                         # the status line
+        self.assertIn("parts.push(BASIS_PLAIN[word] || word)", status)    # the status line (plain words)
+        self.assertIn('"basis: " + word', status)                         # ... the word on hover
         self.assertIn('lg.replaceChildren(el("b", "", "basis: " + word))', status)   # the legend
-        self.assertIn("Basis: ${basisWord(data)}.", src)                  # the summary
+        self.assertIn("Basis: ${basisWord(data)} — ${plainBasis(data)}.", src)   # the summary
         self.assertNotIn("/api/caps", src)                                # no second query
 
 

@@ -1,0 +1,123 @@
+{
+  "routes": [
+    {
+      "path": "/api/review/tests", "method": "GET", "kind": "json",
+      "params": {"query": {"run": "the run id", "page": "page of ACs (1, 2, …)", "per": "ACs per page (default 100)",
+                           "ac": "one AC: page its tests with tpage", "tpage": "page of that AC's tests (200 a page)",
+                           "status": "only ACs that are green | red | unrun | untested"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"oneOf": [
+          {"$ref": "#/schemas/ReviewTests"},
+          {"$ref": "#/schemas/ReviewTestsNoSpec"},
+          {"$ref": "#/schemas/NotInitialized"}]}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"query": {"run": "nope"}, "status": 400},
+                 {"query": {"run": "../x"}, "status": 400},
+                 {"query": {"run": "sample-run"}, "status": 200, "demo": true}]
+    },
+    {
+      "path": "/api/review/tests/run", "method": "POST", "kind": "action",
+      "params": {"body": {"run": "the run id", "tests": "test ids the run's ACs map", "ac": "or: every test of this AC",
+                          "failing": "or: true = every red test", "all": "or: true = every mapped test"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"type": "object", "required": ["id", "job"],
+          "properties": {"id": {"type": "string"}, "job": {"$ref": "#/schemas/JobSnapshot"}}}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"body": {"run": "nope", "all": true}, "status": 400},
+                 {"body": {"run": "sample-run", "all": true}, "status": 200, "demo": true}]
+    },
+    {
+      "path": "/api/review/spec-diff", "method": "GET", "kind": "json",
+      "params": {"query": {"run": "the run id", "a": "old version (default: the one before b)", "b": "new version (default: current)"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"oneOf": [
+          {"$ref": "#/schemas/ReviewSpecDiff"},
+          {"type": "object", "required": ["run", "state", "note", "current_version"],
+           "properties": {"state": {"enum": ["no-spec"]}}},
+          {"$ref": "#/schemas/NotInitialized"}]}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"query": {"run": "nope"}, "status": 400},
+                 {"query": {"run": "sample-run"}, "status": 200, "demo": true}]
+    },
+    {
+      "path": "/api/review/doc", "method": "GET", "kind": "json",
+      "params": {"query": {"path": "a repo-relative Markdown path", "rev": "a git revision (empty: the working tree)"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"type": "object", "required": ["path", "rev", "state", "text", "bytes"],
+          "properties": {"path": {"type": "string"}, "rev": {"type": "string"}, "text": {"type": "string"},
+                         "bytes": {"type": "integer"},
+                         "state": {"enum": ["ok", "absent", "unreadable", "binary"]}}}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"query": {"path": "docs/none.md"}, "status": 200},
+                 {"query": {"path": "docs/none.md", "rev": "HEAD"}, "status": 200},
+                 {"query": {"path": "src/app/core.py"}, "status": 400},
+                 {"query": {"path": "../outside.md"}, "status": 400},
+                 {"query": {"path": "docs/x.md", "rev": "--output=x"}, "status": 400}]
+    },
+    {
+      "path": "/api/review/blame", "method": "GET", "kind": "json",
+      "params": {"query": {"path": "the hunk's file", "hunk": "its header (@@ -a,b +c,d @@)",
+                           "base": "the old side's revision (default HEAD)", "head": "the new side's revision (empty: the working tree)",
+                           "sync_ms": "how long to wait before answering the job's handle"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"oneOf": [
+          {"$ref": "#/schemas/ReviewBlame"},
+          {"type": "object", "required": ["path", "state", "note"],
+           "properties": {"state": {"enum": ["not-git", "sample"]}}}]}},
+        "202": {"media": "json", "schema": {"$ref": "#/schemas/JobHandle"}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"query": {"path": "src/app/core.py", "hunk": "@@ -1,3 +1,4 @@"}, "status": 200},
+                 {"query": {"path": "src/app/core.py", "hunk": "@@ -1,3 +1,4 @@", "sync_ms": "0"}, "status": 202},
+                 {"query": {"path": "src/app/core.py", "hunk": "nope"}, "status": 400},
+                 {"query": {"path": "src/app/core.py", "hunk": "@@ -1 +1 @@", "base": "-x"}, "status": 400}]
+    }
+  ],
+  "schemas": {
+    "ReviewApproval": {"type": "object", "required": ["state", "approach", "approver", "approved_at", "spec_version"],
+      "properties": {"approver": {"type": "string"}, "spec_version": {"type": "integer"}}},
+    "ReviewTest": {"type": "object", "required": ["id", "status", "history", "never_red", "mapped"],
+      "properties": {"id": {"type": "string"}, "status": {"enum": ["green", "red", "unrun"]},
+                     "never_red": {"type": "boolean"}, "mapped": {"enum": ["planned", "recorded", "both"]},
+                     "history": {"type": "array", "items": {"type": "object", "required": ["state", "basis"],
+                       "properties": {"state": {"enum": ["green", "red", "error"]}, "basis": {"type": "string"}}}}}},
+    "ReviewTests": {"type": "object",
+      "required": ["sample", "run", "state", "spec", "approval", "command", "last_suite", "rerun_note", "page",
+                   "per", "pages", "status", "matching", "totals", "criteria", "unmapped"],
+      "properties": {
+        "state": {"enum": ["ok"]}, "run": {"type": "string"}, "page": {"type": "integer"}, "pages": {"type": "integer"},
+        "approval": {"$ref": "#/schemas/ReviewApproval"},
+        "command": {"type": "object", "required": ["configured", "text", "argv", "runnable", "note"],
+                    "properties": {"runnable": {"type": "boolean"}}},
+        "last_suite": {"type": ["object", "null"]},
+        "totals": {"type": "object", "required": ["acs", "untested", "green", "red", "unrun", "tests", "never_red"]},
+        "criteria": {"type": "array", "items": {"type": "object",
+          "required": ["id", "text", "kind", "status", "untested", "tests", "tests_total", "tests_pages", "tests_page"],
+          "properties": {"status": {"enum": ["green", "red", "unrun", "untested"]}, "untested": {"type": "boolean"},
+                         "tests": {"type": "array", "items": {"$ref": "#/schemas/ReviewTest"}}}}},
+        "unmapped": {"type": "object", "required": ["total", "tests"]}}},
+    "ReviewTestsNoSpec": {"type": "object", "required": ["run", "state", "note", "approval", "command", "rerun_note"],
+      "properties": {"state": {"enum": ["no-spec", "malformed"]}}},
+    "ReviewSpecSide": {"type": "object", "required": ["version", "state", "markdown"],
+      "properties": {"version": {"type": "integer"}, "state": {"enum": ["ok", "absent", "malformed"]},
+                     "markdown": {"type": "string"}}},
+    "ReviewSpecDiff": {"type": "object", "required": ["run", "state", "current_version", "versions", "old", "new", "criteria", "approval"],
+      "properties": {"state": {"enum": ["ok"]}, "old": {"$ref": "#/schemas/ReviewSpecSide"},
+                     "new": {"$ref": "#/schemas/ReviewSpecSide"},
+                     "criteria": {"type": "object", "required": ["added", "removed", "changed", "same"]},
+                     "approval": {"$ref": "#/schemas/ReviewApproval"}}},
+    "ReviewBlameSide": {"type": "object", "required": ["start", "end", "lines", "commits"],
+      "properties": {"lines": {"type": "array", "items": {"type": "object",
+        "required": ["line", "commit", "author", "time", "summary", "uncommitted"]}},
+        "commits": {"type": "array", "items": {"type": "object", "required": ["commit", "author", "time", "summary", "lines"]}}}},
+    "ReviewBlame": {"type": "object", "required": ["path", "hunk", "base", "head", "state", "new", "old", "history", "notes"],
+      "properties": {"state": {"enum": ["ok"]}, "new": {"$ref": "#/schemas/ReviewBlameSide"},
+                     "old": {"$ref": "#/schemas/ReviewBlameSide"},
+                     "history": {"type": "array", "items": {"type": "object", "required": ["commit", "author", "time", "summary"]}},
+                     "notes": {"type": "array", "items": {"type": "string"}}}}
+  }
+}

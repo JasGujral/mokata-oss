@@ -49,7 +49,11 @@ BUS_PATH = "/api/bus"
 # The neutral vocabulary. Closed: anything else posted is dropped (never echoed to a page).
 EDIT, TURN_END, SESSION_START, SESSION_END, STORE, CHANGED, FOCUS, JOB = (
     "edit", "turn_end", "session_start", "session_end", "event", "changed", "focus", "job")
-POSTABLE = (EDIT, TURN_END, SESSION_START, SESSION_END)
+# 0.0.27 P12 — a tool call that is not a file write (Bash, Read, Grep, a Task…) is a `tool` event:
+# the tool's NAME and the session, nothing of what it did (no command line, no output — content
+# stays out of the bus as it stays out of the typed store). `edit` keeps its meaning (follow mode).
+TOOL = "tool"
+POSTABLE = (EDIT, TURN_END, SESSION_START, SESSION_END, TOOL)
 
 # Claude Code → neutral. The file-mutating tools are the ones `dirty-track` already watches.
 _CC_FILE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
@@ -140,11 +144,20 @@ def _session(v: Any) -> str:
     return v[:120] if isinstance(v, str) else ""
 
 
-def _contained(root: str, path: Any, cwd: Any) -> Optional[str]:
+def _edited(root: str, path: Any, cwd: Any) -> Optional[Dict[str, Any]]:
+    """The path fields of an `edit` event, or None when the path is outside the repo. A write into
+    `.git/` or `.mokata/` (any spelling) is still an event - path only, flagged `private` with the
+    snapshot store's note, and `git_hook` for `.git/hooks/` (0.0.27 CASEFOLD-FIX r2, verify M1)."""
     if not isinstance(path, str) or not path or len(path) > 4096:
         return None
-    from .snapshots import rel_path
-    return rel_path(root, path, cwd if isinstance(cwd, str) and cwd else None)
+    from . import snapshots as S
+    got = S.record_name(root, path, cwd if isinstance(cwd, str) and cwd else None)
+    if got is None:
+        return None
+    rel, private = got
+    if not private:
+        return {"path": rel}
+    return {"path": rel, "private": True, "git_hook": S.git_hook(rel), "note": S.PRIVATE_NOTE}
 
 
 def from_claude_hook(payload: Dict[str, Any], root: str) -> Optional[Dict[str, Any]]:
@@ -156,13 +169,16 @@ def from_claude_hook(payload: Dict[str, Any], root: str) -> Optional[Dict[str, A
     sid = _session(payload.get("session_id"))
     if name == "PostToolUse":
         tool = payload.get("tool_name")
+        if not isinstance(tool, str) or not tool:
+            return None
         if tool not in _CC_FILE_TOOLS:
-            return None
+            # P12: the activity panel shows WHICH tool ran, never what it was given or said.
+            return {"kind": TOOL, "tool": tool[:60], "session": sid, "source": "claude-code"}
         from ..gate_hook import target_path
-        rel = _contained(root, target_path(payload.get("tool_input")), payload.get("cwd"))
-        if not rel:
+        where = _edited(root, target_path(payload.get("tool_input")), payload.get("cwd"))
+        if not where:
             return None
-        return {"kind": EDIT, "path": rel, "session": sid, "tool": tool, "source": "claude-code"}
+        return {"kind": EDIT, **where, "session": sid, "tool": tool, "source": "claude-code"}
     kind = _CC_EVENT_KIND.get(name) if isinstance(name, str) else None
     if kind:
         return {"kind": kind, "session": sid, "source": "claude-code"}
@@ -180,10 +196,12 @@ def from_neutral(payload: Dict[str, Any], root: str) -> Optional[Dict[str, Any]]
     if isinstance(tool, str) and tool:
         out["tool"] = tool[:60]
     if kind == EDIT:
-        rel = _contained(root, payload.get("path"), None)
-        if not rel:
+        where = _edited(root, payload.get("path"), None)
+        if not where:
             return None
-        out["path"] = rel
+        out.update(where)
+    if kind == TOOL and not out.get("tool"):
+        return None
     return out
 
 
@@ -294,6 +312,9 @@ class Tails:
         self.store_sig: Optional[Tuple] = None
         self.store_seq: Optional[int] = None
         self.tl_off: Optional[int] = None
+        # 0.0.27 P12 — rows THIS server wrote and already published (a `tool` event is stored,
+        # then pushed at once with its `seq`): the tail does not push them a second time.
+        self.skip: set = set()
 
     def _store_paths(self) -> Tuple[str, str]:
         from ..events import events_path
@@ -332,8 +353,11 @@ class Tails:
         out = []
         for r in rows:
             self.store_seq = max(self.store_seq or 0, r.seq)
+            if r.seq in self.skip:
+                self.skip.discard(r.seq)
+                continue
             out.append({"kind": STORE, "type": r.type, "session": r.session_id, "seq": r.seq,
-                        "data": r.data, "source": "store"})
+                        "run": r.run_id, "data": r.data, "source": "store"})
         return out
 
     def timeline_edits(self) -> List[Dict[str, Any]]:
@@ -384,4 +408,4 @@ async def read_body(request: Any, limit: Optional[int] = None) -> Optional[bytes
 
 __all__ = ["EventBus", "Tails", "normalise", "from_claude_hook", "from_neutral", "ensure_bridge",
            "read_bridge", "preferred_port", "bridge_url", "bridge_path", "port_free", "POSTABLE",
-           "HOOK_HEADER", "BUS_PATH", "TAIL_SECS"]
+           "HOOK_HEADER", "BUS_PATH", "TAIL_SECS", "TOOL", "EDIT", "TURN_END", "STORE"]

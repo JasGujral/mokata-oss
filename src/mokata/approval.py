@@ -108,6 +108,10 @@ MAX_PROPOSALS = 32
 LEDGER_KIND = "write_approval"
 
 # A proposal's lifecycle. There is no path back out of `used`.
+#: Tools whose proposal preview `render` never cuts: `git_control.GIT_CONTROL_TOOL` (test_sec_harden
+#: G1 reads line 31 of a hook in the render).
+FULL_PREVIEW_TOOLS = ("git-control",)
+
 STATUS_PROPOSED = "proposed"
 STATUS_APPROVED = "approved"
 STATUS_USED = "used"
@@ -290,6 +294,41 @@ def pending(root: str, now: Optional[float] = None) -> List[Proposal]:
             continue
         out.append(p)
     return sorted(out, key=lambda p: p.created_at, reverse=True)
+
+
+def pending_strict(root: str, now: Optional[float] = None) -> "Tuple[List[Proposal], List[str]]":
+    """0.0.27 P14 — `pending`, but a record it cannot read is NAMED instead of skipped: returns
+    `(live unapproved-or-approved proposals newest first, [why each unreadable record failed])`.
+    A caller that must not say "nothing waits on you" over a torn proposal reads the second list
+    (doc 85 §7g). Read-only; `pending` is unchanged. A state dir that cannot be listed is one
+    entry in the second list; an absent one is simply no proposals."""
+    from .state import OK, read_json_strict
+    now = time.time() if now is None else now
+    out: List[Proposal] = []
+    bad: List[str] = []
+    sd = state_dir(root)
+    try:
+        with os.scandir(sd) as entries:
+            names = [e.name for e in entries
+                     if e.name.startswith(PROPOSAL_PREFIX) and e.name.endswith(".json")]
+    except FileNotFoundError:
+        return [], []
+    except OSError as exc:
+        return [], [f"the proposal store could not be listed ({type(exc).__name__})"]
+    for name in names:
+        got = read_json_strict(os.path.join(sd, name))
+        if got.state != OK:
+            if got.state != "absent":                # removed between the listing and the read
+                bad.append(f"proposal record {name[len(PROPOSAL_PREFIX):-5]} {got.reason}")
+            continue
+        p = from_state(got.value)
+        if p is None:
+            bad.append(f"proposal record {name[len(PROPOSAL_PREFIX):-5]} has the wrong shape")
+            continue
+        if p.status in (STATUS_USED, STATUS_REJECTED) or p.expired(now):
+            continue
+        out.append(p)
+    return sorted(out, key=lambda p: p.created_at, reverse=True), bad
 
 
 def prune(root: str, now: Optional[float] = None, keep: int = MAX_PROPOSALS) -> int:
@@ -645,7 +684,10 @@ def render(p: Proposal, now: Optional[float] = None) -> str:
     ]
     if p.preview:
         lines.append("  would write:")
-        lines.extend(f"    {ln}" for ln in p.preview.splitlines()[:20])
+        shown = p.preview.splitlines()
+        # 0.0.27 SEC-HARDEN — a git hook or git config write is shown WHOLE: it is code someone
+        # else runs later, and line 21 of a hook is where a payload would sit.
+        lines.extend(f"    {ln}" for ln in (shown if p.tool in FULL_PREVIEW_TOOLS else shown[:20]))
     return "\n".join(lines)
 
 

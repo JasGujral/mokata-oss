@@ -245,7 +245,7 @@ class TestMemoryHealth(unittest.TestCase):
 
 class TestGovernViewHealth(unittest.TestCase):
     def test_governance_view_and_html_carry_the_nudge(self):
-        from mokata.dashboard import build_governance_view, render_governance_html
+        from mokata.governance_view import build_governance_view, render_governance_html
         with tempfile.TemporaryDirectory() as d:
             init_repo(root=d, profile="full", assume_yes=True, out=_silent)
             store = _store(d)

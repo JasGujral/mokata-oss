@@ -1,0 +1,65 @@
+/* mokata ide — diff view (0.0.27 P5): Unified / Split, intra-line marks, expandable context.
+   Colours are the theme's tokens (--add / --del / --accent), so light, dark and high contrast are
+   the theme's choice; a mark is ALSO underlined, so it never leans on colour alone. */
+.dv-tools { display: inline-flex; align-items: center; gap: 0; border: 1px solid var(--line2);
+  border-radius: 6px; overflow: hidden; flex: none; }
+.dv-tools .seg { background: transparent; border: 0; border-right: 1px solid var(--line2);
+  padding: 3px 10px; font-size: 11.5px; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.dv-tools .seg:last-child { border-right: 0; }
+.dv-tools .seg:hover { color: var(--text); background: var(--sel); }
+.dv-tools .seg[aria-pressed="true"] { color: var(--text); background: var(--sel);
+  box-shadow: inset 0 -2px 0 var(--accent); }
+.dv-tools .seg:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+/* ---- split: two sides, each with its own numbers; long lines wrap inside their own half */
+table.d.split { table-layout: fixed; }
+table.d.split col.dv-col-no { width: 52px; }
+table.d.split td.tx { white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; }
+table.d.split td.tx.del { background: var(--del-bg); color: var(--del); }
+table.d.split td.tx.add { background: var(--add-bg); color: var(--add); }
+table.d.split td.tx.empty { background: var(--panel2); }
+table.d.split td.no[data-side="new"] { border-left: 1px solid var(--line); }
+table.d td.tx { tab-size: 4; }
+/* a selection stays on the side it started in */
+table.d.split[data-sel="old"] td.tx[data-side="new"],
+table.d.split[data-sel="new"] td.tx[data-side="old"] { user-select: none; }
+table.d .dv-sr, table.d .dv-noeol, table.d .dv-cr { user-select: none; }
+table.d td.no[data-n] { cursor: copy; }
+table.d td.no[data-n]:hover { color: var(--text); }
+
+/* ---- intra-line: the changed tokens of a changed pair */
+table.d .ix { border-radius: 2px; text-decoration: underline; text-decoration-thickness: 1px;
+  text-underline-offset: 3px; }
+table.d tr.del .ix, table.d td.tx.del .ix { background: var(--ix-del); }
+table.d tr.add .ix, table.d td.tx.add .ix { background: var(--ix-add); }
+table.d .ix-span { text-decoration-style: dashed; }
+table.d .dv-cr { font: 10px var(--sans); border: 1px solid currentColor; padding: 0 3px; margin-left: 2px;
+  text-decoration: none; }
+table.d .dv-noeol { font: 10.5px var(--sans); color: var(--muted); border: 1px solid var(--line2);
+  border-radius: 4px; padding: 0 5px; margin-left: 8px; }
+@media (forced-colors: active) {
+  table.d .ix { background: Mark; color: MarkText; forced-color-adjust: none; }
+}
+
+/* ---- expandable context */
+.dv-gap { display: flex; align-items: center; gap: 8px; padding: 3px 10px; background: var(--panel2);
+  border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.dv-gap-btns { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.dv-gap-wrap:focus { outline: none; }
+.dv-gap-wrap:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+table.d tr.dv-ctx td.tx { color: var(--muted); }
+table.d .dv-cut { font: 10.5px var(--sans); color: var(--text); border: 1px dashed var(--line2);
+  border-radius: 4px; padding: 0 5px; margin-left: 8px; user-select: none; white-space: nowrap; }
+table.d tr.dv-ph td { color: var(--faint); vertical-align: top; padding-top: 4px; }
+.dv-jobs:empty { display: none; }
+.dv-jobs { padding: 4px 10px; }
+.dv-note { margin: 0 0 8px; color: var(--muted); }
+.dv-ws-note { margin: 0 0 8px; }
+/* 0.0.27 UX-SIMPLIFY #36 — ONE ⋯ menu per hunk head (WCAG 2.5.8: a 24×24 hit area at least). */
+.hk-btn { min-width: 28px; min-height: 24px; box-sizing: border-box; border: 1px solid var(--line2); border-radius: 4px;
+  background: transparent; color: var(--text2); cursor: pointer; font: 600 14px/1 var(--sans); padding: 0 6px;
+  display: inline-flex; align-items: center; justify-content: center; }
+.hk-btn:hover, .hk-btn[aria-expanded="true"] { border-color: var(--accent); color: var(--accent-ink); }
+.hk-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.hk-menu { min-width: 200px; }
+.hk-item { min-height: 28px; }

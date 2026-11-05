@@ -117,9 +117,11 @@ jobs:
         # WINDOWS-CI-TIME (0.0.26 O6): the unit suite runs as FOUR shards per leg, in parallel —
         # `scripts/shard_tests.py` splits `discover -s tests -t tests` by MEASURED per-module time
         # (`scripts/shard_durations.json`), every module in exactly one shard. The gate's
-        # wall-clock is the slowest shard, not the whole suite. `4` is written three times — this
-        # list, the `--of 4` on the unit step, and the job name — and
+        # wall-clock is the slowest shard, not the whole suite. `4` is written three times here —
+        # this list, the `--of 4` on the unit step, and the job name — and
         # `tests/test_o6_shard_tests.py` reds when they part. The macOS includes carry it too.
+        # The tag gate (release.yml `test`, 0.0.27 R3) writes it twice more — its `shard:` list
+        # and its `--of 4` — and `tests/test_r3_tag_gate_sharded.py` reds when those part from these.
         shard: [1, 2, 3, 4]
         # PY312-ONLY (0.0.24, owner ruling 2026-10-17): every leg runs Python 3.12. The three
         # 3.10 "floor" legs (added 0.0.16 / 0.0.18 stage 17) are gone — they doubled the Windows
@@ -264,7 +266,7 @@ jobs:
         # shard leg measures itself against the one job ceiling, and `--record` keeps its time.
         run: python scripts/ci_ceiling.py --since "$MOKATA_CLOCK_T0" --workflow .github/workflows/ci.yml --job test --record ci-clock/job.json --group "${{ matrix.os }}-${{ matrix.jsonschema }}"
       - name: Keep this shard's clock (tag-ceiling job; `shard_tests.py absorb` re-balances on it)
-        # EVERY leg, not only ubuntu: the ubuntu shards re-assemble the tag gate's time below, and
+        # EVERY leg, not only ubuntu: the ubuntu shards grade the tag gate's per-shard ceiling below, and
         # a Windows run's per-module seconds are what `scripts/shard_tests.py absorb` re-bases the
         # balancer on (Windows is the slow OS, and it is not uniformly slower). Kilobytes, 7 days.
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -277,13 +279,16 @@ jobs:
   tag-ceiling:
     # ⭐ The one that would have saved v0.0.23: release.yml's `test` job was CANCELLED at its
     # 22-minute ceiling with no test failing (run 38966278058), so the tag never published.
-    # Until 0.0.26 an ubuntu leg of `test` ran a SUPERSET of that job and measured release.yml's
-    # ceiling itself. Sharded (O6), no single leg runs the whole suite any more — so this job
-    # RE-ASSEMBLES the unsharded leg from the ubuntu shards' records: the per-leg steps once (the
-    # largest job-minus-unit time) plus every shard's unit seconds. Same image, same Python as the
-    # tag gate; measured on every PR, before a tag. A missing shard is CANNOT-ANSWER (exit 2),
-    # never a partial sum that reads CLEARS.
-    name: tag gate ceiling (re-assembled from the ubuntu shards)
+    # 0.0.26 O6 sharded THIS job but not the tag gate, so this job re-assembled the unsharded tag
+    # leg from the ubuntu shards (1799 s at CI #172 — 1.07x of its ceiling). 0.0.27 R3
+    # (TAG-GATE-UNSHARDED, ruling V3) shards the tag gate the same way, so its ceiling now bounds
+    # ONE shard and this job grades it PER SHARD: the slowest ubuntu shard of every leg, against
+    # release.yml `test`'s ceiling. An ubuntu shard here runs a SUPERSET of the same-numbered tag
+    # shard (same modules — the plan is a pure function of the record and N — plus this gate's
+    # extra once-per-leg steps); same image, same Python; measured on every PR, before a tag. A
+    # missing shard, or shards cut into a different N than release.yml's `--of`, is CANNOT-ANSWER
+    # (exit 2), never a CLEARS.
+    name: tag gate ceiling (per shard, from the ubuntu shards)
     needs: test
     runs-on: ubuntu-latest
     permissions:

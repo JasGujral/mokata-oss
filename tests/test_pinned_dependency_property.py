@@ -25,7 +25,7 @@ file grades.
 
 ⚠ **THE HONEST RESIDUAL, AND IT IS NOT SMALL.** The row calls the unpinned transitive closure of
 `-e .` *"the real (small) exposure"*. Measured 2026-08-13 against an installed 3.12 venv, the
-closure of the ONE required dependency `mcp>=1.2,<2` is **thirty packages** — before the
+closure of the ONE required dependency `mcp>=1.30,<2` is **thirty packages** — before the
 `setuptools>=61.0` build backend pip fetches under build isolation, and before the `[postgres]`,
 `[embeddings]` extras at several of the sites. `LOCAL_SOURCE` is deliberately not
 spelled "safe": it means the PACKAGE is not fetched, and nothing more. Closing it means a

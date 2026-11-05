@@ -1,0 +1,43 @@
+{
+  "schemas": {
+    "HintCite": {
+      "type": "object", "required": ["source", "ref", "at"],
+      "properties": {"source": {"type": "string"}, "ref": {"type": "string"}, "at": {"type": ["number", "null"]}}
+    },
+    "Hint": {
+      "type": "object", "required": ["rule", "advice", "text", "command", "writes", "optional", "key", "cites"],
+      "properties": {"rule": {"type": "string"}, "advice": {"type": "string"}, "text": {"type": "string"},
+                     "command": {"type": "string"}, "writes": {"type": "boolean"}, "optional": {"type": "boolean"},
+                     "key": {"type": "string"},
+                     "cites": {"type": "array", "minItems": 1, "items": {"$ref": "#/schemas/HintCite"}}}
+    },
+    "HintAnswer": {
+      "type": "object", "required": ["version", "status", "hints", "count", "reason", "subject", "basis", "derived_at"],
+      "properties": {"version": {"type": "integer"},
+                     "status": {"type": "string", "enum": ["hints", "none", "unknown"]},
+                     "hints": {"type": "array", "items": {"$ref": "#/schemas/Hint"}},
+                     "count": {"type": "integer"}, "reason": {"type": "string"},
+                     "subject": {"type": "object", "required": ["session", "run", "chain"]},
+                     "basis": {"type": "object", "required": ["run", "source", "read", "bash", "note"]},
+                     "derived_at": {"type": "number"}}
+    }
+  },
+  "routes": [
+    {
+      "path": "/api/hints", "method": "GET", "kind": "json",
+      "params": {"query": {"session": "one or more session ids, comma-separated (at most 50)"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"type": "object",
+          "required": ["sample", "answers", "count"],
+          "properties": {"sample": {"type": "boolean"},
+                         "answers": {"type": "object", "additionalProperties": {"$ref": "#/schemas/HintAnswer"}},
+                         "count": {"type": "integer"}}}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"query": {"session": "S-1"}, "status": 200},
+                 {"query": {"session": "S-1,S-2"}, "status": 200},
+                 {"query": {"session": "sample-session-a"}, "status": 200, "demo": true},
+                 {"query": {}, "status": 400}]
+    }
+  ]
+}

@@ -119,7 +119,10 @@
         `${c.with_plan} with a plan. Runs with a spec are listed first, then runs with a plan.` : "";
     const teamBtn = $("plan-team-btn");
     teamBtn.hidden = !(P.team && P.team.configured) && P.source !== "team";
-    for (const b of document.querySelectorAll("button.pill[data-psource]")) b.classList.toggle("active", b.dataset.psource === P.source);
+    for (const b of document.querySelectorAll("button.pill[data-psource]")) {
+      b.classList.toggle("active", b.dataset.psource === P.source);
+      b.setAttribute("aria-checked", String(b.dataset.psource === P.source));
+    }
     const note = $("plan-source-note");
     if (P.source === "team") note.textContent = "Read from the team store (shared session bundles).";
     else if (P.team && P.team.unknown) note.textContent = "Team mode unknown: " + (P.team.note || "");
@@ -285,7 +288,9 @@
     }
   }
 
-  const TEST_LABEL = { passing: "test passing", failing: "failing test on record", none: "no test yet" };
+  const TEST_LABEL = { passing: "test passing", failing: "failing test on record (latest run)",
+                       mapped: "test recorded, not yet run", unmapped: "no test recorded for this AC",
+                       none: "no test yet" };
 
   function renderSpec(s, res) {
     const box = $("plan-spec");
@@ -468,19 +473,18 @@
     // the last local run's arc rather than guess a team run's.
     if (P.source !== "local") return;
     const run = P.run;
-    if (!run) { P.lc = null; renderStrip(); renderDetail(); return; }
+    if (!run) { P.lc = null; renderStrip(); return; }
     const res = await MK.api("/api/lifecycle?run=" + encodeURIComponent(run)).catch(() => null);
     if (gen !== P.lcGen) return;
     MK.markSample(res);
     P.lc = res && !res.error && res.state !== "not-initialized" ? res : null;
     renderStrip();
-    renderDetail();
   }
 
   function renderStrip() {
     const box = $("lifecycle");
     const lc = P.lc;
-    box.hidden = !lc;              // P34: the S1 header — shown with the Sessions screen
+    box.hidden = !lc;              // the Sessions header — shown under every Sessions view
     if (!lc) return;
     const row = ((P.runs && P.runs.runs) || []).find((r) => r.id === lc.run);
     $("lc-run").textContent = `run ${String(lc.run).slice(0, 8)}${row && row.title ? " · " + row.title : ""}`;
@@ -503,35 +507,6 @@
     else if (lc.current) parts.push(`now: ${lc.current}`);
     if (blocks) parts.push(`${blocks} block(s)`);
     $("lc-meta").textContent = parts.join(" · ");
-  }
-
-  function renderDetail() {
-    const ol = $("lc-detail");
-    ol.replaceChildren();
-    const lc = P.lc;
-    $("lc-detail-empty").hidden = !!lc;
-    $("lc-detail-run").textContent = lc ? `run ${String(lc.run).slice(0, 8)}` : "";
-    if (!lc) return;
-    for (const s of lc.stages) {
-      const li = el("li", "lcd " + s.status);
-      const head = el("div", "lcd-head");
-      head.append(el("span", "lc-glyph", GLYPH[s.status] || "○"), el("b", "", s.stage),
-                  el("span", "dim small", s.status + (s.evidence === "implied" ? " (implied)" : "")));
-      if (s.entered) head.append(el("span", "mono small dim", fmtIso(s.entered)));
-      li.append(head);
-      const marks = lc.marks.filter((m) => m.stage === s.stage).slice(-50);
-      if (marks.length) {
-        const ul = el("ul", "lcd-marks");
-        for (const m of marks) {
-          const mi = el("li", "lcd-mark " + m.kind);
-          mi.append(el("span", "mono small dim", m.t ? fmtT(m.t) : (m.ts || "")), el("span", "", " " + m.label));
-          if (m.reason) mi.append(el("span", "dim small", ` — ${m.reason}`));
-          ul.append(mi);
-        }
-        li.append(ul);
-      }
-      ol.append(li);
-    }
   }
 
   // ------------------------------------------------------------------------------- hooks

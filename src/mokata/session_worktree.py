@@ -286,8 +286,9 @@ def create_worktree(surface: Any, topic: Optional[str] = None, *, assume_yes: bo
 #   * the BINDING is the registry entry that already exists. `run_id == session_id` (session.py),
 #     so the entry keyed by this session IS the run's record; WT.S4 added ONE field (`branch`) to
 #     it. Both directions resolve off that one row — no join table, no second store;
-#   * the HANDOFF is derived text. It names the branch and the exact next action, and mokata still
-#     never merges: the human runs the command.
+#   * the HANDOFF is derived text. It names the branch and the exact next action; mokata never
+#     merges on its own — the gated merge (0.0.27 P21, `merge_gate`) lands only on the human's
+#     approval of exactly that merge.
 #
 # Everything here is READ-ONLY except the registry `touch` inside `create_worktree`, and every entry
 # point degrades to None/False rather than raising into a read-only surface.
@@ -455,7 +456,8 @@ def merge_ready_handoff(surface: Any, run_id: Optional[str] = None,
                         ascii_only: bool = False) -> Optional[str]:
     """The merge-ready branch handoff for a worktree-bound run reaching ship, or None when the run
     owns no worktree — in which case ship prints NO handoff prose and raises NO error, exactly as
-    before WT.S4. It hands the human a BRANCH and the exact next action; mokata never merges."""
+    before WT.S4. It hands the human a BRANCH and the exact next action; mokata never merges on its
+    own (the gated merge needs the human's approval)."""
     try:
         b = binding_for_run(surface, run_id)
     except Exception:
@@ -465,6 +467,8 @@ def merge_ready_handoff(surface: Any, run_id: Optional[str] = None,
     canon = canonical_repo_root(getattr(surface, "root", "."))
     glyph = "[wt]" if ascii_only else "⌥"
     return (f"{glyph} merge-ready: this run's work is on branch '{b.branch}' (worktree "
-            f"{b.path}). Commit anything outstanding on that branch, then from the main checkout "
-            f"({canon}) merge it: git merge {b.branch}. mokata does NOT run this — the merge is "
-            f"yours to make, and the worktree stays until you remove it.")
+            f"{b.path}). Commit anything outstanding on that branch, run the full suite there "
+            f"(mokata worktree test {b.path}), then land it with the gated merge into {canon}: "
+            f"mokata worktree merge {b.path} — it needs the suite and review green at the branch's "
+            f"head and YOUR approval (mokata approve <id>); mokata never merges on its own, and "
+            f"the worktree stays until you remove it.")

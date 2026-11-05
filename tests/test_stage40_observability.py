@@ -1,7 +1,8 @@
-"""Stage 40 — run-observability UX (parallel-aware terminal lanes + clickable HTML dashboard).
+"""Stage 40 — run-observability UX (parallel-aware terminal lanes).
 
-Both jsonschema states (no jsonschema imported here — these exercise progress/dashboard, which
-are pure-stdlib). Everything is read-only / local-first / frugal / degrade-clean.
+The Stage-40 clickable HTML dashboard was folded into the IDE's Sessions screen in 0.0.27
+WATCH-FOLD (tests/test_watchfold_watch_opens_the_ide.py); the terminal lanes stay, here.
+Everything is read-only / local-first / frugal / degrade-clean.
 """
 
 import os
@@ -14,14 +15,6 @@ import _support  # noqa: F401  (puts src/ on the path)
 
 from mokata import cli
 from mokata.config import Surface
-from mokata.dashboard import (
-    LEDGER_FEED_TAIL,
-    build_feed,
-    dashboard_enabled,
-    dashboard_path,
-    render_dashboard_html,
-    write_dashboard,
-)
 from mokata.govern import AuditLedger
 from mokata.govern.resume import CHECKPOINT_PREFIX
 from mokata.init import init_repo
@@ -144,120 +137,27 @@ class TestTerminalLanes(unittest.TestCase):
             self.assertEqual(len(rl.lanes), 1)
 
 
-# ----------------------------------------------------------------- Tier 2: HTML dashboard
-
-class TestDashboard(unittest.TestCase):
-    def _seed_parallel(self, surface):
-        _active_run(surface)
-        led = _ledger(surface)
-        led.record("exec_estimate", mode="parallel", tasks=2)
-        led.record("subagent", task="alpha", ok=True, isolated=True, review_passed=True)
-        led.record("subagent", task="beta", ok=True, isolated=True, review_passed=True)
-        return led
-
-    def test_self_contained_no_external_or_network_refs(self):
-        with tempfile.TemporaryDirectory() as d:
-            surface = _repo(d, ux="dashboard")
-            self._seed_parallel(surface)
-            path = write_dashboard(surface, run_id="r1")
-            self.assertTrue(os.path.exists(path))
-            self.assertIn("temp_local", path)            # gitignored location
-            with open(path, encoding="utf-8") as fh:
-                doc = fh.read()
-            # no external assets / network / remote anything
-            for needle in ("http://", "https://", "//cdn", "<script src", "<link ",
-                           "src=\"http", "@import"):
-                self.assertNotIn(needle, doc)
-            # contains the lanes + phases + the ledger feed
-            self.assertIn("alpha", doc)
-            self.assertIn("beta", doc)
-            self.assertIn("pipeline", doc)
-            self.assertIn("feed", doc)
-            self.assertIn("exec_estimate", doc)          # a ledger row is shown
-
-    def test_render_is_deterministic_for_fixed_state(self):
-        with tempfile.TemporaryDirectory() as d:
-            surface = _repo(d, ux="dashboard")
-            led = self._seed_parallel(surface)
-            rl = build_run_lanes(surface.state, ledger=led, run_id="r1")
-            feed = build_feed(led)
-            a = render_dashboard_html(rl, feed)
-            b = render_dashboard_html(rl, feed)
-            self.assertEqual(a, b)                        # pure function, no wall-clock
-
-    def test_once_has_no_meta_refresh_live_does(self):
-        with tempfile.TemporaryDirectory() as d:
-            surface = _repo(d, ux="dashboard")
-            led = self._seed_parallel(surface)
-            rl = build_run_lanes(surface.state, ledger=led, run_id="r1")
-            feed = build_feed(led)
-            self.assertNotIn("http-equiv=\"refresh\"", render_dashboard_html(rl, feed))
-            self.assertIn("http-equiv=\"refresh\"",
-                          render_dashboard_html(rl, feed, refresh_secs=2))
-
-    def test_ledger_feed_is_bounded(self):
-        with tempfile.TemporaryDirectory() as d:
-            surface = _repo(d, ux="dashboard")
-            _active_run(surface)
-            led = _ledger(surface)
-            led.record("exec_estimate", mode="parallel", tasks=1)
-            for i in range(LEDGER_FEED_TAIL + 50):       # far more than the bound
-                led.record("subagent", task=f"t{i}", ok=True, review_passed=True)
-            feed = build_feed(led)
-            self.assertEqual(len(feed), LEDGER_FEED_TAIL)   # the asserted bound
-            self.assertLessEqual(len(led.entries()), LEDGER_FEED_TAIL + 100)  # full log is bigger
-            self.assertGreater(len(led.entries()), LEDGER_FEED_TAIL)
-
-    def test_no_run_friendly_empty_state(self):
-        with tempfile.TemporaryDirectory() as d:
-            surface = _repo(d, ux="dashboard")
-            path = write_dashboard(surface)
-            with open(path, encoding="utf-8") as fh:
-                doc = fh.read()
-            self.assertIn("no run in progress", doc.lower())
-            self.assertNotIn("lanes (", doc)             # no lanes section in the empty state
-
-    def test_ledger_absent_renders_lanes_only(self):
-        with tempfile.TemporaryDirectory() as d:
-            surface = _repo(d, ux="dashboard")
-            _active_run(surface)
-            rl = build_run_lanes(surface.state, ledger=None)
-            doc = render_dashboard_html(rl, [])          # no feed
-            self.assertIn("no audit ledger yet", doc)
-            self.assertIn("lanes", doc)
-
-
 # ----------------------------------------------------------------- config + CLI + read-only
 
 class TestConfigAndCli(unittest.TestCase):
-    def test_setting_gates_the_dashboard(self):
-        with tempfile.TemporaryDirectory() as d:
-            self.assertFalse(dashboard_enabled(_repo(d)))                 # default terminal
-            self.assertTrue(dashboard_enabled(_repo(d + "x" if False else d, ux="both")))
-
-    def test_terminal_setting_writes_no_html(self):
+    def test_watch_on_the_terminal_tier_prints_the_parallel_lanes(self):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)               # terminal default
             _active_run(surface)
+            led = _ledger(surface)
+            led.record("exec_estimate", mode="parallel", tasks=2)
+            led.record("subagent", task="t1", ok=True, review_passed=True)
+            led.record("subagent", task="t2", ok=True, review_passed=True)
             buf = StringIO()
             with redirect_stdout(buf):
-                rc = cli.main(["watch", "--once", "--path", d])
+                rc = cli.main(["watch", "--path", d])
             self.assertEqual(rc, 0)
-            self.assertFalse(os.path.exists(dashboard_path(surface.mokata_dir)))
-            self.assertIn("dashboard is off", buf.getvalue())
-
-    def test_dashboard_setting_writes_html(self):
-        with tempfile.TemporaryDirectory() as d:
-            surface = _repo(d, ux="dashboard")
-            _active_run(surface)
-            with redirect_stdout(StringIO()):
-                rc = cli.main(["watch", "--once", "--path", d])
-            self.assertEqual(rc, 0)
-            self.assertTrue(os.path.exists(dashboard_path(surface.mokata_dir)))
+            self.assertIn("t1", buf.getvalue())
+            self.assertIn("t2", buf.getvalue())
 
     def test_watch_and_progress_are_read_only(self):
         with tempfile.TemporaryDirectory() as d:
-            surface = _repo(d, ux="dashboard")
+            surface = _repo(d)
             _active_run(surface)
             led = _ledger(surface)
             led.record("exec_estimate", mode="parallel", tasks=1)
@@ -266,7 +166,7 @@ class TestConfigAndCli(unittest.TestCase):
             before_cp = surface.state.read(CHECKPOINT_PREFIX + "r1")
 
             with redirect_stdout(StringIO()):
-                cli.main(["watch", "--once", "--path", d])
+                cli.main(["watch", "--path", d])
                 cli.main(["progress", "--lanes", "--path", d])
 
             after = AuditLedger.from_mokata_dir(surface.mokata_dir)

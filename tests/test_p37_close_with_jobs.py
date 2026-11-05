@@ -298,6 +298,19 @@ class SigtermContinuesInTheBackground(unittest.TestCase):
 @unittest.skipUnless(POSIX, "starts `mokata ide` and Chromium")
 class ThePageAsksBeforeClosing(unittest.TestCase):
 
+    @staticmethod
+    def leave(page):
+        """Leave the page the way a user reloads it. `page.close(run_before_unload=True)` is NOT
+        used: on this Chromium (Playwright 1.5x, build 1248, headless shell and full alike) it
+        never raises `beforeunload`, even for a page that always asks, so it cannot tell a page
+        that prompts from one that does not. Reloading runs the same beforeunload handler. A
+        dismissed prompt leaves the page where it is, so that navigation times out: expected."""
+        from playwright.sync_api import Error as PlaywrightError
+        try:
+            page.reload(timeout=3000)
+        except PlaywrightError:
+            pass
+
     def test_closing_the_page_with_a_kept_job_running_prompts_and_without_one_does_not(self):
         try:
             from playwright.sync_api import sync_playwright
@@ -320,6 +333,16 @@ class ThePageAsksBeforeClosing(unittest.TestCase):
             with sync_playwright() as pw:
                 browser = pw.chromium.launch()
                 prompts = []
+                # CONTROL: the way the test leaves a page must itself raise `beforeunload` on a
+                # page that unconditionally asks, or "no prompt" below proves nothing.
+                ctl = browser.new_page()
+                ctl.on("dialog", lambda d: (prompts.append(("control", d.type)), d.dismiss()))
+                ctl.goto("data:text/html,<script>addEventListener('beforeunload',e=>{e.preventDefault();e.returnValue='x'})</script>")
+                ctl.mouse.click(5, 5)
+                self.leave(ctl)
+                time.sleep(0.5)
+                self.assertIn(("control", "beforeunload"), prompts, "the test's way of leaving a page does not raise beforeunload")
+                ctl.close()
                 for kept in (True, False):
                     page = browser.new_page()
                     page.on("dialog", lambda d: (prompts.append((kept, d.type)), d.dismiss()))
@@ -332,7 +355,7 @@ class ThePageAsksBeforeClosing(unittest.TestCase):
                             state: 'running', label: 'rebuild the code graph'},
                             '/api/jobs/index-crg-x-1').catch(() => null); }""")
                         self.assertEqual(1, page.evaluate("() => MK.jobs.keptRunning().length"))
-                    page.close(run_before_unload=True)
+                    self.leave(page)
                     time.sleep(0.5)
                 browser.close()
             self.assertIn((True, "beforeunload"), prompts)

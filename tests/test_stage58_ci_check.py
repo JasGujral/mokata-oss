@@ -73,7 +73,7 @@ class TestDegradeClean(unittest.TestCase):
             res = CI.run_ci_check(d, ["checkout.py"])
             self.assertFalse(res.blocked, "false block when there was nothing to check")
             self.assertEqual(res.exit_code, 0)
-            self.assertTrue(all(leg.status in ("pass", "skip") for leg in res.legs))
+            self.assertTrue(all(leg.status in ("pass", "absent") for leg in res.legs))
 
     def test_uninitialized_repo_passes(self):
         with tempfile.TemporaryDirectory() as d:
@@ -90,7 +90,7 @@ class TestDegradeClean(unittest.TestCase):
             _write(d, "test_pay.py", "def test_charge():\n    assert True\n")  # no AC ids
             res = CI.run_ci_check(d, ["test_pay.py"])
             comp = next(leg for leg in res.legs if leg.name == "completeness")
-            self.assertEqual(comp.status, "skip")
+            self.assertEqual(comp.status, "absent")
             self.assertFalse(res.blocked)
 
 
@@ -167,7 +167,8 @@ class TestCommentBody(unittest.TestCase):
             _init(d)
             _write(d, "checkout.py", "def checkout(c):\n    return c\n")
             body = CI.run_ci_check(d, ["checkout.py"]).comment_body()
-            self.assertIn("PASSED", body)
+            self.assertIn("NOT CHECKED", body)      # SPEC-TRISTATE: nothing was graded
+            self.assertNotIn("PASSED", body)
             self.assertNotIn("BLOCKED", body)
 
 
@@ -200,7 +201,9 @@ class TestCliSurface(unittest.TestCase):
             _write(d, "checkout.py", "def checkout(c):\n    return c\n")
             rc, out, err = self._run(["ci-check", "--files", "checkout.py", "--path", d])
             self.assertEqual(rc, 0, err)
-            self.assertIn("PASSED", out)
+            # SPEC-TRISTATE: nothing to check exits 0 (never a false block) but is NOT "PASSED".
+            self.assertIn("NOT CHECKED", out)
+            self.assertNotIn("PASSED", out)
 
     def test_cli_blocks_and_writes_comment_file(self):
         with tempfile.TemporaryDirectory() as d:

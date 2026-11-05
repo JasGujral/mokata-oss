@@ -520,8 +520,8 @@ _with_registration = _serve
 # The fix is §7g's: SPLIT THE REPRESENTATION, and make each answer carry its own provenance —
 # WHICH version was found and WHAT the import actually said.
 
-#: The `>=1.2` half of pyproject's `mcp>=1.2,<2`.
-SDK_MIN_VERSION = (1, 2)
+#: The `>=1.30` half of pyproject's `mcp>=1.30,<2`.
+SDK_MIN_VERSION = (1, 30)
 #: The `<2` half. 2.0.0 removed `mcp.server.fastmcp` entirely, so supporting 2.x is a PORT, not a
 #: version bump. `test_mcp_sdk_2_breaks_the_server` asserts both constants against pyproject, so
 #: the guard is pinned to the bound pip actually enforces rather than to a string typed twice.

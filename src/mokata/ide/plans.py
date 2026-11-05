@@ -34,6 +34,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..repo_paths import name_of
+from ..test_runs import mapped_tests
 from .server import BadRequest
 
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
@@ -148,8 +149,41 @@ def _approach_view(store: Any) -> Dict[str, Any]:
     }
 
 
+def ac_test_state(ac_id: str, red: set, green: set, record: Optional[Dict[str, Any]]) -> str:
+    """The per-AC test badge, from the tests RECORDED FOR THE AC (`test_runs.mapped_tests`), never
+    from the AC id itself (verification F4: an AC id equal to an unrelated test id read passing):
+
+        unmapped   no test is recorded for this AC (older records with no map read so too)
+        failing    a mapped test's LATEST outcome is red (a regression shows red)
+        passing    a mapped test's latest outcome is green and none is red
+        mapped     tests are recorded for it, none has run
+
+    A test's latest outcome is its timed history's `last`; a record from before timed history is
+    judged by the sets, red first (a test in both sets whose order is unknown reads failing — the
+    stricter fact, said in the Plan view's legend)."""
+    ids = set(mapped_tests(record, ac_id)) if record else set()
+    if not ids:
+        return "unmapped"
+    hist = (record or {}).get("tests") or {}
+    states = set()
+    for tid in ids:
+        h = hist.get(tid) or {}
+        if h.get("last") in ("red", "green"):
+            states.add(h["last"])
+        elif tid in red:
+            states.add("red")
+        elif tid in green:
+            states.add("green")
+    if "red" in states:
+        return "failing"
+    if "green" in states:
+        return "passing"
+    return "mapped"
+
+
 def _spec_view(store: Any, run_id: str, version: int, *, history: bool,
-               tests: Optional[Tuple[set, set]]) -> Dict[str, Any]:
+               tests: Optional[Tuple[set, set]], record: Optional[Dict[str, Any]] = None
+               ) -> Dict[str, Any]:
     from ..engine import spec_history as SH
     from ..engine.spec_anchor import ac_anchor_lines
     from ..engine.spec_gate import read_emitted_spec
@@ -178,7 +212,7 @@ def _spec_view(store: Any, run_id: str, version: int, *, history: bool,
         d = c.to_dict()
         d["text"] = _clip(d.get("text"))
         if tests is not None:
-            d["test"] = "passing" if c.id in green else "failing" if c.id in red else "none"
+            d["test"] = ac_test_state(c.id, red, green, record)
         crit.append(d)
     out: Dict[str, Any] = {
         "state": "ok", "version": shown or 1, "current_version": current,
@@ -482,16 +516,18 @@ def plan(root: str, run_id: str, source: str = "local", version: int = 0) -> Dic
     store = _run_store(root, rid)
     from ..engine import spec_history as SH
     from ..tdd_state import load as load_tdd
+    from ..test_runs import read_test_record
     try:
         tests = load_tdd(store, rid)
     except (OSError, ValueError, TypeError):
         tests = None
+    record = read_test_record(root, rid) if tests is not None else None
     versions = SH.spec_versions(store, rid)
     approach = _approach_view(store)
     return {"sample": False, "source": "local", "label": "local state", "run": rid,
             "approach": approach, "plan_files": plan_files_for(root, approach.get("topic", "")),
             "pending_spec": pending_specs(root).get(rid, []),
-            "spec": _spec_view(store, rid, version, history=True, tests=tests),
+            "spec": _spec_view(store, rid, version, history=True, tests=tests, record=record),
             "versions": versions, "amendment": _amendment(store, rid)}
 
 

@@ -1,11 +1,11 @@
-"""0.0.26 P34 `IA-ONE-NAV` — ONE information architecture for the IDE (PRD §5, rows R26-R28,
-R30-R33; gaps G10, G20, G22, G25).
+"""0.0.26 P34 `IA-ONE-NAV`, rewritten for 0.0.27 UX-SIMPLIFY — ONE information architecture for
+the IDE: three screens (top tabs) Review · Sessions · Code, each with its views as sub-tabs.
 
 What must be true for the user:
-  R26  the rail IS the screen: for every rail button and every `g x` chord, the highlighted rail
-       button is the screen that is visible; there is no mode bar, no left Sessions panel and no
-       bottom timeline (three nav systems that desynced, B-F1/G10).
-  R27  each screen's own visible controls stay within PRD §5.1 (top bar <= 5).
+  R26  the selected top tab IS the screen: for every tab, sub-tab and `g x` chord, the selected
+       tab and sub-tab are what is visible; there is no rail, no status footer and no mode bar.
+       A feature adds a VIEW to a screen (never a screen): a chord or an icon is refused.
+  R27  each screen's own visible controls stay within PRD §5.1 (top bar <= 7: three tabs + four).
   R28  ONE "Viewing" context: pick a session -> the Code view says "vs session X", the server
        marks the file against it, and Search's "this session's files" scope is on.
   R30  the registry REFUSES browser-reserved chords (Ctrl/Cmd+W closed the IDE's window, B-F16).
@@ -51,15 +51,16 @@ def _node(js):
 
 
 def _screens_js():
-    return re.search(r"const SCREENS = \[.*?\];", (STATIC / "app.js").read_text(encoding="utf-8"),
-                     re.S).group(0) + "\nMK.SCREENS = SCREENS;\n"
+    app = (STATIC / "app.js").read_text(encoding="utf-8")
+    return "\n".join(re.search(r"const %s = \[.*?\];" % n, app, re.S).group(0) for n in ("TABS", "VIEWS")) \
+        + "\nMK.TABS = TABS; MK.VIEWS = VIEWS;\n"
 
 
 def _all_features_js():
     js = r"""
 globalThis.window = globalThis;
 globalThis.document = { body: {}, addEventListener() {}, querySelector: () => null, getElementById: () => null };
-""" + (STATIC / "registry.js").read_text(encoding="utf-8") + "\n" + _screens_js()
+""" + (STATIC / "registry.js").read_text(encoding="utf-8") + "\n" + (STATIC / "theme.js").read_text(encoding="utf-8") + "\n" + _screens_js()
     for name in sorted(n for n in os.listdir(FEATURES) if n.endswith(".js")):
         js += (FEATURES / name).read_text(encoding="utf-8") + "\n"
     return js
@@ -71,53 +72,73 @@ globalThis.document = { body: {}, addEventListener() {}, querySelector: () => nu
 class R26_OneNavigation(unittest.TestCase):
     html = (STATIC / "index.html").read_text(encoding="utf-8")
 
-    def test_R26_no_mode_bar_no_left_sessions_panel_no_bottom_timeline(self):
-        for gone in ('class="modes"', 'class="mode"', "data-mode=", 'id="panel-sessions"',
-                     'class="timeline-strip"', 'id="ticks"', 'id="timeline"', 'id="src-change"'):
+    def test_R26_no_rail_no_footer_no_mode_bar_no_bottom_timeline(self):
+        for gone in ('class="rail"', "nav.rail", "<footer", 'class="status"', 'class="modes"',
+                     'class="mode"', "data-screen=", 'class="timeline-strip"', 'id="ticks"',
+                     'id="timeline"', 'id="view-search"', 'id="needs-you"'):
             self.assertNotIn(gone, self.html, f"{gone} is a second navigation system")
         app = (STATIC / "app.js").read_text(encoding="utf-8")
         self.assertNotIn("setPanel", app)
+        self.assertNotIn("SCREENS", app)
         for js in [STATIC / n for n in os.listdir(STATIC) if n.endswith(".js")] + list(FEATURES.glob("*.js")):
-            self.assertNotIn("MK.setPanel", js.read_text(encoding="utf-8"), js.name)
+            t = js.read_text(encoding="utf-8")
+            self.assertNotIn("MK.setPanel", t, js.name)
+            self.assertNotIn("rail-btn", t, js.name)
 
-    def test_R26_every_core_screen_is_one_rail_button_and_one_view_and_the_chords_match_the_map(self):
-        o = _node("globalThis.MK = {};\n" + _screens_js() + "process.stdout.write(JSON.stringify(MK.SCREENS));")
-        ids = [s["id"] for s in o]
-        self.assertEqual(["sessions", "review", "navigate", "search", "graph", "plan"], ids)
-        for sid in ids:
-            self.assertEqual(1, self.html.count(f'data-screen="{sid}"'), sid)
-            self.assertIn(f'id="view-{sid}"', self.html)
-        # §5.5: g s / g r / g c / g i / g p (+ g w from the Worktrees feature)
-        self.assertEqual({"s": "sessions", "r": "review", "c": "navigate", "i": "graph", "p": "plan"},
-                         {s["chord"]: s["id"] for s in o if s["chord"]})
-        wt = (FEATURES / "worktrees.js").read_text(encoding="utf-8")
-        self.assertIn('chord: "w"', wt)
+    def test_R26_three_top_tabs_their_views_and_the_chords_match_the_map(self):
+        o = _node("globalThis.MK = {};\n" + _screens_js()
+                  + "process.stdout.write(JSON.stringify({tabs: MK.TABS, views: MK.VIEWS}));")
+        self.assertEqual(["review", "sessions", "navigate"], [t["id"] for t in o["tabs"]])
+        self.assertEqual(["Review", "Sessions", "Code"], [t["title"] for t in o["tabs"]])
+        # §5.5: g r / g s / g c — the only chords; a view has none
+        self.assertEqual({"r": "review", "s": "sessions", "c": "navigate"},
+                         {t["chord"]: t["id"] for t in o["tabs"]})
+        self.assertTrue(all("chord" not in v for v in o["views"]))
+        at = self.html.index('id="screen-tabs"')
+        tag = self.html[self.html.rindex("<", 0, at):self.html.index(">", at)]
+        self.assertIn('role="tablist"', tag)
+        bar = self.html[at:]
+        bar = bar[:bar.index("</div>")]
+        for t in o["tabs"]:
+            self.assertEqual(1, bar.count(f'id="tab-{t["id"]}"'), t["id"])
+            self.assertIn(f'data-tab="{t["id"]}"', bar)
+        self.assertEqual(3, bar.count('role="tab"'))
+        for v in o["views"]:
+            self.assertIn(f'id="view-{v["id"]}"', self.html, v["id"])
+        self.assertEqual("graph", [v["id"] for v in o["views"] if v.get("overlay")][0],
+                         "the graph is an overlay (Expand graph), not a screen")
 
-    def test_R26_a_feature_screen_is_a_rail_button_plus_a_view_and_its_chord_cannot_collide(self):
+    def test_R26_a_feature_adds_a_view_to_a_screen_and_a_chord_icon_or_no_screen_is_refused(self):
         o = _node(r"""
 globalThis.window = globalThis;
-const made = []; const fake = (tag) => { const n = { tag, dataset: {}, style: {}, children: [], hidden: false,
-  setAttribute() {}, append(...k) { n.children.push(...k); }, addEventListener() {} }; made.push(n); return n; };
-const rail = fake("nav"), left = fake("aside"), center = fake("main");
+const made = []; const fake = (tag) => { const n = { tag, dataset: {}, style: {}, children: [], hidden: false, attrs: {},
+  setAttribute(k, v) { n.attrs[k] = v; }, append(...k) { n.children.push(...k); }, addEventListener() {} }; made.push(n); return n; };
+const left = fake("aside"), center = fake("main");
 globalThis.document = { addEventListener() {}, createElement: fake,
-  querySelector: (s) => (s === "nav.rail" ? rail : s === "main.center" ? center : null),
+  querySelector: (s) => (s === "main.center" ? center : null),
   getElementById: (id) => (id === "left" ? left : null) };
-""" + (STATIC / "registry.js").read_text(encoding="utf-8") + "\n" + _screens_js() + r"""
+globalThis.MK = {};
+""" + _screens_js() + (STATIC / "registry.js").read_text(encoding="utf-8") + r"""
 const out = {};
-mokataIDE.register({ id: "demo", panels: [{ id: "demo", title: "Demo", chord: "d", side: true, mount() {} }] });
-out.rail = rail.children.map((b) => b.dataset.screen);
-out.view = center.children.map((v) => v.id);
+mokataIDE.register({ id: "demo", panels: [{ id: "demo", title: "Demo", tab: "review", side: true, order: 5, mount() {} }] });
+out.view = center.children.map((v) => [v.id, v.attrs.role]);
 out.side = left.children.map((v) => v.id);
-out.screen = MK.SCREENS.find((s) => s.id === "demo");
-try { mokataIDE.register({ id: "clash", panels: [{ id: "clash", title: "C", chord: "s" }] }); out.clash = "accepted"; }
-catch (e) { out.clash = e.message; }
+out.entry = MK.VIEWS.find((s) => s.id === "demo");
+for (const [k, p] of [["chord", { chord: "d", tab: "review" }], ["icon", { icon: "x", tab: "review" }],
+                      ["notab", {}], ["badtab", { tab: "graph" }], ["core", { tab: "review", id: "plan" }]]) {
+  try { mokataIDE.register({ id: "f-" + k, panels: [{ id: p.id || ("v-" + k), title: "C", ...p }] }); out[k] = "accepted"; }
+  catch (e) { out[k] = e.message; }
+}
 process.stdout.write(JSON.stringify(out));
 """)
-        self.assertEqual(["demo"], o["rail"])
-        self.assertEqual(["view-demo"], o["view"])
+        self.assertEqual([["view-demo", "tabpanel"]], o["view"])
         self.assertEqual(["panel-demo"], o["side"])
-        self.assertEqual("d", o["screen"]["chord"])
-        self.assertIn("chord g s is taken: by sessions", o["clash"])
+        self.assertEqual(("review", True, 5), (o["entry"]["tab"], o["entry"]["side"], o["entry"]["order"]))
+        self.assertIn("has a chord or an icon", o["chord"])
+        self.assertIn("has a chord or an icon", o["icon"])
+        self.assertIn("needs tab: review | sessions | navigate", o["notab"])
+        self.assertIn("needs tab:", o["badtab"])
+        self.assertIn('panel "plan" is taken: by core', o["core"])
 
 
 # ===================================================================== R30 — browser-reserved keys
@@ -223,11 +244,13 @@ COUNT = r"""(scope) => [...document.querySelectorAll('button,a,input,select,[rol
   const r = e.getBoundingClientRect();
   if (!(r.width > 0 && r.height > 0) || getComputedStyle(e).visibility === 'hidden') return false;
   if (e.closest('[data-rows]')) return false;
-  const inTop = !!e.closest('header.top'), inRail = !!e.closest('nav.rail');
-  return scope === 'top' ? inTop : (!inTop && !inRail && !e.closest('#activity-drawer'));
+  const inTop = !!e.closest('header.top');
+  return scope === 'top' ? inTop : (!inTop && !e.closest('#activity-drawer'));
 }).length"""
-TARGET = {"top": 5, "review": 25, "navigate": 30, "graph": 15, "plan": 20, "sessions": 20,
-          "search": 25, "worktrees": 20}
+# top: three tabs + Viewing + ⌘K + jobs + health (the waiting bar adds its toggle only when
+# something waits). A screen's count includes its sub-tabs and the inspector.
+TARGET = {"top": 7, "review": 25, "proof": 30, "explain": 20, "navigate": 30, "graph": 15,
+          "activity": 30, "plan": 25, "worktrees": 25}
 
 
 def _git(cwd, *args):
@@ -317,45 +340,64 @@ class InTheBrowser(unittest.TestCase):
 
     def state(self, pg):
         return pg.evaluate("""() => ({
-          active: [...document.querySelectorAll('nav.rail .rail-btn.active')].map((b) => b.dataset.screen),
+          tab: [...document.querySelectorAll('#screen-tabs [role=tab][aria-selected=true]')].map((b) => b.dataset.tab),
+          sub: [...document.querySelectorAll('#subtabs [role=tab][aria-selected=true]')].map((b) => b.dataset.view),
           visible: [...document.querySelectorAll('main.center > .view-pane')].filter((v) => !v.hidden).map((v) => v.id),
-          modes: document.querySelectorAll('.modes, button.mode').length })""")
+          modes: document.querySelectorAll('.modes, button.mode, nav.rail').length })""")
 
-    def test_R26_the_rail_highlight_is_the_visible_screen_for_every_button_and_chord(self):
+    def go(self, pg, view):
+        """Reach a view the way a person does: its top tab, then its sub-tab (when it has one)."""
+        tab = pg.evaluate("(v) => (MK.VIEWS.find((x) => x.id === v) || {tab: v}).tab", view)
+        pg.click(f"#tab-{tab}")
+        if pg.is_visible(f"#subtab-{view}"):
+            pg.click(f"#subtab-{view}")
+        pg.wait_for_function("(v) => MK.ui.mode === v", arg=view)
+
+    def test_R26_the_selected_tab_and_sub_tab_are_what_is_visible_for_every_click_and_chord(self):
         pg = self.page()
-        screens = pg.evaluate("() => [...document.querySelectorAll('nav.rail .rail-btn')].map((b) => b.dataset.screen)")
-        self.assertIn("worktrees", screens, "a feature screen sits on the same rail")
-        for sid in screens:
-            pg.click(f"nav.rail .rail-btn[data-screen={sid}]")
+        views = pg.evaluate("() => MK.VIEWS.filter((v) => !v.overlay).map((v) => [v.tab, v.id])")
+        self.assertEqual({"review", "proof", "explain", "activity", "plan", "worktrees", "navigate"},
+                         {v for _, v in views}, "Proof / Explain on Review; Timeline / Plan / Worktree on Sessions")
+        for tab, vid in views:
+            self.go(pg, vid)
             st = self.state(pg)
-            self.assertEqual(([sid], ["view-" + sid], 0), (st["active"], st["visible"], st["modes"]), sid)
-        chords = pg.evaluate("() => MK.SCREENS.filter((s) => s.chord).map((s) => [s.chord, s.id])")
-        self.assertEqual({"s", "r", "c", "i", "p", "w"}, {c for c, _ in chords})
-        for letter, sid in chords:
-            pg.click("nav.rail .rail-btn[data-screen=plan]" if sid != "plan" else "nav.rail .rail-btn[data-screen=review]")
+            subs = [v for t, v in views if t == tab]
+            self.assertEqual(([tab], [vid] if len(subs) > 1 else [], ["view-" + vid], 0),
+                             (st["tab"], st["sub"], st["visible"], st["modes"]), vid)
+        for letter, tab in (("r", "review"), ("s", "sessions"), ("c", "navigate")):
+            pg.click("#tab-sessions" if tab != "sessions" else "#tab-review")
             pg.locator("body").press("g")
             pg.locator("body").press(letter)
-            st = self.state(pg)
-            self.assertEqual(([sid], ["view-" + sid]), (st["active"], st["visible"]), f"g {letter}")
+            self.assertEqual([tab], self.state(pg)["tab"], f"g {letter}")
         # the palette's "Go to:" commands are the same function
-        pg.evaluate("() => mokataIDE.run('screen.plan')")
-        self.assertEqual((["plan"], ["view-plan"]), tuple(self.state(pg)[k] for k in ("active", "visible")))
+        pg.evaluate("() => mokataIDE.run('screen.sessions')")
+        self.assertEqual(["sessions"], self.state(pg)["tab"])
+        # a screen remembers its last view
+        self.go(pg, "plan")
+        pg.click("#tab-review")
+        pg.click("#tab-sessions")
+        self.assertEqual(["view-plan"], self.state(pg)["visible"])
         self.assertEqual([], self.errors)
 
     def test_R27_visible_controls_per_screen_are_within_the_prd_targets(self):
         pg = self.page()
         got = {"top": pg.evaluate(COUNT, "top")}
-        for sid in ("sessions", "review", "navigate", "search", "graph", "plan", "worktrees"):
-            pg.click(f"nav.rail .rail-btn[data-screen={sid}]")
+        for vid in ("review", "proof", "explain", "activity", "plan", "worktrees", "navigate"):
+            self.go(pg, vid)
             pg.wait_for_timeout(400)
-            got[sid] = pg.evaluate(COUNT, "screen")
+            got[vid] = pg.evaluate(COUNT, "screen")
+        self.go(pg, "review")
+        pg.evaluate("() => MK.setMode('graph')")
+        pg.wait_for_timeout(400)
+        got["graph"] = pg.evaluate(COUNT, "screen")
         print("\n[P34] R27 visible controls:", json.dumps(got), file=sys.stderr)
         for k, n in got.items():
             self.assertLessEqual(n, TARGET[k], f"{k}: {n} controls > {TARGET[k]}")
 
     def test_R28_a_picked_session_drives_the_code_gutter_label_and_the_search_scope(self):
         pg = self.page()
-        pg.click("nav.rail .rail-btn[data-screen=search]")
+        self.go(pg, "navigate")
+        pg.click("#ltab-search")
         self.assertTrue(pg.is_disabled("button[data-sscope=session]"), "no session in Viewing: scope off")
         pg.evaluate("() => MK.setFocus('SESSIONR28')")
         pg.wait_for_function("() => /session SESSIONR/.test(document.getElementById('focus-chip').textContent)")
@@ -376,7 +418,7 @@ class InTheBrowser(unittest.TestCase):
         pg = self.page()
         pg.evaluate("() => MK.openFile('pkg/core.py', 1, null)")
         pg.wait_for_timeout(500)
-        pg.click("nav.rail .rail-btn[data-screen=review]")
+        pg.click("#tab-review")
         pg.click("#nav-list button.nav-row")
         pg.wait_for_timeout(800)
         names = pg.evaluate("() => [...document.querySelectorAll('#tabstrip .tab .tab-name')].map((n) => n.textContent)")
@@ -398,7 +440,7 @@ class InTheBrowser(unittest.TestCase):
         self.assertLessEqual(top[0], top[1], "the top bar overflows")
         self.assertLessEqual(top[2], 48)
         self.assertLessEqual(max(top[3]) - min(top[3]), 4, "the top bar wrapped (items on different lines)")
-        # G25: under 1000 px the top bar collapses to ⌘K + Activity (+ the Viewing dot and Health)
+        # G25: under 1000 px the top bar collapses to the tabs, ⌘K and the jobs chip (+ Viewing, Health)
         self.assertFalse(pg.is_visible(".qo-ph") or pg.is_visible("#repo"), "the top bar did not collapse")
         self.assertTrue(pg.is_visible("#qo-open") and pg.is_visible("#activity-chip"))
         inside = "(sel) => { const r = document.querySelector(sel).getBoundingClientRect();" \
@@ -422,14 +464,14 @@ class InTheBrowser(unittest.TestCase):
         def fail(route):
             route.fulfill(status=503, body="Service Unavailable", content_type="text/plain")
         pg = self.page(routes={"**/api/live*": fail, "**/api/sessions/list*": fail})
-        pg.click("nav.rail .rail-btn[data-screen=review]")
+        pg.click("#tab-review")
         pg.wait_for_selector("#diff .region-msg.error")
         txt = pg.inner_text("#diff")
         self.assertIn("503", txt)
         self.assertIn("Retry", txt)
         self.assertIn("git diff HEAD", txt, "the CLI twin")
         self.assertNotIn("Service Unavailable", txt, "a raw 503 page is never what a region shows")
-        pg.click("nav.rail .rail-btn[data-screen=sessions]")
+        pg.click("#tab-sessions")
         pg.wait_for_selector("#s1-rows .region-msg.error")
         self.assertIn("Retry", pg.inner_text("#s1-rows"))
 
@@ -441,7 +483,7 @@ class InTheBrowser(unittest.TestCase):
             else:
                 route.continue_()
         pg2 = self.page(routes={"**/api/live*": slow})
-        pg2.click("nav.rail .rail-btn[data-screen=review]")
+        pg2.click("#tab-review")
         hold["on"] = True
         pg2.evaluate("() => { MK.ui.files = []; MK.refresh(); }")
         pg2.wait_for_timeout(700)
@@ -454,7 +496,7 @@ class InTheBrowser(unittest.TestCase):
         pg3 = self.page(routes={"**/api/live*": lambda r: r.fulfill(
             status=200, content_type="application/json",
             body=json.dumps({"sample": False, "title": "Live", "files": [], "added": 0, "removed": 0}))})
-        pg3.click("nav.rail .rail-btn[data-screen=review]")
+        pg3.click("#tab-review")
         self.assertTrue(pg3.is_visible("#diff-empty"))
         self.assertIn("No changed file", pg3.inner_text("#nav-empty"))
 
@@ -464,8 +506,9 @@ class InTheBrowser(unittest.TestCase):
         pg.wait_for_selector("#term-why:not([hidden])")
         self.assertFalse(pg.is_visible("#term-toggle"))
         self.assertIn("Terminal:", pg.inner_text("#term-why"))
-        self.assertTrue(pg.is_visible("#follow") and pg.is_visible("#join-btn"),
-                        "Follow and Join live in the Activity drawer now")
+        pg.keyboard.press("Escape")
+        pg.click("#session-chip")
+        self.assertTrue(pg.is_visible("#follow"), "Follow lives under Viewing ▾ (Live sessions)")
 
 
 if __name__ == "__main__":

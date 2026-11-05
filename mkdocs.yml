@@ -88,8 +88,9 @@ nav:
       - Refine existing code: how-to/refine-existing-code.md
       - Use a codebase graph: how-to/use-a-codebase-graph.md
       - Set the execution mode: how-to/set-execution-mode.md
-      - Watch a run (lanes + dashboard): how-to/watch-a-run.md
+      - Watch a run (lanes + IDE Sessions): how-to/watch-a-run.md
       - Review what your agent wrote (mokata ide): how-to/review-agent-work.md
+      - See the proof, AC → test → code (mokata ide): how-to/see-the-proof.md
       # VS Code extension is roadmap — page banner-marked "Planned — not yet available".
       - Use mokata in VS Code (roadmap): how-to/use-mokata-in-vs-code.md
       - Use & heal memory: how-to/use-memory.md

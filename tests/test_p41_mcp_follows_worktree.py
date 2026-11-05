@@ -408,7 +408,8 @@ class TheIdeReadsTheFocusedSessionsWorktree(_Repo):
         c = TestClient(build_app(self.state), base_url="http://127.0.0.1:47998",
                        follow_redirects=False)
         c.get("/pair?t=tok")
-        return c
+        from _ide_follow import Following
+        return Following(c)
 
     def focus(self, c, sid):
         return c.post("/api/focus", json={"session": sid},

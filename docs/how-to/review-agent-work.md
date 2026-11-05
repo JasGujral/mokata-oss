@@ -46,6 +46,24 @@ is missing, mokata prints the one line to install it: `pip install "mokata[ide]"
 Every section says what will appear there when it is empty, so a fresh repository is still
 readable.
 
+## How it is laid out
+
+Three tabs across the top bar, each a screen with its views as sub-tabs:
+
+- **Review** — **Diff** (the changed files, one at a time; the inspector beside it shows a
+  changed symbol's callers, tests and blast radius, with **Expand graph** to see it drawn — Back or
+  Esc returns to the diff), **Proof** (acceptance criterion → test → code, full width) and
+  **Explain**. Marking the last file seen ends the review and offers the next steps: Proof, then
+  the worktree's gated merge.
+- **Sessions** — every session, its card, and its **Timeline**, **Plan & spec** and **Worktree**.
+- **Code** — the repository's files, search and outline, with references and history beside the
+  code.
+
+What waits on you (an approval, a blocked gate) is one bar under the top bar, on every tab. The
+**health** chip opens what is missing or degraded; on a first run it says **Get started** and lists
+what each capability needs. `g r` / `g s` / `g c` switch tabs and `?` lists every key; the
+one-character shortcuts can be turned off from that list.
+
 ## What it never does
 
 - **It never writes to your repository.** The only network call is a PR fetch you ask for.
@@ -60,5 +78,5 @@ older.
 
 ## Related
 
-- [Watch a run (lanes + dashboard)](watch-a-run.md) — the run's progress, as it happens.
+- [Watch a run (lanes + this window's Sessions screen)](watch-a-run.md) — the run's progress, as it happens.
 - [CLI reference: `mokata ide`](../reference/cli.md) — every flag.

@@ -76,8 +76,10 @@ def scan_tests(root: str, ac_ids: List[str]) -> List[TestRef]:
     convention simply contributes nothing (never a crash)."""
     from .. import languages
     from ..repo_walk import prune_source_dirs
+    from ..knowledge.cancel import checkpoint
     refs: List[TestRef] = []
     for dirpath, dirnames, filenames in os.walk(root):
+        checkpoint()            # cancellable per directory; a no-op outside a job
         # Hidden dirs and nested checkouts: a vendored dependency's own tests are not coverage
         # of THIS repo's acceptance criteria, and counting them would let the completeness gate
         # pass on a criterion nothing here tests.

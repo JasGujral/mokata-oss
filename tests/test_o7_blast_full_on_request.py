@@ -86,8 +86,11 @@ class TheKnowledgeLayerWalksFullOnRequest(unittest.TestCase):
         self.assertTrue(full.truncated)
         self.assertEqual(100, full.count)
         self.assertIn(AB.FULL_BUDGET_CUT, full.note)
-        self.assertGreater(AB.BLAST_RADIUS_FULL_TIME_BUDGET_S, AB.BLAST_RADIUS_TIME_BUDGET_S)
-        self.assertLessEqual(AB.BLAST_RADIUS_FULL_TIME_BUDGET_S, 60.0, "the ceiling is a hard one")
+        # 0.0.27 P4 (R2-1): the full walk's bound is the reference COUNT (reproducible), never a
+        # wall clock; the default walk keeps its time budget.
+        self.assertEqual(float("inf"), AB.UNTIMED)
+        self.assertFalse(hasattr(AB, "BLAST_RADIUS_FULL_TIME_BUDGET_S"))
+        self.assertGreater(AB.BLAST_RADIUS_TIME_BUDGET_S, 0)
 
     def test_the_full_walk_is_cancellable(self):
         calls = []

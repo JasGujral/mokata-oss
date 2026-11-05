@@ -3,8 +3,9 @@
 // ONE tab per file (0.0.26 P34, G20/R31): the tab shows the file in Code or its change in Review —
 // the Δ on the active tab toggles between the two. Tabs are unique by (path, kind), restore
 // included. Pinned commit tabs are a reserved format (`kind: "commit"`, see ide/workspace.py) no
-// view opens yet. Close menu (Close, Close Others, Close to the Right, Close to the Left, Close All
-// — pinned tabs survive the bulk ones), reopen closed tab, Alt+1..9 — every key through the
+// view opens yet. Close menu (Close, Close All — pinned tabs survive Close All; 0.0.27 UX-SIMPLIFY
+// deleted Close Others / Left / Right and Keep-preview: editor-grade tab management a review window
+// does not need), reopen closed tab, Alt+1..9 — every key through the
 // registry, and every key an Alt chord: Ctrl/⌘+W, Ctrl/⌘+Tab and Ctrl/⌘+Shift+T belong to the
 // browser (Ctrl+W closed the IDE's window, B-F16) and the registry refuses them (R30).
 //
@@ -77,33 +78,24 @@
     return { tabs, active: tab.key, closed };
   }
 
-  // how: "one" | "others" | "right" | "left" | "all". The bulk closes keep pinned tabs; closing
-  // ONE tab closes it even if pinned (you asked for that tab). The active tab moves to the
-  // right-hand neighbour of what closed, else the left (or to `key` for others/right/left).
+  // how: "one" | "all". Close All keeps pinned tabs; closing ONE tab closes it even if pinned (you
+  // asked for that tab). The active tab moves to the right-hand neighbour of what closed, else the
+  // left.
   function close(m, key, how) {
     const h = how || "one";
     const i = m.tabs.findIndex((x) => x.key === key);
     if (i < 0 && h !== "all") return m;
-    const gone = (t, k) => {
-      if (h === "one") return t.key === key;
-      if (t.pinned) return false;
-      if (h === "others") return t.key !== key;
-      if (h === "right") return k > i;
-      if (h === "left") return k < i;
-      return true;                                               // all
-    };
+    if (h !== "one" && h !== "all") throw new Error(`close: unknown how "${h}"`);
+    const gone = (t) => (h === "one" ? t.key === key : !t.pinned);
     const out = [], removed = [];
-    m.tabs.forEach((t, k) => (gone(t, k) ? removed : out).push(t));
+    m.tabs.forEach((t) => (gone(t) ? removed : out).push(t));
     if (!removed.length) return m;
     let active = m.active;
     if (!out.some((t) => t.key === active)) {
-      if (h !== "one" && h !== "all" && out.some((t) => t.key === key)) active = key;
-      else {
-        const was = Math.max(0, m.tabs.findIndex((t) => t.key === m.active));
-        const right = m.tabs.slice(was + 1).find((t) => out.includes(t));
-        const left = m.tabs.slice(0, was).reverse().find((t) => out.includes(t));
-        active = (right || left || { key: null }).key;
-      }
+      const was = Math.max(0, m.tabs.findIndex((t) => t.key === m.active));
+      const right = m.tabs.slice(was + 1).find((t) => out.includes(t));
+      const left = m.tabs.slice(0, was).reverse().find((t) => out.includes(t));
+      active = (right || left || { key: null }).key;
     }
     return { tabs: out, active, closed: pushClosed(m.closed, removed) };
   }
@@ -188,7 +180,7 @@
   const { $, el, ui } = MK;
   let model = M.empty();
   let loaded = false, ws = null, banner = null;
-  let saveTimer = 0, lastFocus;
+  let saveTimer = 0, lastFocus, owedSave = false;
   const strip = el("div", "tabstrip");
   strip.id = "tabstrip";
   strip.setAttribute("role", "tablist");
@@ -243,8 +235,7 @@
   }
 
   // ---------------------------------------------------------------------------- the close menu
-  const MENU = [["Close", "one"], ["Close Others", "others"], ["Close to the Right", "right"],
-                ["Close to the Left", "left"], ["Close All", "all"]];
+  const MENU = [["Close", "one"], ["Close All", "all"]];
   function openMenu(key, x, y) {
     menu.replaceChildren();
     for (const [label, how] of MENU) {
@@ -384,10 +375,13 @@
     return { ...M.toSaved(model), mode: ui.mode,
              expanded: Object.keys(collapsed).filter((d) => collapsed[d] === false).slice(-MAX_DIRS),
              collapsed: Object.keys(collapsed).filter((d) => collapsed[d] === true).slice(-MAX_DIRS),
-             run: (row && row.run) || null };
+             run: (row && row.run) || null, theme: MK.theme.choice(), single_keys: MK.singleKeysOn() };
   }
   function save(now) {
-    if (!loaded || ui.restoring) return;                         // never overwrite before restore
+    // never overwrite before restore — but a move made meanwhile (`g a` before the saved workspace
+    // answered) is OWED a save once the restore is done; dropping it lost the person's screen on
+    // the next reload (INTEG-FIX2: Welcome took the reload instead).
+    if (!loaded || ui.restoring) { owedSave = true; return; }
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       saveTimer = 0;
@@ -421,6 +415,9 @@
     const w = await MK.api("/api/workspace").catch(() => null);
     ws = w && !w.error ? w : { tabs: [], closed: [], expanded: [], collapsed: [], live: {} };
     model = M.merge(model, ws);
+    if (ws.theme) MK.theme.set(ws.theme, { fromServer: true });
+    if (MK.setSingleKeys) MK.setSingleKeys(ws.single_keys !== false, true);
+    if (ws.theme_unknown && MK.toast) MK.toast(`Saved theme "${ws.theme_unknown}" is not a theme this mokata knows — following the system`);   // P6: the saved theme, unless the person already picked one
     if (MK.nav) {
       for (const d of ws.expanded || []) MK.nav.collapsed[d] = false;
       for (const d of ws.collapsed || []) MK.nav.collapsed[d] = true;
@@ -441,16 +438,23 @@
   let loading = null;
 
   // boot.js: called after the first refresh unless an /open link chose the file. Puts back the
-  // mode, the panel and the active tab (with its scroll) from the SERVER's workspace.
+  // view (mode) and the active tab (with its scroll) from the SERVER's workspace.
   MK.restoreView = async function restoreView() {
     const w = await loading;
     if (!w) return;
     ui.restoring = true;
     try {
       const t = activeTab();
-      if (t && (w.mode === "review" || w.mode === "navigate" || !w.mode)) await activate(t.key);
-      else if (w.mode && MK.SCREENS.some((s) => s.id === w.mode)) MK.setMode(w.mode);
-    } finally { ui.restoring = false; ui.restored = true; }   // P32: the scale test waits on it
+      // a saved view id, or a screen id (`?screen=sessions` from `mokata watch --open`)
+      if (t && (w.mode === "review" || w.mode === "navigate" || !w.mode)) {
+        await activate(t.key);
+      } else if (w.mode && MK.resolveView(w.mode)) {
+        MK.setMode(w.mode);
+      }
+    } finally {
+      ui.restoring = false; ui.restored = true;                // P32: the scale test waits on it
+      if (owedSave) { owedSave = false; save(); }
+    }
   };
 
   MK.onRefreshTabs = () => { if (loaded && ui.focus !== lastFocus) { lastFocus = ui.focus; save(); } };
@@ -458,7 +462,9 @@
   MK.wireTabs = function wireTabs() {
     strip.append(list, note);
     const center = root.document.querySelector("main.center");
-    if (center) center.prepend(strip);
+    // under the screen's sub-tabs (Diff · Proof · Explain), over the file it shows
+    const sub = document.getElementById("subtabs");
+    if (sub) sub.after(strip); else if (center) center.prepend(strip);
     root.document.body.append(menu);
     strip.hidden = true;
     for (const id of ["code-scroll", "review-scroll"]) {
@@ -482,11 +488,7 @@
     { id: "tabs.close", title: "Tabs: close tab", keys: "Alt+W", inFields: true, run: () => doClose(model.active, "one") },
     { id: "tabs.reopen", title: "Tabs: reopen closed tab", keys: "Alt+Shift+T", inFields: true, run: doReopen },
     { id: "tabs.toggleView", title: "Tabs: toggle the file ⇄ its change (Δ)", run: () => { if (model.active) flip(model.active); } },
-    { id: "tabs.closeOthers", title: "Tabs: close others", run: () => doClose(model.active, "others") },
-    { id: "tabs.closeRight", title: "Tabs: close to the right", run: () => doClose(model.active, "right") },
-    { id: "tabs.closeLeft", title: "Tabs: close to the left", run: () => doClose(model.active, "left") },
     { id: "tabs.closeAll", title: "Tabs: close all", run: () => doClose(model.active, "all") },
-    { id: "tabs.keep", title: "Tabs: keep the preview tab open", run: () => { if (model.active) { model = M.keep(model, model.active); render(); save(); } } },
   ];
   for (let n = 1; n <= 9; n++) {
     commands.push({ id: "tabs.go" + n, title: n === 9 ? "Tabs: last tab" : `Tabs: tab ${n}`,

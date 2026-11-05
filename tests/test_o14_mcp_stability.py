@@ -356,11 +356,13 @@ class TestR_O14_SpecRegistrationUnderStress(unittest.TestCase):
         self.assertGreater(int(out.strip() or 0), 0)
         self.assertEqual(srv.garbage, [])
         # per-call latency budgets on a tiny repo (generous: CI runners are slow and shared).
-        # WINDOWS IS MEASURED SLOWER, AND SAID: msvcrt's byte-range lock is not fair, so against
-        # this test's writer — which re-takes the state lock in a tight loop for 25 s — a propose
-        # polls behind it for ~20 s (CI 0.0.26 cut: 20.56 s, 20.50 s). Disclosed in the 0.0.26
-        # notes; a real hook does not hold the lock in a loop. The bound there is the writer's 25 s
-        # window plus slack, so a WEDGE (the thing this test exists for) still reds everywhere.
+        # WINDOWS IS MEASURED SLOWER, AND SAID: in 0.0.26 a propose polled behind this test's
+        # tight-loop writer for ~20 s (CI 0.0.26 cut: 20.56 s, 20.50 s) — the polled lock let the
+        # writer barge back in. 0.0.27 WIN-LOCK-WAIT's turnstile (`oslock._hold`) makes the writer
+        # queue behind a waiter, but no Windows number exists yet, so the 45 s allowance stays:
+        # to be re-derived from the 0.0.27 `probe/**` Windows run of
+        # `test_windows_msvcrt_branch_serves_the_waiter` + O14 stress. The bound is the writer's
+        # 25 s window plus slack, so a WEDGE (the thing this test exists for) still reds everywhere.
         bound = 45.0 if sys.platform == "win32" else 20.0
         for key, values in lat.items():
             self.assertLess(max(values), bound, f"{key} took {values}")
@@ -372,7 +374,7 @@ class TestR_O14_ReadLatencyBudget(unittest.TestCase):
     ALL of them in parallel finishes inside the same budget (the loop is not a queue)."""
 
     BUDGET = 15.0
-    SKIP = {"baseline", "ide_open", "watch", "session_push", "session_pull", "progress_mark",
+    SKIP = {"baseline", "ide_open", "session_push", "session_pull", "progress_mark",
             "run_finish", "review_record", "session_save"}
 
     def test_R_O14_every_read_tool_answers_inside_its_budget(self):

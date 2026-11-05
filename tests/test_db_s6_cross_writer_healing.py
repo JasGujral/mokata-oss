@@ -319,7 +319,7 @@ class TestI2aVisibleWithoutSync(unittest.TestCase):
 
     def test_the_governance_view_renders_it(self):
         """The dashboard reads `detect_issues` + `memory_health` — both must carry the conflict."""
-        from mokata.dashboard import build_governance_view
+        from mokata.governance_view import build_governance_view
         with tempfile.TemporaryDirectory() as d:
             surface = _team_repo(d)
             _plant_conflict(surface)

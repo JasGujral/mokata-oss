@@ -187,7 +187,13 @@ class TheAdapterMapsClaudeCodeOntoTheNeutralVocabulary(unittest.TestCase):
             {"hook_event_name": "SessionEnd", "session_id": "S1"}, self.d)["kind"])
         pre = dict(_cc_post(self.d), hook_event_name="PreToolUse")
         self.assertIsNone(B.normalise(pre, self.d), "a gate event must never become a bus event")
-        self.assertIsNone(B.normalise(dict(_cc_post(self.d), tool_name="Bash"), self.d))
+        # 0.0.27 P12 — a non-file tool's PostToolUse is a `tool` event: its NAME and session only
+        # (no command, no output), so the Activity panel can say what the agent just ran.
+        bash = dict(_cc_post(self.d), tool_name="Bash",
+                    tool_input={"command": "export SECRET=hunter2 && make"},
+                    tool_response={"stdout": "PLANTED-OUTPUT"})
+        self.assertEqual({"kind": "tool", "tool": "Bash", "session": "S1", "source": "claude-code"},
+                         B.normalise(bash, self.d))
 
     def test_nothing_outside_the_repo_or_in_mokatas_own_record_reaches_a_page(self):
         with tempfile.TemporaryDirectory() as out:
@@ -195,7 +201,11 @@ class TheAdapterMapsClaudeCodeOntoTheNeutralVocabulary(unittest.TestCase):
                 "file_path": os.path.join(out, "x.py")}), self.d))
             os.symlink(out, os.path.join(self.d, "link_out"))
             self.assertIsNone(B.normalise(_cc_post(self.d, "link_out/x.py"), self.d))
-        self.assertIsNone(B.normalise(_cc_post(self.d, ".mokata/manifest.json"), self.d))
+        # 0.0.27 CASEFOLD-FIX r2 (verify M1 ruling): a write into mokata's own record reaches the
+        # page as a PATH-ONLY event, flagged private - never with content.
+        ev = B.normalise(_cc_post(self.d, ".mokata/manifest.json"), self.d)
+        self.assertEqual((".mokata/manifest.json", True), (ev["path"], ev["private"]))
+        self.assertNotIn("content", ev)
         self.assertIsNone(B.normalise(dict(_cc_post(self.d), tool_input={
             "file_path": "../../etc/passwd"}), self.d))
 
@@ -414,7 +424,8 @@ class SetupWiresObserveOnlyHttpHooks(unittest.TestCase):
         hooks = self._local()["hooks"]
         self.assertEqual({"PostToolUse", "Stop", "SessionEnd"}, set(hooks))
         self.assertNotIn("SessionStart", hooks, "SessionStart supports only command/mcp_tool hooks")
-        self.assertEqual(HS.HOOK_DIRTY_MATCHER, hooks["PostToolUse"][0]["matcher"])
+        # 0.0.27 P12 — every tool's PostToolUse reaches the bus (no matcher), name only
+        self.assertNotIn("matcher", hooks["PostToolUse"][0])
         for event, groups in hooks.items():
             (h,) = groups[0]["hooks"]
             self.assertEqual({"type", "url", "timeout", "headers"}, set(h), event)

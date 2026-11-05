@@ -3,7 +3,10 @@
 A runnable showcase of what makes mokata different — the **knowledge graph**, **memory**, and
 **governance** are the spine — with a labelled, copy-pasteable demo for **every** differentiator.
 Each beat is *scenario → commands → real output → why it matters*. Every command here was run on
-a sample repo and the output is exactly what it prints (paths shortened to `<repo>`).
+a sample repo and the output is exactly what it prints (paths shortened to `<repo>`, and long
+outputs trimmed to the lines the beat is about). Run top to bottom in one terminal: later beats
+build on earlier ones. A command that asks a yes/no question in your terminal carries `--yes`
+here only where the beat is not *about* that question.
 
 > **Clean-room (D20).** mokata inherits the best practices of spec-driven, test-first agent work
 > but **imports and copies nothing** — its methodology, prompts, and engine are its own
@@ -257,7 +260,7 @@ this is NOT the write that was approved — the arguments changed since the huma
 that approval was already used — an approval licenses exactly one write
 ```
 
-`approve=true` / `confirm=true` are still *accepted* on all 20 write tools (nothing breaks), but
+`approve=true` / `confirm=true` are still *accepted* on every write tool (nothing breaks), but
 they **commit nothing** — the tool answers with a proposal and this note:
 
 ```text
@@ -358,6 +361,7 @@ mokata memory --kind decision
 
 ```text
 backed up 2 memory item(s) (with provenance) to ./.mokata/backups/memory-20260722T080840_369877Z.json
+memory import: 2 new of 2 item(s) — human-gated, secret-scanned, provenance-stamped. e.g. api.style, db.engine
 memory import: 2 added, 0 skipped (dups), 0 conflict(s) resolved, 0 declined.
 
 decision (2):
@@ -373,8 +377,17 @@ DSN (mokata owns the schema — D17) and everyone reads/writes the same memory.
 
 ### D17 · Move the live store between backends
 
+This beat needs a Postgres you own (any local or managed one) and the driver,
+`pip install "mokata[postgres]"` (the driver loads your system's libpq; without one, mokata reports
+psycopg as not installed — `pip install "psycopg[binary]"` brings its own). Wire it into the chain, name the env var that holds the DSN,
+provision the schema once, then copy the local store across:
+
 ```bash
-mokata memory migrate --to postgres --yes
+export MOKATA_PG_DSN="postgresql://user@127.0.0.1:5432/mokata"
+mokata reconfigure --add postgres --yes
+mokata config set tools.postgres.config.dsn_env MOKATA_PG_DSN --yes
+mokata team init --yes
+mokata memory migrate --from sqlite --to postgres --yes
 ```
 
 ```text
@@ -382,9 +395,14 @@ migrate: 3 item(s) sqlite -> postgres
 migrate: 3 item(s) sqlite -> postgres (idempotent upsert).
 ```
 
-(3, not 2 — `migrate` moves the **full store** including the superseded `postgres` record.)
-Idempotent (upsert by id), non-destructive (the source stays unless you pass `--drop-source`),
-and **degrade-clean** (an unreachable destination writes nothing).
+(3, not 2 — `migrate` moves the **full store** including the superseded `postgres` record.
+`--from sqlite` is needed because, once Postgres heads the chain, the default source *is* Postgres
+and the copy would be a no-op.) Idempotent (upsert by id — run it twice, same answer),
+non-destructive (the source stays unless you pass `--drop-source`), and **degrade-clean**: with no
+Postgres reachable it prints `postgres backend is unreachable or unconfigured … nothing migrated;
+source (sqlite) left intact.` and writes nothing. Skip this beat if you have no Postgres — the rest
+of the page runs on SQLite. (If you ran it, `mokata reconfigure --remove postgres --yes` puts the
+sample repo back on SQLite.)
 
 The two canonical backends are **sqlite** (the local, zero-config default) and **postgres** (team
 mode, your own DSN); `pgvector` is the opt-in semantic variant of the latter. The `obsidian` and
@@ -552,9 +570,11 @@ are decided from the run's persisted state and refused with exit code 2. Four ga
 | `spec-scope` | the write is outside the spec's authorized surface, spells something the spec **deferred**, or a `spec amend` is in flight |
 
 A spec carries a **scope**: the surface it authorizes, and the things you agreed *not* to build
-(each with the literal marker it would spell in code). The model writes that section when it emits
-the spec through `/spec` — you never hand-author it. To make this beat runnable in a plain
-terminal, emit one with the scripted escape hatch, and put a failing test on record:
+(each with the literal marker it would spell in code), and a **task plan** — every acceptance
+criterion in at least one task, each task with the files it may touch. The model writes those
+sections when it emits the spec through `/spec` — you never hand-author them. To make this
+beat runnable in a plain terminal, emit one with the scripted escape hatch, and put a failing test
+on record:
 
 ```bash
 cat > spec.json <<'JSON'
@@ -562,13 +582,15 @@ cat > spec.json <<'JSON'
  "criteria": [{"id": "AC-1", "text": "process_payment is idempotent on retry"}],
  "tests":    [{"name": "test_idempotent", "ac_ids": ["AC-1"]}],
  "scope": {"authorized": ["payments.py"],
-           "deferred":   [{"id": "D1", "item": "batch payments", "markers": ["batch_update"]}]}}
+           "deferred":   [{"id": "D1", "item": "batch payments", "markers": ["batch_update"]}]},
+ "tasks":    [{"id": "T1", "title": "idempotent retry", "ac_ids": ["AC-1"], "scope": ["payments.py"]}]}
 JSON
 mokata spec emit --file spec.json --yes
 ```
 
 ```text
 spec emitted: 'Payments' — 1 acceptance criteria, all mapped to tests.
+  ⚠ AC-1 has no code anchor — the test phase will have to explore for it (warn-only: a new-file AC legitimately has none)
   saved as this run's spec (run sample), and recorded in the shared spec corpus (1 spec(s)).
   implementation is unblocked once a failing test is on record (/test).
 ```
@@ -589,7 +611,17 @@ phase: red
 ```
 
 RED is the *permission* to implement. Now watch `spec-scope` catch scope creep **inside an
-otherwise-authorized file**:
+otherwise-authorized file**.
+
+One thing first. Inside Claude Code every session works in **its own git worktree** by default
+(`settings.sessions.worktree: always`): the hook refuses a session's first write to the main
+checkout with `BLOCKED [worktree] enter your worktree first`, so parallel and resumed sessions never
+share files. This terminal demo has no Claude Code session to put in a worktree, so switch that
+policy off for the sample repo:
+
+```bash
+mokata config set settings.sessions.worktree off --yes
+```
 
 ```bash
 # build the PreToolUse envelope Claude Code sends the hook on a native Write
@@ -604,8 +636,8 @@ write checkout.py 'def checkout(c): pass'               | mokata-hook gate-guard
 ```
 
 ```text
-BLOCKED [spec-scope] spec-scope: scope change — this write is outside spec v1 (deferred: batch payments). this write spells 'batch_update', and the spec DEFERRED 'batch payments'. A user's instruction is authorization to ASK, not to build: run `mokata spec amend` (gated — the new scope is re-approved and re-tested), or override: mokata gate override spec-scope --reason "<why>"
-BLOCKED [spec-scope] spec-scope: scope change — this write is outside spec v1. checkout.py is outside the surface this spec authorized (payments.py). A user's instruction is authorization to ASK, not to build: run `mokata spec amend` (gated — the new scope is re-approved and re-tested), or override: mokata gate override spec-scope --reason "<why>"
+BLOCKED [spec-scope] spec-scope: scope change — this write is outside spec v1 (deferred: batch payments). this write spells 'batch_update', and the spec DEFERRED 'batch payments'. A user's instruction is authorization to ASK, not to build: run `mokata spec amend --file <your-spec.json>` (gated — the new scope is re-approved and re-tested), or override: mokata gate override spec-scope --reason "<why>"
+BLOCKED [spec-scope] spec-scope: scope change — this write is outside spec v1. checkout.py is outside the surface this spec authorized (payments.py). A user's instruction is authorization to ASK, not to build: run `mokata spec amend --file <your-spec.json>` (gated — the new scope is re-approved and re-tested), or override: mokata gate override spec-scope --reason "<why>"
 ```
 
 (The first write — an authorized file, ordinary implementation — passes silently, exit 0.) The
@@ -615,7 +647,7 @@ this is a *methodology* block, not a security one — a human can lift one, expl
 ledger:
 
 ```bash
-mokata gate override spec-scope --reason "hotfix: prod is down"
+mokata gate override spec-scope --reason "hotfix: prod is down"   # shows what stops, asks you
 mokata gate status
 mokata gate clear          # …and enforce again
 ```
@@ -630,6 +662,10 @@ mokata run-state gates (enforced on native Write/Edit by the gate-guard hook):
   no-code-without-failing-test     enforced
   spec-scope                       OVERRIDDEN (this session)
   approach-approval                enforced
+mokata loop gates (a 'done' stop, the 3-fix breaker, the 5-round review cap):
+  stop-evidence                    enforced
+  fix-breaker                      enforced
+  review-loop                      enforced
 
   The override expires with this session — a new session enforces again.
 
@@ -639,8 +675,10 @@ cleared: spec-scope — the gates are enforcing again.
 The override lands on the ledger with its reason:
 
 ```text
-  #5   gate_override gate=spec-scope run=sample actor=human decision=override scope=session reason=hotfix: prod is down
+  #43  gate_override gate=spec-scope run=sample actor=human decision=override scope=session reason=hotfix: prod is down
 ```
+
+(`mokata audit | grep gate_override` finds it; the `#` is wherever it fell in your ledger.)
 
 **Why it matters:** every other methodology tool asks the model nicely. mokata's gates are an exit
 code the model cannot argue with — and there is **no env-var kill switch and no MCP tool** to turn
@@ -720,8 +758,15 @@ mokata init --profile minimal --preview
 
 ```text
 mokata init — profile 'minimal'
+
+Detected tools in this environment:
+  [present] ast  (code_graph)
+  ...
 Capabilities: none (engine-only profile).
 ```
+
+(`--preview` writes nothing. *Detected* is a local look at your PATH and Python environment —
+nothing is contacted.)
 
 The `minimal` profile wires **no external capabilities** — zero network egress. Nothing leaves
 the machine unless you wire it; mokata ships **no telemetry** (superpowers ships optional telemetry).
@@ -742,7 +787,7 @@ Phases to run (each applies its own gate):
 
 ### D16 · Adopt freely, trust nothing
 
-All **19** MCP write tools are propose-only — even the destructive ones. Nothing an adopted tool
+Every MCP write tool is propose-only — even the destructive ones. Nothing an adopted tool
 does can commit without an approval a human minted:
 
 ```bash
@@ -779,7 +824,7 @@ mokata enter analysis             # start mid-pipeline
 ```text
 mokata skills — the curated catalog (16 skills; run `mokata skills <name>` for detail):
 
-Runnable pipeline skills (run `mokata run <name>` or `/<name>`):
+Runnable pipeline skills (run `mokata run <name>` or `/mokata:<name>`):
   /brainstorm  mokata · Explore approaches with the user; HARD-GATE the spec behind approval.
   /spec        mokata · Turn the problem into testable acceptance criteria; map each to a test.
   /test        mokata · Write failing tests first (RED); no implementation.
@@ -815,7 +860,7 @@ passed), then lets **you** choose how to land it — merge, PR, keep, or discard
 
 ## 6 · Observability — see the governance happen
 
-### D19 · Run-progress tracker · D24 · Parallel lanes + clickable dashboard
+### D19 · Run-progress tracker · D24 · Parallel lanes + watching in the IDE
 
 When mokata runs subagents in parallel, the progress view is **parallel-aware**. To see it
 without wiring a subagent harness, simulate a parallel run's recorded state (this is exactly
@@ -846,22 +891,19 @@ mokata · run [2/7 done] · strawman
   ✗ search              blocked  (review failed)
 ```
 
-For a richer view, opt into the **clickable local HTML dashboard** (self-contained, no network,
-no server) — choose your tier and write it:
+In a browser, the run is the `mokata ide` window's **Sessions** screen — one window, re-used if
+it is already open for this repository:
 
 ```bash
-mokata config set settings.ux.progress dashboard
-mokata watch --once --open --run demo
+mokata watch --open --run demo
 ```
 
 ```text
-mokata watch: wrote <repo>/.mokata/temp_local/watch.html
+mokata ide opened: http://127.0.0.1:<port>/pair?t=…&screen=sessions  — Sessions, run demo (no session has written for it yet)
 ```
 
-The dashboard shows the parallel lanes (click a lane to drill into its ledger rows), the 7-phase
-pipeline, and a bounded gate/decision feed. It's **read-only** (never writes durable state, never
-gates), **frugal** (only the active run + a bounded ledger tail), and **local-first** (gitignored,
-never committed). See [watch a run](../how-to/watch-a-run.md).
+It's **read-only** (never writes durable state, never gates) and **local-first** (loopback only,
+paired to your browser). See [watch a run](../how-to/watch-a-run.md).
 
 ---
 
@@ -871,7 +913,7 @@ never committed). See [watch a run](../how-to/watch-a-run.md).
 
 Frugality is a first-class design rule, not an afterthought. Three things you saw above are it
 in action: **JIT retrieval** (§2 D4 — only the pricing formula loaded, never the corpus),
-**top-k semantic recall** (§2 D21), and the **bounded** dashboard feed (§6 — only a tail of the
+**top-k semantic recall** (§2 D21), and the **bounded** lane view (§6 — only a tail of the
 ledger). The token tracker also surfaces parallel-run savings:
 
 ```bash
@@ -887,6 +929,55 @@ Graph and memory retrieval are **just-in-time and budgeted**, output is kept den
 SessionStart briefing stays under a hard ~2k-token ceiling with cache-stable prefixes — so a big
 project brain costs you *more knowledge, not more tokens per run*. **Why it matters:** a plain
 agent re-reads and re-explains; mokata loads only what the task touches and accounts for it.
+
+---
+
+## 8 · The review window — check what the agent wrote
+
+The beats above are the engine. `mokata ide` is where you *look* at what it governed: a read-only,
+localhost-only window onto each session's writes. Start it on labelled sample data, or on your repo
+from inside a session with `/review-window`:
+
+```bash
+mokata ide --demo          # sample dataset; opens your browser on 127.0.0.1
+```
+
+Inside the window (the shipped tests named in brackets prove each one):
+
+- **Split or unified diff, with intra-line marks.** A Split/Unified toggle and an
+  ignore-whitespace toggle that says how many lines it hid; the changed tokens inside a line are
+  marked. [`tests/test_p5_ide_diff_split_intraline.py`]
+- **Image diff.** A changed image shows side by side, as a swipe, as an onion skin, or as a pixel
+  difference; an SVG is shown inert, never run. [`tests/test_p9_ide_image_diff.py`]
+- **Copy with Context, Find Usages.** From the Code view's context menu, a hunk's `⋯` menu or the
+  palette (Alt+Shift+X, Shift+F12): a symbol's reference or a fenced excerpt ready to paste into a
+  chat (secret-scanned first), or every usage from the code graph.
+  [`tests/test_p4_copy_context_usages.py`]
+- **Themes.** Dark, light, two high-contrast themes, or follow the OS — from the palette
+  ("Theme: …"); contrast is checked in every theme. [`tests/test_p6_ide_themes.py`]
+
+Two of the window's answers are also plain commands, so you can see them here:
+
+```bash
+mokata suggest             # the run's next step, from what mokata recorded
+mokata explain live        # prints the Claude Code command that explains the working-tree change
+```
+
+```text
+next step for run sample (from recorded state; run picked by: pinned)
+  proposal p-5da515d63e87 (reset) is waiting on you
+    → mokata approve p-5da515d63e87
+      from approvals: p-5da515d63e87
+  ...
+Run this in Claude Code's terminal (it uses your own Claude login; mokata calls no model):
+claude "/explain live"
+```
+
+Every **next-step hint** names the recorded fact it came from (`from approvals: …`), and the command
+it offers asks for its own consent. [`tests/test_p14_next_step_hints.py`] The **change explainer**
+never runs a model itself: it prints the command, Claude writes the explanation on your login, and
+mokata keeps only the claims that cite a fact or a line range, shown in the window's Review tab.
+[`tests/test_p46_change_explainer.py`] Full tour: [review what your agent wrote](../how-to/review-agent-work.md).
 
 ---
 

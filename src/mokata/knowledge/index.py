@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..repo_walk import prune_source_dirs
+from ..languages import LANGUAGES, language_for
 from ..repo_paths import name_of, names_of
 
 DEFAULT_EXTENSIONS = (".py",)
@@ -70,6 +71,9 @@ class KnowledgeIndex:
         # describes a walk, not the index, so it is neither persisted by `to_dict` nor carried
         # across walks — a caller reading it after a build is reading THAT build.
         self.skipped_checkouts: List[str] = []
+        # Source files of a language this index does NOT cover (language name -> count), from the
+        # LAST walk. Transient like `skipped_checkouts`; counted in the one walk, never a second.
+        self.unsupported: Dict[str, int] = {}
 
     def _iter_files(self, root: str, extensions):
         """Every source file under `root`, nested checkouts EXCLUDED and RECORDED.
@@ -84,16 +88,37 @@ class KnowledgeIndex:
         # cold-walk stops at its file cap) is left with an empty record rather than the
         # previous walk's — a stale "1 checkout skipped" is the false evidence, not the fix.
         self.skipped_checkouts = []
+        self.unsupported = {}
+        unsupported: Dict[str, int] = {}
         for dirpath, dirnames, filenames in os.walk(root):
             prune_source_dirs(dirpath, dirnames, skipped=skipped)
             for fn in filenames:
                 if fn.endswith(tuple(extensions)):
                     yield os.path.join(dirpath, fn)
+                else:
+                    lang = language_for(fn)
+                    if lang.name in LANGUAGES:
+                        unsupported[lang.name] = unsupported.get(lang.name, 0) + 1
         # NAMES, not paths: `cmd_index` prints them and `test_nested_checkout_walkers`
         # compares them against `["vendor/lib"]`. Round 2 moved `_current` and `build` below
         # to POSIX and left this line native, so on Windows the record read `vendor\\lib`
         # against a `/`-spelled declaration — three of the eleven failures on run 32144708930.
         self.skipped_checkouts = names_of(skipped, root)
+        self.unsupported = unsupported
+
+    def coverage(self) -> Dict[str, Any]:
+        """What the index covers, from the entries held and the last walk: languages indexed
+        (with file counts) and source files skipped as unsupported (per language + total)."""
+        indexed: Dict[str, int] = {}
+        for rel in self.entries:
+            name = language_for(rel).name
+            indexed[name] = indexed.get(name, 0) + 1
+        # The languages the skipped-count can see: every table language the index does not cover.
+        # Named in the line so "0 skipped" can never read as "nothing else is in the repo".
+        covered = {language_for("x" + e).name for e in DEFAULT_EXTENSIONS}
+        counted = [n for n in LANGUAGES if n not in covered]
+        return {"indexed": indexed, "counted": counted, "unsupported": dict(self.unsupported),
+                "unsupported_total": sum(self.unsupported.values())}
 
     def _current(self, root: str, extensions) -> Dict[str, str]:
         out: Dict[str, str] = {}
@@ -188,6 +213,22 @@ def skipped_checkout_lines(skipped: List[str]) -> List[str]:
     noun = "nested checkout" if len(skipped) == 1 else "nested checkouts"
     return [f"index: skipped {len(skipped)} {noun} — a different repo's source, "
             f"not indexed: {where}"]
+
+
+def coverage_line(cov: Dict[str, Any]) -> str:
+    """The one truthful sentence about coverage: which languages were indexed, how many source
+    files were skipped as unsupported (and which languages they were)."""
+    names = ", ".join(sorted(cov["indexed"])) or "none"
+    total = cov["unsupported_total"]
+    line = f"index: languages indexed: {names}; {total} file(s) skipped as unsupported"
+    if total:
+        parts = ", ".join(f"{n} {k}" for k, n in sorted(cov["unsupported"].items()))
+        line += f" ({parts})"
+    # Name the set the count covers: files in any other language (C, Ruby, Kotlin, ...) are not
+    # detected, so they are neither indexed nor counted above.
+    line += (f". Skipped files are counted only for {', '.join(cov['counted'])}; "
+             f"other languages are neither indexed nor counted")
+    return line
 
 
 def surface_staleness(result: Any, index: KnowledgeIndex, root: str) -> Any:

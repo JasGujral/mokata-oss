@@ -257,6 +257,12 @@ def tolerant_sites(corpus):
 
 _UNITTEST = re.compile(r"python\s+-m\s+unittest\b([^\n;|&)]*)")
 
+#: `scripts/shard_tests.py run --shard K --of N -s tests -t tests` — ci.yml's unit step since 0.0.26
+#: O6 and release.yml's since 0.0.27 R3. It builds the suite with the same `discover` call and
+#: runs one shard of it, and the job's shard legs together run all of it, so it is read as the
+#: `discover` it partitions. Without this, sharding BOTH gates took them out of this sweep's view.
+_SHARD = re.compile(r"shard_tests\.py\s+run\b([^\n;|&)]*)")
+
 
 def _test_invocations(job):
     out = []
@@ -264,6 +270,8 @@ def _test_invocations(job):
         folded = str(step.get("run", "")).replace("\\\n", " ")
         for args in _UNITTEST.findall(folded):
             out.append(args.strip())
+        for args in _SHARD.findall(folded):
+            out.append("discover " + args.strip())
     return out
 
 

@@ -143,6 +143,10 @@ the next `mokata index` rehashes the file.
 mokata index          # build/refresh; reports added/changed/removed + stale files
 ```
 
+The index covers **Python files only**. `mokata index` and the MCP `index_status` tool say which
+languages were indexed and how many source files in other languages were skipped as unsupported,
+so partial coverage is never mistaken for full coverage. The skipped count only sees the languages mokata has a table entry for (javascript/typescript, go, rust, java); the line names that set, and files in any other language (C, Ruby, Kotlin, ...) are neither indexed nor counted.
+
 ## Drift anchors / `lat check` (B5)
 
 Optional `@lat: <concept>` comments tie code to concepts registered in a `lat.md`.

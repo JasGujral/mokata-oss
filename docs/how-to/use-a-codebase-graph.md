@@ -182,6 +182,17 @@ index: no code graph wired — refresh runs on the grep floor (`mokata lat-check
 concept drift lexically).
 ```
 
+`mokata index` also says what it covered. The freshness index indexes **Python files only**; it
+prints the languages it indexed and how many source files of other languages it skipped as
+unsupported, so a TypeScript, JavaScript or Go repo never reads a "done" index as full coverage:
+
+```text
+index: languages indexed: python; 40 file(s) skipped as unsupported (3 go, 37 javascript). Skipped files are counted only for javascript, go, rust, java; other languages are neither indexed nor counted
+```
+
+The MCP `index_status` tool reports the same (`languages_indexed`, `unsupported_files`,
+`unsupported_by_language`).
+
 Run these whenever the code or the graph changes. Both operate over the **wired adapter when
 present and the grep floor when not** — same commands either way.
 

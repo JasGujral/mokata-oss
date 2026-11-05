@@ -229,6 +229,7 @@ class AmendPlan:
     red_owed: Tuple[str, ...] = ()
     request: Optional[DeviationRequest] = None
     lens_basis: str = ""                # O14b — what gate 2's answer rests on (graph / floor)
+    tree: str = ""                      # the working tree the amend runs in (its committed spec)
 
     @property
     def to_version(self) -> int:
@@ -323,7 +324,8 @@ def begin_amend(surface: Any, spec: Spec, tests: List[TestRef], *, run_id: str,
         DeviationGate(ledger).request(req)      # a scope change IS a plan change (P2) — surfaced
 
     plan = AmendPlan(True, run_id, spec, tests, diff, from_version,
-                     reason=reason, item=item, request=req)
+                     reason=reason, item=item, request=req,
+                     tree=str(getattr(surface, "root", "") or ""))
 
     # --- gate 1: COMPLETENESS. Every criterion — the old ones AND the new — maps to a test.
     gr = run_completeness_gate(spec, tests, store=store)
@@ -406,12 +408,12 @@ def finish_amend(plan: AmendPlan, *, store: Any, gate: Any = None, ledger: Any =
     dgate = DeviationGate(ledger)
 
     def commit() -> None:
-        spec_commit(store, plan.spec, version=plan.to_version,
+        spec_commit(store, plan.spec, tree=plan.tree, version=plan.to_version,
                     archive_key=archive_key(plan.run_id, plan.from_version),
-                    run_id=plan.run_id)
+                    run_id=plan.run_id, map_tests=plan.tests)
 
     out = wgate.submit(
-        WriteRequest(EMIT_KIND, EMIT_TARGET, content=preview_content(store, plan.spec),
+        WriteRequest(EMIT_KIND, EMIT_TARGET, content=preview_content(store, plan.spec, plan.tests),
                      tool=AMEND_TOOL, surface=surface_name or CLI_SURFACE),
         commit=commit, assume_yes=assume_yes, confirm=confirm, human_approved=human_approved)
 

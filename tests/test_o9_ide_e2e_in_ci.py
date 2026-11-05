@@ -141,7 +141,12 @@ class TheCoreFlowsAreHarnessFlows(unittest.TestCase):
              "palette": "ThePaletteRunsCommandsAndJumps", "tabs": "TabsOpenCloseAndReopen",
              "find": "FindInTheCurrentFile", "search + Load more": "SearchPagesPastTheFirstThousandHits",
              "jobs drawer": "TheActivityDrawerShowsJobs", "worktrees": "WorktreesListAndMergeIsGated",
-             "uninitialised repo": "AStrangersRepoOpens"}
+             "uninitialised repo": "AStrangersRepoOpens",
+             "explorer polish (P11)": "TheExplorerIsPolished",
+             "path:line:col launch (P11)": "AnEditorOpensAtPathLineCol",
+             "proof (P13 AC → test → code)": "TheProofScreenShowsTheTrace",
+             "explainer (P46 cited review page)": "TheExplainerShowsCitedPagesSafely",
+             "image diff (P9 side by side, swipe, onion, pixels, SVG inert)": "TheImageDiffWorks"}
 
     def _flows(self):
         found = {}

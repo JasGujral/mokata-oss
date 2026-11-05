@@ -216,7 +216,7 @@ class TestEmitThroughTheRealGates(unittest.TestCase):
             self.assertFalse(res["committed"])
             self.assertEqual(res.get("gate"), "completeness")
             self.assertIn("AC2", res.get("unmapped", []))
-            self.assertFalse(check_spec_persisted(repo.surface.state).passed,
+            self.assertFalse(check_spec_persisted(repo.surface.state, run_id="test-run").passed,
                              "a refused emit must persist no spec at all")
 
     def test_a_refused_emit_never_even_proposes(self):
@@ -236,7 +236,7 @@ class TestEmitThroughTheRealGates(unittest.TestCase):
             res = TW.spec_emit(**dict(_args(repo.path), approve=True))
             self.assertEqual(res["status"], "proposed")
             self.assertFalse(res["committed"])
-            self.assertFalse(check_spec_persisted(repo.surface.state).passed,
+            self.assertFalse(check_spec_persisted(repo.surface.state, run_id="test-run").passed,
                              "a model-typed approve=true must never land a spec")
 
     def test_the_human_approval_uses_the_real_consent_path(self):
@@ -275,7 +275,7 @@ class TestEmitThroughTheRealGates(unittest.TestCase):
         with _Repo() as repo:
             out = E.emit_spec(repo.surface, _spec(), _tests(), assume_yes=True)
             self.assertTrue(out.committed)
-            self.assertTrue(check_spec_persisted(repo.surface.state).passed)
+            self.assertTrue(check_spec_persisted(repo.surface.state, run_id="test-run").passed)
 
     def test_the_engine_pipeline_still_emits_through_the_same_path(self):
         """`run_pipeline`'s emit phase keeps working — it now shares the one committer, so a spec
@@ -285,7 +285,7 @@ class TestEmitThroughTheRealGates(unittest.TestCase):
             handoff = _approved_session().handoff()
             run = run_pipeline(handoff, with_tasks(_spec()), _tests(), store=repo.surface.state)
             self.assertTrue(run.ok, run.render())
-            self.assertTrue(check_spec_persisted(repo.surface.state).passed)
+            self.assertTrue(check_spec_persisted(repo.surface.state, run_id="test-run").passed)
             self.assertEqual(len(repo.surface.state.read(SPEC_CORPUS_KEY) or []), 1)
 
 

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-import _support  # noqa: F401  (puts src/ on the path)
+import _srcpath  # noqa: F401  (puts src/ on the path; NOT the provisioning gate)
 
 from mokata.plan_tasks import TASKS_KEY, Task, seal
 
@@ -68,7 +68,8 @@ def with_tasks(spec: Any) -> Any:
 
 def commit_planned(store, spec, **kwargs):
     """`engine.emit.spec_commit` for a fixture `Spec` built in code, given the one-task plan."""
-    from mokata.engine.emit import spec_commit
+    from mokata.engine.emit import _repo_root, spec_commit
+    kwargs.setdefault("tree", _repo_root(store))       # a fixture runs in the store's own tree
     return spec_commit(store, with_tasks(spec), **kwargs)
 
 

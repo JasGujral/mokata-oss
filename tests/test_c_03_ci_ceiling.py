@@ -6,8 +6,9 @@ What must be true (for the owner cutting a release, and so for every user waitin
   * a suite that has grown to within 20% of a job ceiling REDS with the 1.5x value to set —
     while it is a one-line edit, not after the tag's test job is cancelled (v0.0.23 was lost so);
   * a ceiling that still clears says so; "could not measure" is never reported as "clears";
-  * the PR gate re-derives release.yml's `test` ceiling on every PR — since 0.0.26 O6 (sharding)
-    from the ubuntu shards re-assembled into the unsharded leg (`tag-ceiling` job);
+  * the PR gate re-derives release.yml's `test` ceiling on every PR — since 0.0.27 R3 the tag
+    gate is sharded like the PR gate, so per shard: the slowest ubuntu shard against it
+    (`tag-ceiling` job);
   * the reader takes the JOB-level ceiling, never a step's and never a comment's.
 
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
@@ -153,8 +154,9 @@ class TheGatesMeasureThemselves(unittest.TestCase):
                          "the checks must be the last measured steps")
 
     def test_the_pr_gate_re_derives_the_tag_gates_ceiling_from_the_ubuntu_shards(self):
-        """Sharded (0.0.26 O6), no leg runs the whole suite, so the tag gate's ceiling is checked
-        by a job that re-assembles the unsharded ubuntu leg — never by one shard."""
+        """The tag gate bounds one shard (0.0.27 R3), so its ceiling is checked by a job that sees
+        EVERY ubuntu shard and grades the slowest — never by one shard grading itself, which
+        would let the slowest go unseen."""
         self.assertEqual([], self._runs("--workflow .github/workflows/release.yml"),
                          "a single shard cannot measure the unsharded tag gate")
         tag = self.ci["jobs"]["tag-ceiling"]
@@ -164,7 +166,9 @@ class TheGatesMeasureThemselves(unittest.TestCase):
         self.assertEqual(tag["runs-on"], "ubuntu-latest")
         release = safe_load(_read(os.path.join(WORKFLOWS, "release.yml")), "grade the tag gate")
         self.assertEqual("ubuntu-latest", release["jobs"]["test"]["runs-on"],
-                         "the re-assembly argument needs the SAME runner image")
+                         "the superset argument needs the SAME runner image")
+        self.assertIn("shard", release["jobs"]["test"]["strategy"]["matrix"],
+                      "a per-shard grade of an unsharded tag gate under-reports it")
 
     def test_every_leg_checks_its_own_ceiling(self):
         own = self._runs("--workflow .github/workflows/ci.yml --job test")

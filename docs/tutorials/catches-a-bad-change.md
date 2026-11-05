@@ -4,7 +4,7 @@ The one-glance demo. An AI coding agent, mid-task, tries three bad changes — s
 spec, edit a source file straight past the gates, and stash a secret. **mokata stops all three, and
 every write it governs lands on the audit ledger.** Every command below was run end-to-end on a
 fresh sample repo; the output is exactly what it prints (absolute paths shortened to `.`, and
-`init`'s tool-detection preamble elided).
+`init`'s tool-detection preamble and wiring plan elided).
 
 > **mokata is the memory + seatbelt for your AI coding agent.** This page is the seatbelt in
 > action; copy-paste it and watch it catch a bad change in your own terminal.
@@ -19,6 +19,7 @@ def checkout(cart):
 PY
 mokata init --profile standard --yes
 export MOKATA_SESSION_ID=demo     # see the note at the bottom
+mokata config set settings.sessions.worktree off --yes   # see the note at the bottom
 ```
 
 ```text
@@ -26,6 +27,10 @@ wrote ./.mokata/manifest.json
 wrote ./.mokata/constitution.md
 wrote ./.mokata/.gitignore
 mokata initialized with profile 'standard'.
+...
+mokata is wired into claude (project scope).
+...
+set settings.sessions.worktree
 ```
 
 ### Bad change #1 — code with no spec, no tests
@@ -44,19 +49,23 @@ mokata run develop
 ### Bad change #2 — going around the gates with a plain file edit
 
 So the agent does the honest thing and emits a spec — every acceptance criterion mapped to a test,
-or the completeness gate refuses it:
+or the completeness gate refuses it, and a task plan naming the files each criterion's work may
+touch:
 
 ```bash
 cat > spec.json <<'JSON'
 {"title": "checkout rejects an empty cart",
  "criteria": [{"id": "AC1", "text": "checkout([]) raises ValueError"}],
- "tests": [{"name": "test_empty_cart_raises", "ac_ids": ["AC1"]}]}
+ "tests": [{"name": "test_empty_cart_raises", "ac_ids": ["AC1"]}],
+ "tasks": [{"id": "T1", "title": "reject an empty cart", "ac_ids": ["AC1"], "scope": ["checkout.py"]}]}
 JSON
 mokata spec emit --file spec.json --yes
 ```
 
 ```text
 spec emitted: 'checkout rejects an empty cart' — 1 acceptance criteria, all mapped to tests.
+  STANDALONE: no approved brainstorm approach or refinement set is on record for this spec — it stands alone. That is a SUPPORTED path, not an error and not a failure. To give this spec an approved direction, run /brainstorm (or /refine), approve an approach, then emit.
+  ⚠ AC1 has no code anchor — the test phase will have to explore for it (warn-only: a new-file AC legitimately has none)
   saved as this run's spec (run demo), and recorded in the shared spec corpus (1 spec(s)).
   implementation is unblocked once a failing test is on record (/test).
 ```
@@ -151,7 +160,7 @@ print('status:', r['status'], ' findings:', r['findings'])"
 ```
 
 ```text
-status: blocked  findings: ['aws-access-key', 'high-entropy-token', 'sensitive-location']
+status: blocked  findings: ['aws-access-key', 'known-secret-shape', 'sensitive-location']
 ```
 
 ### The punchline — every decision is on the ledger
@@ -161,19 +170,21 @@ mokata audit
 ```
 
 ```text
-audit ledger — 8 entries:
+audit ledger — 10 entries:
   #1   setup       action=init profile=standard files=['./.mokata/.gitignore', './.mokata/constitution.md', './.mokata/manifest.json'] actor=cli
-  #2   gate        gate=spec-persisted phase=develop decision=blocked reason=no saved spec — draft and emit it first (/spec); the completeness gate must pass before implementation. ac_count=0
-  #3   write_gate  write_kind=config target=spec:emit actor=agent decision=approved reason=committed
-  #4   checkpoint  run=demo phase=completeness_gate
-  #5   checkpoint  run=demo phase=emit
-  #6   write_approval decision=approved proposal=p-d6af1f0f5d5b tool=remember target=memory:aws.key content_hash=3754acbb… actor=human run=demo scope=session
-  #7   write_gate  write_kind=memory target=memory:aws.key actor=mcp decision=blocked reason=secret detected
-  #8   write_approval decision=redeemed proposal=p-d6af1f0f5d5b tool=remember target=memory:aws.key content_hash=3754acbb… approved_by=human run=demo committed=False
+  #2   setup       action=setup files=['./.claude/commands/brainstorm.md', …] actor=cli
+  #3   gate        gate=spec-persisted phase=develop decision=blocked reason=no saved spec — draft and emit it first (/spec); the completeness gate must pass before implementation. ac_count=0
+  #4   write_gate  write_kind=config target=spec:emit actor=agent decision=approved reason=committed
+  #5   checkpoint  run=demo phase=completeness_gate
+  #6   checkpoint  run=demo phase=emit
+  #7   plan_approved run=demo plan_hash=sha256:a9185c25… version=1 tasks=1
+  #8   write_approval decision=approved proposal=p-d6af1f0f5d5b tool=remember target=memory:aws.key content_hash=3754acbb… actor=human run=demo scope=session
+  #9   write_gate  write_kind=memory target=memory:aws.key actor=mcp decision=blocked reason=secret detected
+  #10  write_approval decision=redeemed proposal=p-d6af1f0f5d5b tool=remember target=memory:aws.key content_hash=3754acbb… approved_by=human run=demo committed=False
 ```
 
-Note row **#1**: even `mokata init` — a plain CLI scaffold, nothing the model touched — is on the
-ledger. Every durable writer is registered; there is no unledgered side door.
+Note rows **#1** and **#2**: even `mokata init` and the harness wiring it does — a plain CLI
+scaffold, nothing the model touched — are on the ledger. Every durable writer is registered; there is no unledgered side door.
 
 *(Each row also carries `prev_hash`/`entry_hash` — the ledger is hash-chained. Elided here for
 width.)* Even the *approved* write is recorded as `committed=False`: you can see exactly what you
@@ -192,6 +203,12 @@ That's mokata: it remembers your project and stops the agent shipping the wrong 
 > a shell is a fresh process. The pin makes this whole terminal one session so the demo can run
 > end to end. Inside Claude Code you never set it — the MCP server *is* one long-lived session,
 > and you just run `mokata approve <id>` in your own terminal.
+>
+> **Why `settings.sessions.worktree off`?** Inside Claude Code every session works in its own git
+> worktree by default, and the hook refuses a session's first write to the main checkout with
+> `BLOCKED [worktree] enter your worktree first` — so parallel and resumed sessions never share
+> files. This terminal has no Claude Code session to put in a worktree, so the demo works in the
+> main checkout instead. In your own repo, leave the default on.
 
 **Next:** see *every* differentiator run (graph, memory, governance) in
 [differentiators in action](differentiators-in-action.md), or

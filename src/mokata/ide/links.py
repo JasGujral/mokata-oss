@@ -68,9 +68,10 @@ def osc8(url: str, text: str) -> str:
     return f"{OSC}{url}{ST}{text}{OSC}{ST}"
 
 
-def open_url(port: int, path: str, line: Optional[int] = None) -> str:
+def open_url(port: int, path: str, line: Optional[int] = None, col: Optional[int] = None) -> str:
     url = f"http://127.0.0.1:{int(port)}{OPEN_PATH}?path={quote(path, safe='/')}"
-    return url + (f"&line={int(line)}" if line else "")
+    url += f"&line={int(line)}" if line else ""
+    return url + (f"&col={int(col)}" if col and line else "")
 
 
 class Linker:
@@ -88,7 +89,7 @@ class Linker:
     def active(self) -> bool:
         return bool(self.port)
 
-    def ref(self, path: str, line: Optional[int], text: str) -> str:
+    def ref(self, path: str, line: Optional[int], text: str, col: Optional[int] = None) -> str:
         if not self.port or not isinstance(path, str) or not path:
             return text
         rel = self._rel(path)
@@ -98,7 +99,11 @@ class Linker:
             n = int(line) if line else None
         except (TypeError, ValueError):
             n = None
-        return osc8(open_url(self.port, rel, n), text)
+        try:
+            c = int(col) if col else None
+        except (TypeError, ValueError):
+            c = None
+        return osc8(open_url(self.port, rel, n, c), text)
 
     def _rel(self, path: str) -> Optional[str]:
         from .snapshots import rel_path

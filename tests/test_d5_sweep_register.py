@@ -400,6 +400,14 @@ _register("events/store.py", {
         "signal its readers branch on, and the contract is written in the method's docstring "
         "rather than inferred from the handler."),
     "EventStore.count": (DEGRADE_CLEAN, "the same contract, returning 0."),
+    "EventStore.window": (DEGRADE_CLEAN,
+        "0.0.27 P12 — the activity timeline's page read, with `query`'s DOCUMENTED contract "
+        "('Never raises; an absent store is empty', in its docstring): an absent, locked or "
+        "corrupt store pages as no events. A display surface — no verdict, gate or publish "
+        "high-water mark is derived from it (the publisher reads `after_seq` + `max_seq`)."),
+    "EventStore.count_for": (DEGRADE_CLEAN,
+        "0.0.27 P12 — the timeline's total, the same contract returning 0 (its handler says "
+        "'see `query`'). Display only, like `count`."),
     "EventStore.max_seq": (DEGRADE_CLEAN,
         "⭐ THE ONE READER ON THIS SURFACE WHOSE EMPTY ANSWER IS NOT SAFE, which is why it has a "
         "THIRD answer. `after_seq` and `count` above both degrade to nothing-to-see, and the note "
@@ -1264,7 +1272,8 @@ _register("knowledge/graph_backend.py", {
         "failure to start is NOT swallowed: it becomes the answer's note ('the index build could "
         "not be started: <msg>'), and the floor answers. Broad because it spans file locking, "
         "process spawn and run-state IO, none of which may break the query."),
-    "CodeReviewGraphBackend.query": (DEGRADE_CLEAN,
+    "CodeReviewGraphBackend._answer": (DEGRADE_CLEAN,
+        "(0.0.27 P4: the body of `query`, shared with `blast_radius_full`.) "
         "Converts ANY injected-client/subprocess failure into the typed `BackendError` and RAISES "
         "it. It swallows nothing: `KnowledgeLayer._run` catches that BackendError, falls to the grep "
         "floor, and (D5) `make_graph_scorer` now announces the fall. Broad because the client is a "
@@ -1465,7 +1474,7 @@ _register("knowledge/crg_client.py", {
         "graph itself; it only decides whether the graph is asked."),
 })
 
-_register("dashboard.py", {
+_register("governance_view.py", {
     "build_governance_view": (SUPPRESS_OK,
         "Guards ONLY the `compute_session_diff` block (the memory read beside it is now narrowly "
         "caught and LOUD). The callee is degrade-clean and emits its OWN classed notice for the "
@@ -1524,6 +1533,39 @@ _register("session_index.py", {
     "_predecessor": (DEGRADE_CLEAN,
         "0.0.26 P33 — an unreadable transcript names no predecessor: the resumed session is its "
         "own row (still listed), exactly as before O10's join."),
+})
+_register("ide/activity.py", {
+    "_phase": (DEGRADE_CLEAN,
+        "0.0.27 P12 — a run with no readable lifecycle shows `phase: null` on its activity card; "
+        "the card itself (state, files, gates, needs-you) is unaffected. The same reading as "
+        "`ide/sessions.py:_stages` (0.0.26 P33) over the same `plans.lifecycle` call — one run's "
+        "unreadable state must not 500 the whole live panel."),
+})
+_register("ide/features/usages.py", {
+    "routes.usages.make.work": (SUPPRESS_OK,
+        "0.0.27 P4 — `except BaseException: w.discard(); raise`: a Find Usages job that fails or is "
+        "CANCELLED (a ControlSignal, hence BaseException) removes its half-written spill file and "
+        "re-raises unchanged. Cleanup-then-re-raise; nothing is swallowed."),
+})
+_register("ide/features/activity.py", {
+    "routes.live": (DEGRADES_LOUD,
+        "0.0.27 P12 — the live panel's read. ActivityRefused / a bad request is a 400, a "
+        "MokataError the usual `refused` answer, and anything else is a BUG: the same 500 + "
+        "logged traceback (`crashed`) as `ide/server.py:build_app._json.handler`. Never a blank "
+        "panel that reads as 'nothing is running'."),
+})
+_register("ide/features/lsp.py", {
+    "graph_edge": (DEGRADE_CLEAN,
+        "0.0.27 P24 — the LSP answer's graph edge (callers / blast radius / covering tests). An "
+        "edge that cannot be computed sets `edge.note = \"graph unavailable: <type>: <message>\"` "
+        "IN the answer the panel shows; the LSP's own result is unaffected and never relabelled."),
+})
+_register("oslock.py", {
+    "_hold": (SUPPRESS_OK,
+        "0.0.27 R7 (WIN-LOCK-WAIT) — `except BaseException: prim.close(main); raise`: closes the "
+        "lock file's fd when the wait for it fails (LockTimeout, or a Ctrl-C mid-poll) and "
+        "RE-RAISES. Cleanup-then-re-raise, nothing swallowed; the turnstile is released and "
+        "closed by the enclosing `finally` blocks."),
 })
 _register("ide/sessions.py", {
     "_lookup": (DEGRADE_CLEAN,
@@ -2089,7 +2131,8 @@ _register("home.py", {
         "healthy value. Broad because each fact reaches a different subsystem."),
     "_run": (DEGRADE_CLEAN,
         "0.0.23 E2 (MOK-HOME) — the active-run line. A failure prints 'run: could not be read' "
-        "and points at `mokata progress`; it never claims 'none active'."),
+        "and points at `mokata doctor` (0.0.27 P14: the next pair is the derived hint, and an "
+        "unreadable store is said by `hints.derive` naming it); it never claims 'none active'."),
     "build_home": (DEGRADE_CLEAN,
         "0.0.23 E2 (MOK-HOME) — an unloadable config is PRINTED with its exception text and the "
         "`mokata doctor` next step; the home screen never tracebacks on the first command a "
@@ -2973,24 +3016,17 @@ _register("injection_ledger.py", {
 })
 
 _register("bootstrap.py", {
-    "_ranked_injection_items": (SUPPRESS_OK,
-        "JIT-RECALL-STAMP-SEAM (2026-08-01). This handler is a DOWNGRADE BETWEEN TWO WORKING "
-        "ROUTES, which is why it is not a degrade to announce: the tiered stack "
-        "(`recall_relevant(stamp=False, kinds=…)`) is an upgrade over the Jaccard floor "
-        "(`jit_recall`), and when it raises, the floor still runs and still returns the pack H-1a "
-        "shipped. Nothing the user relies on is lost — the budget is still enforced, the always-on "
-        "slice is untouched, and the ranked half is still populated by the same code that "
-        "populated it before this seam existed. It is deliberately broad for the reason the tiers "
-        "below it are: the raisables span a psycopg driver error (an OPTIONAL extra, not nameable "
-        "at module scope), a sqlite3 error on a store mid-migration, a duck-typed store whose "
-        "`recall_relevant` has a different signature, and the decode of each stored doc — "
-        "narrowing to the nameable subset would let a driver error crash the hook on every prompt, "
-        "which turns a silent downgrade into a broken turn. The genuinely-broken cases still "
-        "announce: a store that cannot be read at all is caught by `build_injection`'s own handler "
-        "(see below) and by `_always_on_rule_lines`' loud `memory-rules` notice at SessionStart. "
-        "NOT a place a real failure hides — the ONLY failure it can hide is 'the better ranker was "
-        "unavailable for one turn', and announcing that once per prompt is the exact tune-out "
-        "failure the `build_injection` entry below describes."),
+    "_ranked_injection_items": (DEGRADE_CLEAN,
+        "JIT-RECALL-STAMP-SEAM (2026-08-01), made LOUD by R6 (0.0.27 TIERED-RECALL-SILENT-OFF). A "
+        "downgrade between two working routes: the tiered stack (`recall_relevant(stamp=False, "
+        "kinds=…, exclude_ids=…)`) is an upgrade over the Jaccard floor (`jit_recall`); if it "
+        "raises, the floor still returns the pack. It is broad for the reason the tiers below it "
+        "are (a psycopg driver error is an OPTIONAL extra, not nameable at module scope; a sqlite3 "
+        "error mid-migration; a duck-typed store; a doc decode). WHERE THE SIGNAL COMES OUT: the "
+        "handler appends `bootstrap.TIERED_RECALL_FALLBACK_NOTE` (naming the exception class) to "
+        "the pack's ranking notes, so the turn is TOLD its memory was ranked by keywords only. It "
+        "was silent before R6, and a long session lost the tiered ranking on every turn unseen "
+        "(`test_r6b_tiered_recall_long_session`)."),
     "build_injection": (SUPPRESS_OK,
         "H-1a's per-turn recall pack, and it shares its reasoning with — and is the OTHER HALF of "
         "— `hook_cli.user_prompt_submit_main` (see that entry). One thing worth stating separately: "

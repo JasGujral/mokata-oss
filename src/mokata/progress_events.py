@@ -361,7 +361,8 @@ def _resolve_verdict_run(surface: Any) -> Optional[str]:
 def record_review_verdict(surface: Any, *, passed: bool, independent: bool,
                           findings: Optional[Any] = None,
                           blocking: Optional[int] = None,
-                          run_id: Any = _CURRENT_RUN) -> Dict[str, Any]:
+                          run_id: Any = _CURRENT_RUN,
+                          tree_root: Optional[str] = None) -> Dict[str, Any]:
     """Append the closing review's verdict as a `review_verdict` event and return it.
 
     Observability tier, exactly like `stage_enter`: append-only + UNGATED (it writes no
@@ -398,6 +399,15 @@ def record_review_verdict(surface: Any, *, passed: bool, independent: bool,
         att = attest_run(getattr(surface, "root", "") or "", run_id)
         if att is not None and att.approved:
             data["plan_hash"] = att.approved
+    # 0.0.27 P21 — WHICH commit was reviewed: the worktree the reviewer's code lives in, its HEAD,
+    # whether it was clean and the base it was judged against, as git says it is NOW. The gated
+    # merge refuses a verdict that is not stamped at the head it would land.
+    if tree_root:
+        from .merge_gate import tree_stamp
+        from .tree_scope import code_root
+        stamp = tree_stamp(code_root(os.path.abspath(tree_root)))
+        if stamp.get("git") is not False:      # outside git there is no commit to name — and no merge
+            data["tree"] = stamp
     return ProgressLog.from_surface(surface).append_event(
         REVIEW_VERDICT, "review", run_id=run_id, data=data)
 

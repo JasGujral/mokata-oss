@@ -109,7 +109,7 @@ class _Prefix:
         self.t.cleanup()
 
 
-REQUIRES = ['mcp<2,>=1.2', 'model2vec>=0.3; extra == "full"', 'code-review-graph; extra == "full"',
+REQUIRES = ['mcp<2,>=1.30', 'model2vec>=0.3; extra == "full"', 'code-review-graph; extra == "full"',
             'model2vec>=0.3; extra == "embeddings"']
 
 

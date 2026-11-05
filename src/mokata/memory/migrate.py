@@ -34,10 +34,12 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 from ..govern import WriteGate, WriteRequest
+from ..session import current_run_id
 from .backends import MemoryBackend, build_postgres_backend
 from .item import downgrade_refusal
 from .store import build_backend
 from ..errors import MokataError
+from ..manifest import ManifestError
 
 # Backends migrate can move between (each a MemoryBackend with file/db storage).
 SUPPORTED = ("sqlite", "postgres", "pgvector")
@@ -353,7 +355,7 @@ def migrate_memory(surface: Any, to_backend: str, from_backend: Optional[str] = 
         from .. import team_journal, teamdb
         from ..govern.trust import (CLI_SURFACE, policy_surface, policy_tool, policy_trust)
         try:
-            from ..team_audit import actor as _actor
+            from ..session import actor as _actor
             who = _actor()
         except Exception:
             # D5 — deliberately left BROAD, with no narrow class to name: `team_audit.actor`'s own
@@ -392,7 +394,7 @@ def migrate_memory(surface: Any, to_backend: str, from_backend: Optional[str] = 
                 refused += 1
                 if ledger is not None:
                     ledger.record("write_gate", write_kind="memory", target=f"memory:{it.subject}",
-                                  actor="migrate", decision="blocked", reason=refusal)
+                                  actor="migrate", decision="blocked", run=current_run_id(), reason=refusal)
                 continue
             # SI.6 — the batch-derivation guard. The human approved THIS content; if the item diverges
             # from the hash taken at the gate, the approval does not cover what we are about to write.
@@ -402,7 +404,7 @@ def migrate_memory(surface: Any, to_backend: str, from_backend: Optional[str] = 
                 refused += 1
                 if ledger is not None:
                     ledger.record("write_gate", write_kind="memory", target=f"memory:{it.subject}",
-                                  actor="migrate", decision="blocked",
+                                  actor="migrate", decision="blocked", run=current_run_id(),
                                   reason="content changed after the batch approval")
                 continue
             outcome = gate.submit(

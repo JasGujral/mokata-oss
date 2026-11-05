@@ -44,14 +44,30 @@ from .gate_door import GATE_PATH as _GATE_PATH
 IDLE_SECS = 30 * 60
 POLL_SECS = 1.0            # SSE keep-alive tick: focus / idle bookkeeping (events arrive pushed)
 COOKIE = "mokata_ide"
+#: WATCH-FOLD — the single-use landing nonce a screen-naming pairing link hands THE browser that
+#: followed it; only a workspace read carrying it restores to that screen (see `AppState.landing`).
+LANDING_COOKIE = "mokata_ide_land"
 TOKEN_HEADER = "x-mokata-token"
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
-STATIC_FILES = ("index.html", "registry.js", "app.js", "combo.js", "nav.js", "search.js", "graph.js",
+STATIC_FILES = ("index.html", "theme.js", "themes.css", "registry.js", "app.js", "combo.js", "nav.js", "search.js", "graph.js",
                 "plan.js", "terminal.js", "bridge.js", "sessions.js", "health.js", "boot.js", "app.css",
-                "mokata-wordmark-dark.svg", "mokata-wordmark-light.svg", "mokata-icon.svg")
+                "mokata-wordmark-dark.svg", "mokata-wordmark-light.svg", "mokata-icon.svg",
+                "mermaid-frame.html", "mermaid-frame.js", "imagediff-worker.js")
 # 0.0.23 C3 — the vendored graph libraries (MIT; pins + sha256 in static/vendor/VERSIONS.json).
 VENDOR_FILES = ("cytoscape.min.js", "layout-base.js", "cose-base.js", "cytoscape-fcose.js",
                 "cytoscape-dagre.min.js")
+# 0.0.26 P7 — the vendored Markdown + Mermaid renderers (MIT; same VERSIONS.json, group "render").
+# markdown-it loads in the page; mermaid only inside `mermaid-frame.html` (its CSP below).
+RENDER_VENDOR_FILES = ("markdown-it.min.js", "mermaid.min.js")
+# The ONE document allowed to be framed (by this origin only) and to use inline styles: the
+# hidden frame Mermaid lays diagrams out in (Mermaid writes <style> and style attributes, which the
+# page's CSP refuses). It runs only this origin's scripts and may load NOTHING else: no image, font
+# or stylesheet from any origin, its own included (a diagram's CSS `url(/api/...)` must not become
+# a request carrying the pairing cookie — P7 verification F1); `data:` only. It hands back an SVG
+# string the page shows as an <img> — an image document executes nothing.
+FRAME_CSP = ("default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; "
+             "img-src data:; font-src data:; frame-ancestors 'self'; "
+             "base-uri 'none'; form-action 'none'")
 # 0.0.26 P0 — a FEATURE's frontend: any `static/features/<name>.js|.css` is served and loaded by the
 # page (`index` writes its <script>/<link> tags at the markers below) — no edit to index.html.
 FEATURES_DIR = os.path.join(STATIC_DIR, "features")
@@ -147,6 +163,12 @@ def _remove_record(root: str, pid: int) -> None:
             pass
 
 
+def _num(raw: Any, default: int) -> int:
+    """A line / column from a link: digits only, at most 9 of them; anything else is `default`."""
+    s = str(raw or "")
+    return max(default, int(s)) if s.isdigit() and len(s) <= 9 else default
+
+
 def free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
@@ -177,6 +199,11 @@ class AppState:
         self.last_seen = time.time()
         self.clients = 0
         self.focus_version = 0
+        # WATCH-FOLD — `(nonce, screen)`: the screen the page that FOLLOWED a screen-naming pairing
+        # link (`mokata watch` → Sessions) restores to. Armed only when the link is followed; taken
+        # only by a workspace read carrying that link's nonce cookie, once. One slot: a newer link
+        # replaces an older one. Another tab's read never takes it.
+        self.landing: Optional[tuple] = None
         # ID.S3 — the event bus (pushed events + the stat-gated tails), and the hook token from the
         # bridge record: it authorises `POST /api/bus` and nothing else.
         from .bus import EventBus, read_bridge
@@ -184,6 +211,7 @@ class AppState:
         bridge = None if demo else read_bridge(root)
         self.hook_token = bridge["token"] if bridge else ""
         self.watcher: Optional[Any] = None
+        self.self_seqs: set = set()          # P12: store rows this server published itself
         # ID.S3 (Lane ID2) — the embedded terminal (enabled only for a TTY-launched, real-repo
         # window) and the joined session (focus + follow + the default context target).
         from .terminal import TerminalHost, available
@@ -258,6 +286,47 @@ def _approvals_fp(root: str) -> str:
     return "|".join(parts)
 
 
+#: 0.0.27 P14 — the run-state records a next-step hint is derived from, by state-file prefix. A
+#: CLI `mokata progress test-run` (or review verdict, spec, approval of an approach) writes one of
+#: these and emits nothing on the event store; the watcher sees the write and pushes `runstate`.
+RUNSTATE_PREFIXES = ("test_runs__", "emitted_spec__", "approved_approach__", "spec_amend__",
+                     "pipeline_run__")
+
+
+def _runstate_fp(root: str) -> Dict[str, str]:
+    """P14 — {run id (or "" for the shared progress log): size:mtime} for the run-state records.
+    One scandir of the state dir per tick (names + stat only, never a read); {} when unreadable."""
+    from ..progress_events import PROGRESS_EVENTS_FILENAME
+    from ..tdd_state import state_dir
+    out: Dict[str, str] = {}
+    try:
+        with os.scandir(state_dir(root)) as it:
+            for e in it:
+                name = e.name
+                if name == PROGRESS_EVENTS_FILENAME:
+                    key = ""
+                else:
+                    pre = next((p for p in RUNSTATE_PREFIXES if name.startswith(p)), None)
+                    if pre is None or not name.endswith(".json"):
+                        continue
+                    key = name[len(pre):-len(".json")]
+                st = e.stat()
+                out[key] = out.get(key, "") + f"{name}:{st.st_size}:{st.st_mtime_ns};"
+    except OSError:
+        return {}
+    return out
+
+
+def runstate_moved(before: Dict[str, str], now: Dict[str, str]) -> Optional[List[str]]:
+    """The runs whose records moved between two `_runstate_fp`s: [] for none, None for "every
+    run" (the shared progress log moved — a verdict or finish names its run only inside)."""
+    if before == now:
+        return []
+    if before.get("") != now.get(""):
+        return None
+    return sorted(k for k in set(before) | set(now) if k and before.get(k) != now.get(k))
+
+
 def feature_assets() -> Dict[str, List[str]]:
     """The feature scripts and styles under `static/features/` (sorted: a stable load order). Read
     once per app build — never at idle."""
@@ -280,6 +349,28 @@ def render_index(html: str, assets: Dict[str, List[str]]) -> str:
     return html.replace(SCRIPTS_MARK, tags).replace(STYLES_MARK, links)
 
 
+class _NoSniff:
+    """Pure ASGI (never buffers, so SSE streams stay live): EVERY response - an error from any
+    route, a guard refusal, the router's own 404/405 - carries `X-Content-Type-Options: nosniff`,
+    so no error body can be sniffed into something executable. One place, not one per route."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope.get("type") != "http":
+            return await self.app(scope, receive, send)
+
+        async def _send(message: Any) -> None:
+            if message.get("type") == "http.response.start":
+                headers = list(message.get("headers") or [])
+                if not any(k.lower() == b"x-content-type-options" for k, _ in headers):
+                    headers.append((b"x-content-type-options", b"nosniff"))
+                message = {**message, "headers": headers}
+            await send(message)
+        await self.app(scope, receive, _send)
+
+
 def build_app(state: AppState, features: Optional[List[Any]] = None):
     """The Starlette app. Imported lazily so the core never needs the `[ide]` deps. `features`
     defaults to every module under `ide/features/` (a test passes its own)."""
@@ -287,6 +378,7 @@ def build_app(state: AppState, features: Optional[List[Any]] = None):
     from starlette.requests import Request
     from starlette.responses import (HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse,
                                      Response)
+    from starlette.middleware import Middleware
     from starlette.routing import Route
     from sse_starlette.sse import EventSourceResponse
 
@@ -330,8 +422,30 @@ def build_app(state: AppState, features: Optional[List[Any]] = None):
         focus = request.query_params.get("focus")
         if focus:
             state.focus, state.focus_version = focus, state.focus_version + 1
-        resp = RedirectResponse("/", status_code=303)
+        land = None
+        screen = request.query_params.get("screen")
+        if screen:
+            from .workspace import MODES_RE
+            if MODES_RE.match(screen):
+                land = secrets.token_urlsafe(18)
+                state.landing = (land, screen)
+        # 0.0.27 P11 — `mokata ide path:line:col`: the launcher's target rides the pairing link and
+        # is contained again here (the token is proof of who asked, not of what the path is).
+        where = "/"
+        opened = request.query_params.get("open")
+        if opened:
+            from urllib.parse import quote
+            from .nav import PathRefused, contained_rel
+            try:
+                where = (f"/?open={quote(contained_rel(state.root, opened), safe='/')}"
+                         f"&line={_num(request.query_params.get('line'), 1)}"
+                         f"&col={_num(request.query_params.get('col'), 0)}")
+            except PathRefused:
+                where = "/"
+        resp = RedirectResponse(where, status_code=303)
         resp.set_cookie(COOKIE, state.token, httponly=True, samesite="strict", path="/")
+        if land:
+            resp.set_cookie(LANDING_COOKIE, land, httponly=True, samesite="strict", path="/")
         return resp
 
     assets = feature_assets()
@@ -356,7 +470,7 @@ def build_app(state: AppState, features: Optional[List[Any]] = None):
 
     async def vendor(request: Request):
         name = request.path_params["name"]
-        if name not in VENDOR_FILES:
+        if name not in VENDOR_FILES and name not in RENDER_VENDOR_FILES:
             return PlainTextResponse("not found", status_code=404)
         return _static("vendor/" + name)
 
@@ -365,6 +479,10 @@ def build_app(state: AppState, features: Optional[List[Any]] = None):
             return _served(fh.read(), name)
 
     def _served(body: bytes, name: str) -> Response:
+        if name == "mermaid-frame.html":
+            return Response(body, media_type=_TYPES[".html"],
+                            headers={"Cache-Control": "no-store", "Content-Security-Policy":
+                                     FRAME_CSP, "X-Frame-Options": "SAMEORIGIN"})
         return Response(body, media_type=_TYPES.get(os.path.splitext(name)[1], "text/plain"),
                         headers={"Cache-Control": "no-store",
                                  "Content-Security-Policy": "default-src 'self'; "
@@ -499,6 +617,16 @@ def build_app(state: AppState, features: Optional[List[Any]] = None):
             if evt.get("path"):
                 from .nav import note_change
                 note_change(state.root)      # lane S: ⌘P re-reads what moved, at its next ask
+            if evt.get("kind") == "tool" and evt.get("session"):
+                # 0.0.27 P12 ruling — a tool call is DURABLE: stored as a `tool_call` row (name
+                # only) so history after a reload equals the live view; pushed at once with its
+                # seq, and the tail skips that row (`self_seqs`).
+                seq = await asyncio.to_thread(_store_tool, state.root, evt)
+                if seq is not None:
+                    evt["seq"] = seq
+                    state.self_seqs.add(seq)
+                else:
+                    evt["durable"] = False
             await state.bus.publish(evt)
         return Response(status_code=204)
 
@@ -507,18 +635,6 @@ def build_app(state: AppState, features: Optional[List[Any]] = None):
     async def sessions_browser(request: Request):
         ring = state.bus.recent()
         return await _json(lambda r: state.source.browser(ring))(request)
-
-    def timelapse(request: Request) -> Dict[str, Any]:
-        sid = q(request, "session")
-        if not sid:
-            raise BadRequest("a session is required")
-        return state.source.timelapse(sid[:200])
-
-    def treemap(request: Request) -> Dict[str, Any]:
-        size = q(request, "size") or "loc"
-        if size not in ("loc", "change"):
-            raise BadRequest("size must be loc or change")
-        return state.source.treemap(q(request, "session")[:200] or None, size)
 
     async def open_in_page(request: Request):
         """ID3 `ide_open` — a UI round trip, never a write: the path is contained here (again — the
@@ -531,6 +647,10 @@ def build_app(state: AppState, features: Optional[List[Any]] = None):
             line = max(1, min(10_000_000, int(b.get("line") or 1)))
         except (TypeError, ValueError):
             line = 1
+        try:
+            col = max(0, min(10_000_000, int(b.get("col") or 0)))
+        except (TypeError, ValueError):
+            col = 0
         out: Dict[str, Any] = {"pages": state.clients, "demo": state.demo}
         if isinstance(sid, str) and sid:
             state.focus, state.focus_version = sid[:200], state.focus_version + 1
@@ -541,9 +661,11 @@ def build_app(state: AppState, features: Optional[List[Any]] = None):
                 rel = await asyncio.to_thread(contained_rel, state.root, path)
             except PathRefused as exc:
                 return JSONResponse({"error": "PathRefused", "note": str(exc)}, status_code=400)
-            await state.bus.publish({"kind": "open", "path": rel, "line": line,
+            await state.bus.publish({"kind": "open", "path": rel, "line": line, "col": col,
                                      "session": state.focus or ""})
             out.update(path=rel, line=line)
+            if col:
+                out["col"] = col
         if "path" not in out and "focus" not in out:
             return JSONResponse({"error": "BadRequest", "note": "give a path and/or a session"},
                                 status_code=400)
@@ -562,7 +684,21 @@ def build_app(state: AppState, features: Optional[List[Any]] = None):
     async def pr(request: Request):
         body = await request.json()
         url = body.get("url", "") if isinstance(body, dict) else ""
-        return JSONResponse(await asyncio.to_thread(state.source.pr, url))
+        ws = body.get("ws", "") if isinstance(body, dict) else ""
+        if not isinstance(ws, str) or ws not in ("", "show", "ignore"):
+            return JSONResponse({"error": "BadRequest", "note": "ws must be 'ignore' or 'show'"},
+                                status_code=400)
+        return JSONResponse(await asyncio.to_thread(
+            lambda: ws_view(ws, state.source.pr(url))))
+
+    def ws_view(ws: str, facts: Dict[str, Any]) -> Dict[str, Any]:
+        """0.0.27 P5 — every diff route's `ws`: "ignore" shows whitespace-only line changes as
+        context and SAYS how many (`ws_hidden`); anything else but "show" is a 400."""
+        from . import diffview as DV
+        try:
+            return DV.apply_ws(facts, ws)
+        except ValueError as exc:
+            raise BadRequest(str(exc)) from None
 
     async def quick(request: Request):
         body = await request.json()
@@ -814,10 +950,8 @@ def build_app(state: AppState, features: Optional[List[Any]] = None):
             rel = contained_rel(state.root, q(request, "path"))
         except PathRefused as exc:
             return PlainTextResponse(f"refused: {exc}", status_code=400)
-        raw = q(request, "line")
-        line = int(raw) if raw.isdigit() and len(raw) <= 9 else 1
-        return RedirectResponse(f"/?open={quote(rel, safe='/')}&line={max(1, line)}",
-                                status_code=303)
+        return RedirectResponse(f"/?open={quote(rel, safe='/')}&line={_num(q(request, 'line'), 1)}"
+                                f"&col={_num(q(request, 'col'), 0)}", status_code=303)
 
     def _term_refused(exc: Exception, status: int = 409):
         return JSONResponse({"error": type(exc).__name__, "note": str(exc)}, status_code=status)
@@ -1030,11 +1164,14 @@ def build_app(state: AppState, features: Optional[List[Any]] = None):
     add("/static/features/{name}", feature_static, "static")
     add("/api/ping", ping, "read")
     add("/api/state", lambda r: state.source.state(state.focus), "json")
-    add("/api/live", lambda r: state.source.live(q(r, "mokata") == "1"), "json")
-    add("/api/session", lambda r: state.source.session(q(r, "id")), "json")
+    add("/api/live", lambda r: ws_view(q(r, "ws"), state.source.live(q(r, "mokata") == "1")),
+        "json")
+    add("/api/session", lambda r: ws_view(q(r, "ws"), state.source.session(q(r, "id"))), "json")
     add("/api/timeline", lambda r: state.source.timeline(q(r, "session") or None), "json")
-    add("/api/between", lambda r: state.source.between(q(r, "a"), q(r, "b")), "json")
-    add("/api/compare", lambda r: state.source.compare(q(r, "base"), q(r, "head")), "json")
+    add("/api/between", lambda r: ws_view(q(r, "ws"), state.source.between(q(r, "a"), q(r, "b"))),
+        "json")
+    add("/api/compare", lambda r: ws_view(q(r, "ws"), state.source.compare(q(r, "base"),
+                                                                          q(r, "head"))), "json")
     add("/api/pr", pr, "action")
     # 0.0.23 C1 — navigation. Every path-taking route contains its path (nav.contained_rel).
     def tree(r):
@@ -1086,10 +1223,8 @@ def build_app(state: AppState, features: Optional[List[Any]] = None):
     add("/api/context", context_list, "json")
     add("/api/context", context_send, "action")
     add("/api/context/clear", context_clear, "action")
-    # 0.0.25 ID3 — session browser / needs-you, time-lapse, treemap, and `ide_open`'s door.
+    # 0.0.25 ID3 — session browser / needs-you, and `ide_open`'s door.
     add("/api/sessions", sessions_browser, "read")
-    add("/api/timelapse", timelapse, "json")
-    add("/api/treemap", treemap, "json")
     add("/api/open", open_in_page, "action")
 
     ctx = FeatureContext(state=state, q=q, body=_body, bad_request=BadRequest,
@@ -1102,9 +1237,28 @@ def build_app(state: AppState, features: Optional[List[Any]] = None):
                                   else s.handler, auth=s.auth, hook=s.hook),
                     methods=list(s.methods))
               for s in reg.specs()]
-    app = Starlette(routes=routes)
+    async def _last_resort(_request: Request, _exc: Exception) -> Response:
+        # Starlette's ServerErrorMiddleware sits OUTSIDE user middleware: an unhandled exception's
+        # plain 500 is built there, so it names nosniff itself.
+        return PlainTextResponse("Internal Server Error", status_code=500,
+                                 headers={"X-Content-Type-Options": "nosniff"})
+
+    app = Starlette(routes=routes, middleware=[Middleware(_NoSniff)],
+                    exception_handlers={Exception: _last_resort})
     app.state.registry = reg
     return app
+
+
+def _store_tool(root: str, evt: Dict[str, Any]) -> Optional[int]:
+    """Persist one hook-reported tool call as a typed `tool_call` row, attributed to the session
+    and the run it is bound to. None when the store refused it (events disabled, no repo)."""
+    from ..events import ToolCall, emit
+    from ..run_resolver import read_binding
+    sid = str(evt.get("session") or "")
+    run = read_binding(root, sid) or ""   # never raises: no binding / unreadable is None
+    row = emit(root, ToolCall(tool=str(evt.get("tool") or "")[:60], surface="claude-code"),
+               session_id=sid, run_id=run)
+    return row.seq if row is not None else None
 
 
 def _ensure_watcher(state: AppState) -> None:
@@ -1119,9 +1273,11 @@ async def _watch(state: AppState) -> None:
     from .bus import TAIL_SECS, Tails
     tails = None if state.demo else Tails(state.root)
     if tails:
+        tails.skip = state.self_seqs
         await asyncio.to_thread(tails.prime)
     fp = await asyncio.to_thread(_fingerprint, state.root)
     afp = None if state.demo else await asyncio.to_thread(_approvals_fp, state.root)
+    rfp = None if state.demo else await asyncio.to_thread(_runstate_fp, state.root)
     while True:
         await asyncio.sleep(TAIL_SECS)
         if state.clients <= 0:
@@ -1146,6 +1302,13 @@ async def _watch(state: AppState) -> None:
             if now_afp != afp:
                 afp = now_afp
                 await state.bus.publish({"kind": "approval", "fp": afp})
+            # P14 — a test run, verdict, spec or finish recorded anywhere (a terminal, an IDE job):
+            # the Activity cards re-ask their next step for the runs named.
+            now_rfp = await asyncio.to_thread(_runstate_fp, state.root)
+            runs = runstate_moved(rfp, now_rfp)
+            if runs is None or runs:
+                rfp = now_rfp
+                await state.bus.publish({"kind": "runstate", "runs": runs or []})
         if moved:
             from .nav import note_change
             note_change(state.root)          # lane S: ⌘P's file/symbol lists follow real change

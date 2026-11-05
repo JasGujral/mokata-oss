@@ -367,7 +367,7 @@ class TestMergeReadyHandoff(_Base):
             text = SW.merge_ready_handoff(surface)
             self.assertIsNotNone(text)
             self.assertIn(res.branch, text)                 # names the branch
-            self.assertIn("git merge", text)                # names the EXACT next action
+            self.assertIn("mokata worktree merge", text)   # names the EXACT next action (P21: the gated merge)
             self.assertIn(res.path, text)                   # and where the work sits
 
     def test_an_unbound_run_gets_no_handoff_prose_and_no_error(self):
@@ -516,8 +516,11 @@ class TestNegatives(_Base):
         self.assertIn("worktree_remove", write_tool_names())
         self.assertIn("worktree_list", read_tool_names())
         self.assertNotIn("worktree_list", write_tool_names())
+        # UPDATED at 0.0.27 P21, with cause: `worktree_merge` is the GATED merge (a write that
+        # lands only on a human's approval). Still no create/bind tool.
+        self.assertIn("worktree_merge", write_tool_names())
         self.assertEqual(sorted(n for n in names if n.startswith("worktree")),
-                         ["worktree_clean", "worktree_list", "worktree_remove"])
+                         ["worktree_clean", "worktree_list", "worktree_merge", "worktree_remove"])
 
     def test_there_is_exactly_one_worktree_create_path(self):
         """`create_worktree` stays the single gated creator — no second `git worktree add -b`."""

@@ -219,16 +219,16 @@ class R1StopEvidenceGate(_Run):
         from mokata.mcp import tools_spec
         self.assertIn("seed_ac_map(_repo_root(store), run_id, tests)",
                       inspect.getsource(emit.spec_commit))
-        self.assertIn("spec_commit(store, spec, run_id=run_id, tests=tests)",
+        self.assertIn("spec_commit(store, spec, tree=tree, run_id=run_id,\n",
                       inspect.getsource(emit))
-        self.assertIn("spec_commit(store, spec, run_id=run_id, tests=test_refs)",
+        self.assertIn("spec_commit(store, spec, tree=surface.root, run_id=run_id,\n",
                       inspect.getsource(tools_spec))
 
     def test_R1_the_spec_commit_lands_the_planned_map(self):
         from mokata.engine.emit import spec_commit
         from mokata.engine.spec import AcceptanceCriterion, Spec, TestRef
         spec = Spec("parser", [AcceptanceCriterion("AC-1", "x"), AcceptanceCriterion("AC-2", "y")])
-        spec_commit(self.surface.state, with_tasks(spec), run_id="r1",
+        spec_commit(self.surface.state, with_tasks(spec), tree=self.d, run_id="r1",
                     tests=[TestRef("test_a", ["AC-1"]), TestRef("test_b", ["AC-2"])])
         self.assertEqual({"AC-1": ["test_a"], "AC-2": ["test_b"]},
                          TR.read_test_record(self.d, "r1")["planned"])

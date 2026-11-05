@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -70,6 +71,16 @@ def render(run_id: str, data: Dict[str, Any]) -> str:
     body = dict(data)
     body["run_id"] = run_id
     return json.dumps(body, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+
+
+def tree_root(tree: str, repo_root: str) -> str:
+    """The WORKING TREE a committed spec is written into (0.0.27 SEC-HARDEN): the linked worktree
+    `tree` is in, else `repo_root`. The run state is ONE store, in the main checkout (P31), but the
+    tracked `.mokata/specs/<run>.json` is a file the user commits IN THE TREE THEY RAN IN — writing
+    it into the main checkout from a worktree was a write outside the tree, onto someone else's
+    branch, while the message told the user to commit a file their own tree did not have."""
+    from .repo_identity import worktree_toplevel
+    return (worktree_toplevel(tree) if tree else None) or repo_root
 
 
 def write_committed(root: str, run_id: str, data: Dict[str, Any]) -> str:
@@ -121,9 +132,139 @@ def load_committed(root: str) -> CommittedSpecs:
                 data = json.load(fh)
             if not isinstance(data, dict):
                 raise ValueError("not an object")
-            out.specs.append(Spec.from_dict(data))
+            out.specs.append(_spec_from_file(data))
         except (OSError, ValueError, TypeError, KeyError):
             out.skipped.append(name)
+    return out
+
+
+def _spec_from_file(data: Dict[str, Any]) -> Any:
+    """A committed file as a Spec carrying its OWN declared AC -> test map (`tests[]`, written at
+    emit). A file without one (written before it existed) has `tests=None`: its tests are not
+    graded, and the spec must be re-emitted to record them."""
+    from .engine.spec import Spec, TestRef
+    spec = Spec.from_dict(data)
+    spec.committed = True
+    raw = data.get("tests")
+    if isinstance(raw, list):
+        spec.tests = [TestRef(name=str(t["name"]), ac_ids=[str(a) for a in t.get("ac_ids", [])])
+                      for t in raw if isinstance(t, dict) and "name" in t]
+    return spec
+
+
+_DRIVE = re.compile(r"^[A-Za-z]:")
+
+
+def normalize_rel(path: str) -> str:
+    """A repo-relative path in ONE spelling: '/' separators, no './' and no '//'. Raises ValueError
+    for what cannot name a file inside the repo: empty, absolute, a drive letter, or any '..'.
+    `tests\\x.py`, `./tests/x.py` and `tests//x.py` are the same file and must compare equal."""
+    from .repo_paths import as_name
+    text = str(as_name(str(path)))
+    if not text.strip():
+        raise ValueError("an empty test path")
+    if text.startswith("/") or _DRIVE.match(text):
+        raise ValueError(f"'{path}' is an absolute path — use a path relative to the repo root")
+    parts = [seg for seg in text.split("/") if seg not in ("", ".")]
+    if ".." in parts:
+        raise ValueError(f"'{path}' climbs out of the repo ('..') — use a path inside it")
+    if not parts:
+        raise ValueError(f"'{path}' names no file")
+    return "/".join(parts)
+
+
+def _declared_file(declared: str) -> Optional[str]:
+    """The normalised file part of a `file::test` name, or None for a bare name / bad path."""
+    file_part, sep, _rest = declared.partition("::")
+    if not sep:
+        return None
+    try:
+        return normalize_rel(file_part)
+    except ValueError:
+        return None
+
+
+def _test_matches(declared: str, scanned: Any) -> bool:
+    """Is the scanned test the one the spec declared? Only a FULL `file::test` counts: the file
+    (normalised) AND the test name must both agree. A bare name matches nothing — it would match
+    that name in any file, so another spec's test would prove this one's criterion."""
+    file_part = _declared_file(declared)
+    if file_part is None:
+        return False
+    return (file_part == normalize_rel(scanned.path)
+            and declared.partition("::")[2].split("::")[-1] == scanned.name)
+
+
+def canonical_test_refs(root: str, tests: List[Any]) -> List[Any]:
+    """Every declared test as a full, normalised `file::test`, for a spec that will be committed.
+    A bare name is resolved to its file in the working tree; found in none or in several files, the
+    emit REFUSES (ValueError) naming what it found. A `file::test` is only normalised: a planned
+    test whose file is not written yet is legitimate (spec first, RED test after)."""
+    from .engine.spec import TestRef
+    bare = {t.name for t in tests if "::" not in t.name}
+    found = _find_tests(root, bare) if bare else {}
+    out: List[Any] = []
+    for t in tests:
+        if "::" in t.name:
+            file_part, _sep, rest = t.name.partition("::")
+            name = f"{normalize_rel(file_part)}::{rest}"
+        else:
+            where = found.get(t.name, [])
+            if len(where) != 1:
+                raise ValueError(
+                    f"test '{t.name}' is a bare name and cannot be recorded in the committed spec: "
+                    + (f"it is in {len(where)} files ({', '.join(where)}) — say which with "
+                       f"'file::{t.name}'" if where else
+                       f"no file in the repo defines it — write it as 'file::{t.name}'"))
+            name = f"{where[0]}::{t.name}"
+        out.append(TestRef(name=name, ac_ids=list(t.ac_ids), path=t.path, line=t.line,
+                           resolved_from="" if "::" in t.name else t.name))
+    return out
+
+
+def resolution_lines(tests: List[Any]) -> List[str]:
+    """One line per bare test name the emit resolved to a file, so a reviewer can see WHICH file's
+    test a spec is leaning on: `test_x -> tests/test_alpha.py::test_x`."""
+    return [f"{t.resolved_from} -> {t.name}" for t in tests if getattr(t, "resolved_from", "")]
+
+
+def _find_tests(root: str, names: set) -> Dict[str, List[str]]:
+    """Name -> the repo-relative files that define a test of that name (every test, tagged or not)."""
+    from . import languages
+    from .repo_paths import name_of
+    from .repo_walk import prune_source_dirs
+    where: Dict[str, List[str]] = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        prune_source_dirs(dirpath, dirnames)
+        for fn in filenames:
+            if not languages.is_source_file(fn):
+                continue
+            path = os.path.join(dirpath, fn)
+            try:
+                with open(path, encoding="utf-8", errors="replace") as fh:
+                    lines = fh.read().splitlines()
+            except OSError:
+                continue
+            for name, _line, _body in languages.language_for(fn).tests(lines):
+                if name in names:
+                    rel = name_of(path, root)
+                    if rel not in where.setdefault(name, []):
+                        where[name].append(rel)
+    return where
+
+
+def attributed_tests(spec: Any, scanned: List[Any]) -> List[Any]:
+    """The scanned tests that count as THIS spec's proof: a test the spec declared for an AC, that
+    really carries that AC's id in the tree. Another spec's AC-1 test never appears here."""
+    from .engine.spec import TestRef
+    out: List[Any] = []
+    for t in scanned:
+        ids = [aid for d in (spec.tests or []) if _test_matches(d.name, t)
+               for aid in d.ac_ids if aid in t.ac_ids]
+        if ids:
+            # the FULL normalised `file::test`, so a reviewer sees whose file proves the AC
+            out.append(TestRef(name=f"{normalize_rel(t.path)}::{t.name}",
+                               ac_ids=list(dict.fromkeys(ids)), path=t.path, line=t.line))
     return out
 
 
@@ -137,5 +278,7 @@ def committed_path_for(root: str, run_id: Optional[str]) -> Optional[str]:
 
 
 __all__ = ["MAX_COMMITTED", "NO_COMMITTED_NOTE", "SETTING", "SPECS_DIRNAME", "CommittedSpecs",
-           "commit_enabled", "committed_path_for", "load_committed", "render", "spec_path",
+           "attributed_tests", "canonical_test_refs", "commit_enabled", "normalize_rel",
+           "resolution_lines", "committed_path_for", "load_committed", "render",
+           "spec_path",
            "specs_dir", "write_committed"]

@@ -7,7 +7,7 @@
         "200": {"media": "json", "schema": {
           "type": "object",
           "required": ["schema", "tabs", "active", "closed", "expanded", "collapsed", "mode",
-                       "panel", "focus", "run", "saved_at", "sample", "refused", "live"],
+                       "theme", "theme_unknown", "single_keys", "focus", "run", "saved_at", "sample", "refused", "live"],
           "properties": {
             "schema": {"type": "integer"},
             "tabs": {"type": "array", "items": {"$ref": "#/schemas/WorkspaceTab"}},
@@ -16,6 +16,9 @@
             "collapsed": {"type": "array", "items": {"type": "string"}},
             "sample": {"type": "boolean"},
             "saved_at": {"type": "number"},
+            "theme": {"enum": ["system", "dark", "light", "hc-dark", "hc-light"]},
+            "theme_unknown": {"type": ["string", "null"]},
+            "single_keys": {"type": "boolean"},
             "live": {"type": "object", "required": ["focus", "run", "pending", "notes"],
                      "properties": {"notes": {"type": "array", "items": {"type": "string"}},
                        "pending": {"type": "array", "items": {"type": "object",
@@ -28,7 +31,9 @@
       "params": {"body": {"tabs": "[{kind: file|diff|commit, path, source?, sha?, line, scroll, pinned}]",
                           "active": "the active tab's key", "closed": "recently closed tabs (reopen)",
                           "expanded": "explorer dirs opened", "collapsed": "explorer dirs closed",
-                          "mode": "mode id", "panel": "panel id", "run": "the focused run"}},
+                          "mode": "view id", "run": "the focused run",
+                          "theme": "system | dark | light | hc-dark | hc-light (anything else saves as system)",
+                          "single_keys": "false turns the one-key shortcuts off (WCAG 2.1.4); anything else is on"}},
       "responses": {
         "200": {"media": "json", "schema": {"type": "object",
           "required": ["saved", "tabs", "dropped", "sample"],

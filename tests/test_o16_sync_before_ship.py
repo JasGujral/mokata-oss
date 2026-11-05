@@ -12,6 +12,7 @@ On REAL git, Claude Code-shaped worktrees (test_p31's fixture).
 from __future__ import annotations
 
 import os
+import time
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path; runs the interpreter preflight)
@@ -38,7 +39,7 @@ class TheBaseMovedWhileTheWorktreeLived(_Repo):
 
         r = self.post(c, "/api/worktree/merge", {"path": wt})
         self.assertEqual("blocked", r["stage"], r)
-        self.assertIn("Sync it first", r["reason"])
+        self.assertIn("Sync (rebase onto it)", r["reason"])
 
         r = self._approve(c, "sync", {"path": wt})
         self.assertEqual("done", r["stage"], r)
@@ -46,9 +47,16 @@ class TheBaseMovedWhileTheWorktreeLived(_Repo):
         _git(wt, "merge-base", "--is-ancestor", theirs, "HEAD")   # the base's change is under it
         self.assertEqual("O = 1\n", open(os.path.join(wt, "src", "other.py"), encoding="utf-8").read())
 
+        from mokata import merge_gate as MG
+        MG.file_override(self.main, wt, "a human's reason for landing it", actor="jas")
         r = self._approve(c, "merge", {"path": wt})
-        self.assertEqual("done", r["stage"], r)
-        self.assertTrue(r["result"]["merged"], r)
+        self.assertEqual("started", r["stage"], r)
+        deadline = time.time() + 60
+        while (body := c.get(f"/api/jobs/{r['id']}").json())["job"]["state"] not in (
+                "done", "failed", "cancelled") and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertEqual("done", body["job"]["state"], body)
+        self.assertTrue(body["result"]["merged"], body)
         for path, text in (("src/feature.py", "F = 1\n"), ("src/other.py", "O = 1\n")):
             with self.subTest(path):
                 with open(os.path.join(self.main, *path.split("/")), encoding="utf-8") as fh:

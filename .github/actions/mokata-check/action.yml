@@ -27,8 +27,16 @@ inputs:
     description: "Path the PR review-comment body (markdown) is written to."
     required: false
     default: "mokata-check-comment.md"
+  evidence-file:
+    description: >-
+      Path the evidence render (markdown) is written to. It is appended to the job's step summary,
+      budgeted to GitHub's 1 MiB step-summary limit (what does not fit is disclosed, never cut).
+    required: false
+    default: "mokata-evidence.md"
   fail-on-block:
-    description: "Fail the check (non-zero exit) when mokata blocks. Set to 'false' for report-only."
+    description: >-
+      Fail the check (non-zero exit) when mokata blocks. Set to 'false' for report-only, which
+      still fails (exit 2) when the check could not run.
     required: false
     default: "true"
 
@@ -36,6 +44,12 @@ outputs:
   blocked:
     description: "'true' when mokata blocked the PR."
     value: ${{ steps.run.outputs.blocked }}
+  refused:
+    description: >-
+      'true' when the check could NOT RUN (the base could not be resolved, usually a shallow
+      checkout): nothing was checked, which is neither a pass nor a block. Fix: `actions/checkout`
+      with `fetch-depth: 0`, or fetch the base. `blocked` is 'false' in that case.
+    value: ${{ steps.run.outputs.refused }}
   comment-file:
     description: "Path to the written review-comment body."
     value: ${{ inputs.comment-file }}
@@ -59,10 +73,29 @@ runs:
         fi
         fail_flag=""
         if [ "${{ inputs.fail-on-block }}" != "true" ]; then fail_flag="--no-fail"; fi
+        rm -f "${{ inputs.comment-file }}" "${{ inputs.evidence-file }}"   # never read a stale one
         set +e
         $ENGINE ci-check --path "${{ inputs.path }}" --base "$base" \
-          --comment-file "${{ inputs.comment-file }}" $fail_flag | tee -a "$GITHUB_STEP_SUMMARY"
-        rc=${PIPESTATUS[0]}
+          --comment-file "${{ inputs.comment-file }}" \
+          --evidence-file "${{ inputs.evidence-file }}" $fail_flag
+        rc=$?
         set -e
-        if [ "$rc" -ne 0 ]; then echo "blocked=true" >> "$GITHUB_OUTPUT"; else echo "blocked=false" >> "$GITHUB_OUTPUT"; fi
+        # The evidence render already carries the verdicts; it is budgeted to the step-summary limit.
+        if [ -f "${{ inputs.evidence-file }}" ]; then cat "${{ inputs.evidence-file }}" >> "$GITHUB_STEP_SUMMARY"; fi
+        # rc 0 = a verdict, 1 = a real block, 2 = the check COULD NOT RUN (refused). A refusal is
+        # never published as a block, and its reason reaches the step summary in plain words.
+        blocked=false; refused=false
+        if [ "$rc" -eq 2 ]; then
+          refused=true
+          {
+            echo "## mokata PR check: NOT RUN"
+            if [ -f "${{ inputs.comment-file }}" ]; then cat "${{ inputs.comment-file }}"; else
+              echo "mokata could not resolve the base \`$base\` to a git diff, so nothing was checked (this is not a pass). Fix: check the ref name and fetch the base: use actions/checkout with fetch-depth: 0, or git fetch origin <base-branch>."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+        elif [ "$rc" -ne 0 ]; then
+          blocked=true
+        fi
+        echo "blocked=$blocked" >> "$GITHUB_OUTPUT"
+        echo "refused=$refused" >> "$GITHUB_OUTPUT"
         exit "$rc"

@@ -17,7 +17,7 @@ MK.el = el;
 
 const ui = (MK.ui = {
   focus: null, view: "live", picked: [], pickedPaths: {}, sample: false, state: null, first: true,
-  mode: "review", diff: null, files: [], sel: 0, filter: "all",
+  mode: "review", tab: "review", back: null, singleKeys: true, diff: null, files: [], sel: 0, filter: "all",
   impact: {}, outlines: {}, hunkIdx: -1, inspSym: null,
 });
 
@@ -100,14 +100,15 @@ MK.splitPath = splitPath;
 const ST_LETTER = { added: "A", deleted: "D", renamed: "R", modified: "M" };
 MK.ST_LETTER = ST_LETTER;
 
-// A basis badge: solid = structural (the graph answered), dashed = lexical (a name match).
+// A basis badge: solid = from the call graph, dashed = a name match only. §6: plain words on the
+// badge; the basis word itself is the tooltip.
+const BASIS_LABEL = { structural: "call graph", verified_empty: "verified: none", lexical: "name match" };
 function basisBadge(basis) {
   const b = basis || "lexical";
   const structural = b === "structural" || b === "verified_empty";
-  const s = el("span", "basis " + (structural ? "structural" : "lexical"),
-               b === "verified_empty" ? "verified empty" : b);
-  s.title = structural ? "structural — the graph holds this edge"
-                       : "lexical — matched by name only; the graph has no edge here";
+  const s = el("span", "basis " + (structural ? "structural" : "lexical"), BASIS_LABEL[b] || b);
+  s.title = structural ? `${b} — the call graph holds this (proved, not guessed)`
+                       : `${b} — matched by name only; the call graph has no edge here`;
   return s;
 }
 MK.basisBadge = basisBadge;
@@ -152,47 +153,158 @@ function markSeenFile(f) { const m = loadSeen(); m[f.path] = sigOf(f); saveSeen(
 function saveView() { if (MK.saveView) MK.saveView(); }
 
 // ------------------------------------------------------------------------------- screens
-// 0.0.26 P34 (IA-ONE-NAV, R26) — ONE navigation: the rail IS the screen. A screen is a rail button
-// (`data-screen`), a centre view (#view-<id>), optionally a side panel (#panel-<id>) and the
-// inspector. `MK.setMode(id)` is the ONLY way to change screen: the rail highlight, the visible
-// view, the side panel and body[data-mode] are all set from the same id, so they cannot disagree.
-// (The id is `ui.mode` for historic reasons; there is no second "mode" any more — no mode bar, no
-// left-panel switch.) A feature adds a screen through the registry (`panels: [{id, title, …}]`),
-// which appends to MK.SCREENS. `chord` is the letter after `g` (§5.5).
-const SCREENS = [
-  { id: "sessions", title: "Sessions", chord: "s" },
+// 0.0.27 UX-SIMPLIFY — THREE screens, the top-bar tabs: Review · Sessions · Code. A screen has one
+// or more VIEWS (its sub-tabs: Review › Diff · Proof · Explain; Sessions › Timeline · Plan & spec ·
+// Worktree); a feature adds a view through the registry (`panels: [{id, title, tab, …}]`), which
+// appends to MK.VIEWS. The graph is an OVERLAY view: "Expand graph" opens it over the screen it was
+// asked from, and Back / Esc returns there. `MK.setMode(id)` is the ONLY switch — id is a view id
+// or a screen id (a screen goes to the view last shown on it): the top tab, the sub-tab, the
+// visible view, the side panel and the inspector are all set from the same id, so they cannot
+// disagree. (`ui.mode` is the visible view; `ui.tab` its screen.)
+const TABS = [
   { id: "review", title: "Review", chord: "r" },
+  { id: "sessions", title: "Sessions", chord: "s" },
   { id: "navigate", title: "Code", chord: "c" },
-  { id: "search", title: "Search", chord: null, keys: "⌘⇧F" },
-  { id: "graph", title: "Impact", chord: "i" },
-  { id: "plan", title: "Plan", chord: "p" },
 ];
-MK.SCREENS = SCREENS;
+MK.TABS = TABS;
+const VIEWS = [
+  { id: "review", title: "Diff", tab: "review", order: 0 },
+  { id: "navigate", title: "Code", tab: "navigate", order: 0 },
+  { id: "plan", title: "Plan & spec", tab: "sessions", order: 20 },
+  { id: "graph", title: "Graph", tab: null, overlay: true },
+];
+MK.VIEWS = VIEWS;
 const INSPECTOR = { review: "insp-review", navigate: "insp-nav" };
+const lastView = {};                                   // screen -> the view last shown on it
+
+function viewsOf(tab) {
+  return VIEWS.filter((v) => v.tab === tab).sort((x, y) => (x.order || 0) - (y.order || 0));
+}
+MK.viewsOf = viewsOf;
+function resolveView(id) {
+  const v = VIEWS.find((x) => x.id === id);
+  if (v) return v;
+  if (!TABS.some((t) => t.id === id)) return null;
+  return VIEWS.find((x) => x.id === lastView[id]) || viewsOf(id)[0] || null;
+}
+MK.resolveView = resolveView;
+// A top tab, a `g x` chord or a "Go to:" command: the SCREEN, on the view last shown on it. (Two
+// screens share their first view's id — review, navigate — so a screen is never asked for by
+// setMode, which reads an id as a view first.)
+function showTab(tab) {
+  const v = VIEWS.find((x) => x.id === lastView[tab]) || viewsOf(tab)[0];
+  if (v) setMode(v.id);
+}
+MK.showTab = showTab;
 
 function setMode(id) {
-  if (!SCREENS.some((s) => s.id === id)) return;
-  const changedMode = ui.mode !== id;
-  ui.mode = id;
-  for (const b of document.querySelectorAll("nav.rail .rail-btn")) {
-    const on = b.dataset.screen === id;
+  const v = resolveView(id);
+  if (!v) return;
+  const tab = v.overlay ? (ui.tab || "review") : v.tab;
+  if (v.overlay && ui.mode !== v.id) { ui.back = ui.mode; ui.opener = document.activeElement; }
+  const changedMode = ui.mode !== v.id;
+  ui.mode = v.id;
+  ui.tab = tab;
+  if (!v.overlay) lastView[tab] = v.id;
+  for (const b of document.querySelectorAll("#screen-tabs [data-tab]")) {
+    const on = b.dataset.tab === tab;
+    b.setAttribute("aria-selected", String(on));
+    b.tabIndex = on ? 0 : -1;
     b.classList.toggle("active", on);
-    if (on) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
   }
-  for (const s of SCREENS) {
-    const v = $("view-" + s.id), p = $("panel-" + s.id);
-    if (v) v.hidden = s.id !== id;
-    if (p) p.hidden = s.id !== id;
-  }
-  for (const [sc, insp] of Object.entries(INSPECTOR)) $(insp).hidden = sc !== id;
-  document.body.dataset.mode = id;
-  document.body.dataset.side = $("panel-" + id) ? "1" : "0";
-  document.body.dataset.insp = INSPECTOR[id] ? "1" : "0";
+  $("shell").setAttribute("aria-labelledby", "tab-" + tab);
+  for (const x of VIEWS) { const e = $("view-" + x.id); if (e) e.hidden = x.id !== v.id; }
+  const side = v.overlay || v.full ? null : "panel-" + (v.side ? v.id : tab);
+  for (const p of document.querySelectorAll("#left > section.lp")) p.hidden = p.id !== side;
+  const insp = v.overlay || v.full ? null : INSPECTOR[v.id] || null;
+  for (const iid of Object.values(INSPECTOR)) $(iid).hidden = iid !== insp;
+  $("sessions-head").hidden = tab !== "sessions" || !!v.overlay;
+  renderSubtabs(v);
+  document.body.dataset.mode = v.id;
+  document.body.dataset.tab = tab;
+  document.body.dataset.side = side && $(side) ? "1" : "0";
+  document.body.dataset.insp = insp ? "1" : "0";
   saveView();
-  if (MK.onMode) MK.onMode(id);
+  if (MK.onMode) MK.onMode(v.id);
   if (changedMode && MK.refreshIfStale) MK.refreshIfStale();   // P35: views a delta did not refresh
 }
 MK.setMode = setMode;
+
+// The screen's sub-tabs (WAI-ARIA tabs: roving tabindex, arrows / Home / End move and select).
+function renderSubtabs(v) {
+  const host = $("subtabs");
+  const list = v.overlay ? [] : viewsOf(v.tab);
+  host.hidden = list.length < 2;
+  host.setAttribute("aria-label", (TABS.find((t) => t.id === v.tab) || { title: "" }).title + " views");
+  host.replaceChildren();
+  if (list.length < 2) return;                      // one view: no sub-tab strip to select in
+  for (const x of list) {
+    const b = el("button", "subtab" + (x.id === v.id ? " active" : ""), x.title);
+    b.type = "button";
+    b.id = "subtab-" + x.id;
+    b.dataset.view = x.id;
+    b.setAttribute("role", "tab");
+    b.setAttribute("aria-selected", String(x.id === v.id));
+    b.setAttribute("aria-controls", "view-" + x.id);
+    b.tabIndex = x.id === v.id ? 0 : -1;
+    host.append(b);
+  }
+}
+
+// Arrow keys over a tablist: move to the neighbour, select it and focus it (automatic activation).
+function tabKeys(ev, sel, pick) {
+  const keys = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1, Home: "first", End: "last" };
+  const k = keys[ev.key];
+  if (k === undefined) return;
+  const all = [...document.querySelectorAll(sel)].filter((b) => !b.hidden && !b.disabled);
+  const at = all.indexOf(ev.target);
+  if (at < 0) return;
+  ev.preventDefault();
+  const to = k === "first" ? 0 : k === "last" ? all.length - 1 : (at + k + all.length) % all.length;
+  pick(all[to]);
+  const now = document.querySelector(`${sel}[aria-selected="true"]`) || all[to];
+  now.focus();
+}
+MK.tabKeys = tabKeys;
+
+// Back from an overlay (the graph): to the view it was opened over.
+// Back (the button or Esc) hands focus to what opened the overlay — Expand graph — or, when that
+// is gone, to the screen's selected tab: it never falls to <body> (round 2, M3).
+function back() {
+  if (!VIEWS.some((x) => x.id === ui.mode && x.overlay)) return false;
+  setMode(ui.back && ui.back !== ui.mode ? ui.back : ui.tab);
+  focusShown(ui.opener, "#insp-ripple");
+  ui.opener = null;
+  return true;
+}
+MK.back = back;
+
+// Focus the first of `cands` (elements or selectors) a person can see and use; else the
+// screen's selected tab.
+function focusShown(...cands) {
+  const usable = (e) => e && e.focus && document.contains(e) && e !== document.body && !e.disabled
+    && e.getClientRects().length > 0;
+  for (const c of cands) {
+    const e = typeof c === "string" ? document.querySelector(c) : c;
+    if (usable(e)) { e.focus(); return e; }
+  }
+  const tab = document.querySelector('#screen-tabs [aria-selected="true"]');
+  if (tab) tab.focus();
+  return tab;
+}
+MK.focusShown = focusShown;
+
+// WCAG 2.1.4 — single-character shortcuts can be turned OFF (Keys dialog, the palette, saved per
+// workspace). Off, no one-key binding fires: `] [ j k u e g ? . < > !` all wait for a modifier-free
+// key to mean text again. Esc and the Ctrl/⌘ and Alt chords are never single-key.
+MK.singleKeysOn = () => ui.singleKeys !== false;
+function setSingleKeys(on, quiet) {
+  ui.singleKeys = !!on;
+  const c = $("single-keys");
+  if (c) c.checked = ui.singleKeys;
+  if (!quiet) saveView();
+}
+MK.setSingleKeys = setSingleKeys;
 
 // ------------------------------------------------------------------------------- viewing
 // 0.0.26 P33 (R28) — ONE "Viewing" context: the session the window is focused on (or the
@@ -259,7 +371,7 @@ async function pickView(view) {
   if (view === "session") { if (ui.focus) { ui.view = "session"; await refresh(); } else setMode("sessions"); return; }
   ui.view = view;
   if (ui.focus) { ui.focus = null; ui.picked = []; await api("/api/focus", { session: null }); }
-  if (!["review", "navigate", "search"].includes(ui.mode)) setMode("review");
+  if (!["review", "navigate"].includes(ui.mode)) setMode("review");
   await refresh();
 }
 MK.pickView = pickView;
@@ -274,8 +386,8 @@ async function setFocus(sid) {
 MK.setFocus = setFocus;
 
 // ------------------------------------------------------------------------------- one write / two moments
-// The bottom timeline is gone (P34): a write is picked on the Sessions screen (Per write — click
-// one to see it, shift-click a second to compare the two moments; or the Replay scrubber).
+// The bottom timeline is gone (P34): a write is picked on Sessions › Timeline (click one to see
+// it, shift-click a second to compare the two moments).
 async function pick(e, add) {
   ui.picked = add ? (ui.picked.includes(e.id) ? ui.picked.filter((x) => x !== e.id) : [...ui.picked, e.id].slice(-2)) : [e.id];
   ui.view = "between";
@@ -296,15 +408,20 @@ function renderBranches(state) {
 
 // ------------------------------------------------------------------------------- the diff
 async function loadDiff() {
-  if (ui.view === "session" && ui.focus) return api("/api/session?id=" + encodeURIComponent(ui.focus));
+  // 0.0.27 P5: "Ignore whitespace" (features/diffview.js) is the diff routes' own `ws` parameter —
+  // the server filters, and says how many line changes it hid.
+  const ws = MK.dv && MK.dv.wsParam ? MK.dv.wsParam() : "";
+  const and = ws ? "&" + ws : "";
+  if (ui.view === "session" && ui.focus) return api("/api/session?id=" + encodeURIComponent(ui.focus) + and);
   if (ui.view === "between" && ui.picked.length) {
     // P33 (R9, B-F2): ONE pick = that write (the previous capture → this one); two = compare.
-    if (ui.picked.length === 1) return api("/api/session/write?snap=" + encodeURIComponent(ui.picked[0]));
-    return api(`/api/between?a=${encodeURIComponent(ui.picked[0])}&b=${encodeURIComponent(ui.picked[1])}`);
+    if (ui.picked.length === 1) return api("/api/session/write?snap=" + encodeURIComponent(ui.picked[0]) + and);
+    return api(`/api/between?a=${encodeURIComponent(ui.picked[0])}&b=${encodeURIComponent(ui.picked[1])}` + and);
   }
-  if (ui.view === "compare") return api(`/api/compare?base=${encodeURIComponent($("base").value)}&head=${encodeURIComponent($("head").value)}`);
-  if (ui.view === "pr") return api("/api/pr", { url: $("pr-url").value });
-  return api("/api/live" + (ui.showMokata ? "?mokata=1" : ""));
+  if (ui.view === "compare") return api(`/api/compare?base=${encodeURIComponent($("base").value)}&head=${encodeURIComponent($("head").value)}` + and);
+  if (ui.view === "pr") return api("/api/pr", ws ? { url: $("pr-url").value, ws: "ignore" } : { url: $("pr-url").value });
+  const qs = [ui.showMokata ? "mokata=1" : "", ws].filter(Boolean).join("&");
+  return api("/api/live" + (qs ? "?" + qs : ""));
 }
 
 const EMPTY_WHY = {
@@ -335,11 +452,10 @@ function acceptDiff(d) {
   $("diff-mokata-n").textContent = ui.showMokata ? "Showing the files mokata setup wrote." : `${hid} file(s) mokata setup wrote are hidden.`;
   $("diff-mokata-btn").textContent = ui.showMokata ? "hide them" : "show them";
   $("diff-empty-why").textContent = EMPTY_WHY[ui.view] || EMPTY_WHY.live;
+  if (MK.dv && MK.dv.onDiff) MK.dv.onDiff(d);      // P5: what "Ignore whitespace" hid, said
   $("nav-add").textContent = `+${d.added || 0}`;
   $("nav-del").textContent = `−${d.removed || 0}`;
-  const badge = $("rail-count");
-  badge.hidden = !ui.files.length;
-  badge.textContent = String(ui.files.length);
+  $("tab-review-n").textContent = ui.files.length ? String(ui.files.length) : "";
   loadImpacts();
   renderNavigator();
   showFile(ui.sel, { keepScroll: true });
@@ -389,7 +505,7 @@ function renderNavigator() {
     const im = ui.impact[x.path];
     if (im && im.status === "untested") {
       const r = el("span", "risk", "untested");
-      r.title = "changed code no test reaches (structural answer)";
+      r.title = "changed code no test reaches (from the call graph)";
       b.append(r);
     }
     b.append(el("span", "n-add mono small", `+${x.added}`), el("span", "n-del mono small", `−${x.removed}`));
@@ -406,6 +522,7 @@ function renderNavigator() {
     : `No file matches “${ui.filter}”.`;
   const pos = vis.findIndex((o) => o.i === ui.sel);
   $("pos-label").textContent = ui.files.length ? `${pos >= 0 ? pos + 1 : "–"} of ${vis.length}` : "";
+  reviewDone();
 }
 MK.renderNavigator = renderNavigator;
 
@@ -436,7 +553,12 @@ function showFile(i, opts) {
   renderInspector();
   ensureOutline(f);
   wantImpact(f);
+  historyFollows();
   if (MK.onDiffShown) MK.onDiffShown(f, o);       // tabs.js: the diff tab for this file
+}
+// the inspector's History tab follows the hunk in view (asked only while that tab is open)
+function historyFollows() {
+  if (ui.inspTab === "history" && MK.reviewHistory && !$("insp-review").hidden) MK.reviewHistory($("insp-history"));
 }
 MK.showFile = showFile;
 
@@ -449,6 +571,11 @@ function renderFile(f) {
     return wrap;
   }
   if (f.binary) { wrap.append(el("div", "bin", "binary or too large to show")); return wrap; }
+  // 0.0.27 P5: a changed file with no line changes says WHY (whitespace hidden, a pure rename, a
+  // mode change) instead of an empty box.
+  if (!(f.hunks || []).length) { wrap.append(el("div", "bin", MK.dv ? MK.dv.emptyWhy(f) : "no line changes")); return wrap; }
+  const dv = MK.dv;
+  if (dv) dv.startFile(f);
   const im = ui.impact[f.path];
   (f.hunks || []).forEach((h, k) => {
     const sec = el("section", "hunk");
@@ -461,15 +588,20 @@ function renderFile(f) {
     const verdict = hunkVerdict(im, sym, f);
     if (verdict) head.append(el("span", "hunk-badge " + verdict.cls, verdict.text));
     sec.append(head);
+    // P5: unified / split, lazily built blocks, intra-line marks — features/diffview.js
+    if (dv) { sec.append(dv.table(f, h, k)); wrap.append(sec); return; }
     const t = el("table", "d");
-    for (const [op, o, n, text] of h.lines) {
+    h.lines.forEach(([op, o, n, text], i) => {
       const tr = el("tr", op === "+" ? "add" : op === "-" ? "del" : "");
-      tr.append(el("td", "no", o ?? ""), el("td", "no", n ?? ""), el("td", "tx", (op === " " ? " " : op) + text));
+      const tx = el("td", "tx", (op === " " ? " " : op) + text);
+      tx.dataset.i = String(i);
+      tr.append(el("td", "no", o ?? ""), el("td", "no", n ?? ""), tx);
       t.append(tr);
-    }
+    });
     sec.append(t);
     wrap.append(sec);
   });
+  if (dv) { dv.gaps(wrap, f); dv.fileNote(wrap, f); }
   return wrap;
 }
 MK.renderFile = renderFile;
@@ -529,7 +661,7 @@ function hunkVerdict(im, sym, f) {
   if (!s) return null;
   if (s.verdict === "covered") return { cls: "", text: `covered · ${s.tests.length} test(s)` };
   if (s.verdict === "untested") return { cls: "risk", text: "untested change" };
-  return { cls: "lex", text: "coverage unknown (lexical)" };
+  return { cls: "lex", text: "coverage unknown (name match only)" };
 }
 
 async function ensureOutline(f) {
@@ -631,7 +763,7 @@ async function askImpact(f, fp) {
   if (ui.files[ui.sel] === now) { $("diff").replaceChildren(renderFile(now)); renderInspector(); }
 }
 
-// The status bar names the graph that is ACTUALLY answering (lane S): an answer that says the
+// Health › About names the graph that is ACTUALLY answering (lane S): an answer that says the
 // adopted graph degraded updates it — no extra request.
 MK.noteGraph = (note) => { const s = $("st-graph"); if (s && note) { s.textContent = note; s.classList.add("degraded"); } };
 
@@ -779,6 +911,10 @@ function moveFile(delta) {
   showFile(vis[pos].i);
 }
 MK.moveFile = moveFile;
+// the palette commands for the single keys (j k u e) call these — they work with single keys off
+MK.moveHunk = (d) => moveHunk(d);
+MK.nextUnseen = () => nextUnseen();
+MK.openCurrentInNavigate = () => openCurrentInNavigate();
 
 function moveHunk(delta) {
   const secs = [...document.querySelectorAll("#diff section.hunk")];
@@ -789,6 +925,7 @@ function moveHunk(delta) {
   const f = ui.files[ui.sel];
   const sym = f && f.hunks[ui.hunkIdx] ? hunkSymbol(f, f.hunks[ui.hunkIdx]) : null;
   if (sym && sym !== ui.inspSym) { ui.inspSym = sym; renderInspector(); }
+  historyFollows();
 }
 
 function nextUnseen() {
@@ -804,8 +941,34 @@ function markSeenNext() {
   const f = ui.files[ui.sel];
   if (!f) return;
   markSeenFile(f);
-  if (!nextUnseen()) renderNavigator();
+  if (nextUnseen()) return;
+  renderNavigator();
+  if (reviewDone()) { $("review-scroll").scrollTop = 0; $("review-done").focus(); }
 }
+MK.markSeenNext = markSeenNext;
+
+// §6 P1 — the review loop has an END: once every changed file is seen, Review says so and offers
+// the next step (prove it, land it), instead of "Mark seen · next" silently doing nothing.
+function reviewDone() {
+  const box = $("review-done");
+  const n = ui.files.length;
+  const all = n > 0 && ui.files.every(isSeen);
+  box.hidden = !all;
+  box.replaceChildren();
+  if (!all) return false;
+  const btn = (label, fn, cls) => { const b = el("button", cls || "btn ghost", label); b.type = "button"; b.onclick = fn; return b; };
+  const row = el("div", "row");
+  if (VIEWS.some((v) => v.id === "proof")) row.append(btn("Open Proof", () => setMode("proof"), "btn"));
+  if (VIEWS.some((v) => v.id === "worktrees")) row.append(btn("Worktree and merge", () => setMode("worktrees")));
+  // Review again hides this box (and the button in it): focus goes to the review's own next
+  // step, Mark seen · next — never to <body> (round 2, M3).
+  row.append(btn("Review again", () => { saveSeen({}); renderNavigator(); showFile(0); focusShown("#mark-seen"); }));
+  box.append(el("h2", "", `All ${n} file${n === 1 ? "" : "s"} reviewed`),
+             el("p", "small", "Next: check the change against its spec in Proof, then land it from its worktree with a gated merge."),
+             row);
+  return true;
+}
+MK.reviewDone = reviewDone;
 
 function openCurrentInNavigate() {
   const f = ui.files[ui.sel];
@@ -884,7 +1047,7 @@ function onBus(ev) {
   try { e = JSON.parse(ev.data); } catch (_) { return; }
   // ID3 `ide_open`: the agent points the human at code (the server contained the path).
   if (e && e.kind === "open" && typeof e.path === "string") {
-    if (MK.openFile) MK.openFile(e.path, e.line || 1, null, { reload: true });
+    if (MK.openFile) MK.openFile(e.path, e.line || 1, null, { reload: true, col: e.col || 0 });
     return;
   }
   if (!e || e.kind !== "edit" || typeof e.path !== "string") return;
@@ -934,22 +1097,22 @@ function live() {
 MK.live = live;
 
 // ------------------------------------------------------------------------------- keyboard
-// §5.5. The `g` chord goes to a screen (g s / g r / g c / g i / g p / g w — a feature screen names
-// its own letter); `?` lists every key. Both are reserved in registry.js. The chord listener runs in
-// the CAPTURE phase so the letter after `g` is the chord's, never a registry binding's.
+// §5.5. The `g` chord goes to a screen (g r / g s / g c); `?` lists every key. Both are reserved in
+// registry.js. The chord listener runs in the CAPTURE phase so the letter after `g` is the chord's,
+// never a registry binding's. With single-key shortcuts off (WCAG 2.1.4) neither fires.
 const chord = { at: 0 };
 const CHORD_MS = 1500;
 function chordScreen(letter) {
-  const s = SCREENS.find((x) => x.chord && x.chord === letter);
-  return s ? s.id : null;
+  const t = TABS.find((x) => x.chord === letter);
+  return t ? t.id : null;
 }
 MK.chordScreen = chordScreen;
 function onChord(ev) {
-  if (typing(ev) || ev.metaKey || ev.ctrlKey || ev.altKey) { chord.at = 0; return; }
+  if (typing(ev) || ev.metaKey || ev.ctrlKey || ev.altKey || !MK.singleKeysOn()) { chord.at = 0; return; }
   if (chord.at && Date.now() - chord.at < CHORD_MS && ev.key.length === 1) {
     chord.at = 0;
     const id = chordScreen(ev.key.toLowerCase());
-    if (id) { ev.preventDefault(); ev.stopImmediatePropagation(); setMode(id); }
+    if (id) { ev.preventDefault(); ev.stopImmediatePropagation(); showTab(id); }
     return;
   }
   chord.at = 0;
@@ -961,16 +1124,17 @@ function onChord(ev) {
 const CORE_KEYS = [
   ["] / [", "next / previous changed file"], ["j / k", "next / previous hunk or change"], ["u", "next unseen file"],
   ["e", "open the Review file in Code"], ["Alt+← / Alt+→", "back / forward"], ["> / < / !", "next / previous session · most urgent"],
-  ["Esc", "close the overlay"], ["?", "this list"],
+  ["Esc", "close the overlay · back from the graph"], ["?", "this list"],
 ];
 function keysHelp(open) {
   const box = $("keys-help");
   box.hidden = !open;
   if (!open) return;
+  $("single-keys").checked = MK.singleKeysOn();
   const t = $("keys-table");
   t.replaceChildren();
   const row = (k, what) => { const tr = el("tr"); tr.append(el("td", "mono", k), el("td", "", what)); t.append(tr); };
-  for (const s of SCREENS) row(s.chord ? `g ${s.chord}` : (s.keys || "—"), `go to ${s.title}`);
+  for (const s of TABS) row(`g ${s.chord}`, `go to ${s.title}`);
   for (const [k, w] of CORE_KEYS) row(k, w);
   const mac = /Mac|iPhone|iPad/.test(navigator.platform || "");
   const fmt = (k) => (MK.palette && MK.palette.keyLabel ? MK.palette.keyLabel(k, mac) : k);
@@ -983,15 +1147,18 @@ function onKey(ev) {
   const mod = ev.metaKey || ev.ctrlKey;
   if (ev.key === "Escape") {
     if (!$("keys-help").hidden) { keysHelp(false); return; }
-    if (!$("viewing-pop").hidden) { openViewing(false); return; }
+    if (!$("viewing-pop").hidden) { openViewing(false); $("session-chip").focus(); return; }
+    if (!$("wait-list").hidden) { MK.waiting && MK.waiting.toggle(false); return; }
+    if (!typing(ev) && back()) { ev.preventDefault(); return; }
   }
-  // ⌘P / ⌘K / ⌘⇧P / ⌘G and the palette's own keys live in static/features/palette.js (0.0.26 P3).
+  // ⌘P / ⌘K and the palette's own keys live in static/features/palette.js (0.0.26 P3).
   if (typing(ev) || mod || ev.altKey && !(ev.key === "ArrowLeft" || ev.key === "ArrowRight")) return;
   if (ev.altKey && MK.navHistory) {
     if (ev.key === "ArrowLeft") { ev.preventDefault(); MK.navHistory(-1); }
     if (ev.key === "ArrowRight") { ev.preventDefault(); MK.navHistory(1); }
     return;
   }
+  if (!MK.singleKeysOn()) return;
   const inNav = ui.mode === "navigate";
   switch (ev.key) {
     case "]": ev.preventDefault(); if (inNav && MK.navChangedFile) MK.navChangedFile(1); else moveFile(1); break;
@@ -1005,6 +1172,19 @@ function onKey(ev) {
 }
 MK.onKey = onKey;
 
+// The Review inspector's tabs: Impact · History (blame of the hunk in view, review.js).
+function showInspTab(which) {
+  for (const b of document.querySelectorAll("#insp-review-tabs [data-itab]")) {
+    const on = b.dataset.itab === which;
+    b.setAttribute("aria-selected", String(on)); b.tabIndex = on ? 0 : -1; b.classList.toggle("active", on);
+  }
+  $("ipane-impact").hidden = which !== "impact";
+  $("ipane-history").hidden = which !== "history";
+  ui.inspTab = which;
+  if (which === "history" && MK.reviewHistory) MK.reviewHistory($("insp-history"));
+}
+MK.showInspTab = showInspTab;
+
 // ------------------------------------------------------------------------------- wiring
 MK.wireCore = function wireCore() {
   $("head").onchange = () => { $("head").dataset.touched = "1"; };
@@ -1012,18 +1192,23 @@ MK.wireCore = function wireCore() {
   $("pr-go").onclick = () => pickView("pr");
   for (const b of document.querySelectorAll("#viewing-pop button.view[data-view]")) b.onclick = () => pickView(b.dataset.view);
   $("viewing-pick").onclick = () => { openViewing(false); setMode("sessions"); };
-  $("viewing-close").onclick = () => openViewing(false);
+  $("viewing-close").onclick = () => { openViewing(false); $("session-chip").focus(); };
   $("session-chip").onclick = () => openViewing();
   document.addEventListener("mousedown", (ev) => {
     const p = $("viewing-pop");
     if (!p.hidden && !p.contains(ev.target) && !$("session-chip").contains(ev.target)
         && !(ev.target.closest && ev.target.closest(".combo-list"))) openViewing(false);
   });
-  // The rail: one listener for every screen button, the core's and a feature's.
-  document.querySelector("nav.rail").addEventListener("click", (ev) => {
-    const b = ev.target.closest && ev.target.closest(".rail-btn");
-    if (b && b.dataset.screen) setMode(b.dataset.screen);
-  });
+  // The three screens and the current screen's sub-tabs.
+  const tabs = $("screen-tabs");
+  tabs.addEventListener("click", (ev) => { const b = ev.target.closest && ev.target.closest("[data-tab]"); if (b) showTab(b.dataset.tab); });
+  tabs.addEventListener("keydown", (ev) => tabKeys(ev, "#screen-tabs [data-tab]", (b) => showTab(b.dataset.tab)));
+  const sub = $("subtabs");
+  sub.addEventListener("click", (ev) => { const b = ev.target.closest && ev.target.closest("[data-view]"); if (b) setMode(b.dataset.view); });
+  sub.addEventListener("keydown", (ev) => tabKeys(ev, "#subtabs [data-view]", (b) => setMode(b.dataset.view)));
+  const itabs = $("insp-review-tabs");
+  itabs.addEventListener("click", (ev) => { const b = ev.target.closest && ev.target.closest("[data-itab]"); if (b) showInspTab(b.dataset.itab); });
+  itabs.addEventListener("keydown", (ev) => tabKeys(ev, "#insp-review-tabs [data-itab]", (b) => showInspTab(b.dataset.itab)));
   for (const b of document.querySelectorAll("button.pill[data-filter]")) {
     b.onclick = () => { ui.filter = b.dataset.filter; renderNavigator(); if (ui.filter === "untested") loadImpacts(true); };
   }
@@ -1032,10 +1217,14 @@ MK.wireCore = function wireCore() {
   $("file-next").onclick = () => moveFile(1);
   $("mark-seen").onclick = markSeenNext;
   $("open-nav").onclick = openCurrentInNavigate;
+  $("explain-changes").onclick = () => setMode("explain");
+  $("get-started-btn").onclick = () => MK.openHealth && MK.openHealth("welcome");
   $("insp-pick").onchange = () => { ui.inspSym = $("insp-pick").value; renderInspector(); };
   $("insp-ripple").onclick = () => { if (MK.openGraph && ui.inspSym) MK.openGraph("ripple", ui.inspSym); };
+  $("g-back").onclick = back;
   $("keys-close").onclick = () => keysHelp(false);
   $("keys-help").addEventListener("mousedown", (ev) => { if (ev.target === $("keys-help")) keysHelp(false); });
+  $("single-keys").onchange = () => setSingleKeys($("single-keys").checked);
   window.addEventListener("keydown", onChord, true);
   document.addEventListener("keydown", onKey);
 };

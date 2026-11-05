@@ -33,7 +33,7 @@ from .prompt import _stdin_is_tty, read_approve_edit_reject
 class Setting:
     key: str            # full dotted manifest key, e.g. "settings.ux.progress"
     rel: str            # the settings-relative key, e.g. "ux.progress" (matches manifest.md)
-    allowed: str        # allowed-values hint, e.g. 'terminal | dashboard | both'
+    allowed: str        # allowed-values hint, e.g. 'terminal | ide | both'
     default: str        # the documented default, e.g. "terminal"
     description: str     # the one-line "Feature" description
 
@@ -44,8 +44,8 @@ class Setting:
 # need a sub-key/parameter and are edited with `mokata config set <key> <value>` directly.
 SETTINGS: Tuple[Setting, ...] = (
     Setting("settings.ux.progress", "ux.progress",
-            "terminal | dashboard | both", "terminal",
-            "run-observability tier (Stage 40)"),
+            "terminal | ide | both", "terminal",
+            "where `mokata watch` shows the run: terminal lanes, the IDE's Sessions screen, or both"),
     Setting("settings.ux.statusline", "ux.statusline", "true | false", "true",
             "the always-on pipeline-stage badge (Stage 54b) — opt-out"),
     Setting("settings.ux.badge_verbosity", "ux.badge_verbosity",

@@ -27,7 +27,7 @@ import subprocess
 
 TYPE_CHECKING = False        # `typing` costs a hook ~3 ms and is only for readers here
 if TYPE_CHECKING:
-    from typing import Dict
+    from typing import Dict, Optional
 
 
 def _windows() -> bool:
@@ -41,7 +41,7 @@ def hidden() -> Dict[str, int]:
     return {}
 
 
-def detached() -> "Dict[str, object]":
+def detached(suspended: bool = False, nt: "Optional[bool]" = None) -> "Dict[str, object]":
     """`subprocess` kwargs for a background child that must OUTLIVE its parent and show no window:
     a new session on POSIX; on Windows a new process group with its own HIDDEN console.
 
@@ -52,11 +52,45 @@ def detached() -> "Dict[str, object]":
     of the launching console's Ctrl-C/close group, so it is not taken down with its parent
     (`start_new_session` is POSIX-only and silently ignored on Windows). Used by the IDE server start
     (`ide/launch.py`), the hook drainer (`mokata_emit`, 0.0.26 O3) and the code-graph index
-    builder (0.0.26 O13)."""
-    if _windows():
+    builder (0.0.26 O13).
+
+    `suspended` adds CREATE_SUSPENDED on Windows (nothing elsewhere): the process is created but
+    does not run until the caller resumes it — `ide.lsp.spawn_jobbed` puts it in its Job Object
+    first. `nt` injects the platform for the tests."""
+    if _windows() if nt is None else nt:
         return {"creationflags": (getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
-                                  | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000))}
+                                  | getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+                                  | (0x00000004 if suspended else 0))}
     return {"start_new_session": True}
 
 
-__all__ = ["detached", "hidden"]
+def _signalable(n: object, *own: int) -> bool:
+    """A real process number we may signal: a plain `int` (not `bool`, not a test double whose
+    `__index__` is 1), greater than 1, and none of `own`. 0, 1 and negatives are never a target:
+    POSIX `killpg(1, sig)` is `kill(-1, sig)` on Linux — EVERY process the user owns (it took
+    down the CI runner, 0.0.27) — and `killpg(0)` / `kill(0)` is the caller's own group."""
+    return type(n) is int and n > 1 and n not in own
+
+
+def signal_group(pgid: object, sig: int) -> bool:
+    """`os.killpg(pgid, sig)` — only for a group that is not 0, 1, negative, a non-int, or OUR OWN
+    group or our own pid (POSIX only; there is no process group to signal on Windows). Returns False, sending
+    nothing, when refused; OS errors (the group is gone, not ours) propagate as from `killpg`.
+    The ONE door for a group signal in mokata (`tests/test_signals_never_broadcast.py`)."""
+    if _windows() or not _signalable(pgid, os.getpgrp(), os.getpid()):
+        return False
+    os.killpg(pgid, sig)  # type: ignore[arg-type]
+    return True
+
+
+def signal_pid(pid: object, sig: int) -> bool:
+    """`os.kill(pid, sig)` — only for a pid that is not 0, 1, negative, a non-int, or OUR OWN
+    process. Returns False, sending nothing, when refused; OS errors propagate as from `os.kill`.
+    The ONE door for a non-probe signal to a pid in mokata."""
+    if not _signalable(pid, os.getpid()):
+        return False
+    os.kill(pid, sig)  # type: ignore[arg-type]
+    return True
+
+
+__all__ = ["detached", "hidden", "signal_group", "signal_pid"]

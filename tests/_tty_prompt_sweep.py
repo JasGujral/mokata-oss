@@ -107,9 +107,28 @@ def _input(prompt=""):
 _real_run = unittest.TestCase.run
 
 
+def _beat(kind):
+    """PROGRESS HEARTBEAT (A36-CEILING). When `TTYSWEEP_PROGRESS` names a file, append one line per
+    test boundary. The parent sweep reads it to tell a HUNG sweep (no boundary for far longer than
+    the slowest gap seen) from a merely SLOW or LOADED one -- so the guard never needs a wall-clock
+    total, which false-reds the moment the box is busy."""
+    path = os.environ.get("TTYSWEEP_PROGRESS")
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write("%s %s\n" % (kind, _CURRENT["test"]))
+    except OSError:
+        pass
+
+
 def _run(self, result=None):
     _CURRENT["test"] = self.id()
-    return _real_run(self, result)
+    _beat("start")
+    try:
+        return _real_run(self, result)
+    finally:
+        _beat("end")
 
 
 if os.environ.get("TTYSWEEP") == "1":

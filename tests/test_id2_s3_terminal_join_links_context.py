@@ -504,7 +504,7 @@ const link = [s.g[2][0].link || null, s.g[2][11].link || null, txt(s)[2]];
 s.feed('\x1b[?1h\x1b[?2004h');
 console.log(JSON.stringify({st, sb, alt, back, link, app: s.appCursor, paste: s.paste}));
 """)
-        self.assertEqual({"b": 1, "fg": "#ff6b6b"}, got["st"][0])
+        self.assertEqual({"b": 1, "fg": "var(--ansi-1)"}, got["st"][0])
         self.assertEqual("rgb(0,255,0)", got["st"][1]["fg"])
         self.assertEqual("rgb(1,2,3)", got["st"][2]["fg"])
         self.assertEqual(["red gt"], got["sb"])
@@ -530,9 +530,12 @@ class ThePageCarriesTheBridge(unittest.TestCase):
                         "new Function", "http://", "https://"):
                 self.assertNotIn(bad, js, f"{name}: {bad}")
         self.assertLess(html.index("terminal.js"), html.index("boot.js"))
-        for ident in ("term-drawer", "term-screen", "term-claude", "term-shell", "join-btn",
-                      "join-pop", "send-ctx", "send-diff"):
+        # UX-SIMPLIFY: Join lives under Viewing ▾ → Live sessions (one list, no second popover)
+        for ident in ("term-drawer", "term-screen", "term-claude", "term-shell", "join-list",
+                      "join-leave", "send-ctx", "send-diff"):
             self.assertIn(f'id="{ident}"', html)
+        for gone in ("join-btn", "join-pop"):
+            self.assertNotIn(f'id="{gone}"', html)
 
     def test_join_turns_follow_on_and_an_open_link_opens_the_file(self):
         bridge = (STATIC / "bridge.js").read_text(encoding="utf-8")
@@ -678,7 +681,10 @@ class CliReferencesBecomeLinksOnlyWhereTheyWork(unittest.TestCase):
             c = TestClient(app, base_url="http://127.0.0.1:9999")
             c.get("/pair?t=tok")
             r = c.get("/open?path=src/a.py&line=4", follow_redirects=False)
-            self.assertEqual((303, "/?open=src/a.py&line=4"), (r.status_code, r.headers["location"]))
+            # 0.0.27 P11: every door emits the ONE location shape, `col` defaulting to 0 when the link
+            # carried none (pinned in test_p11 TheServerOpensTheTargetAndRefusesAnEscape).
+            self.assertEqual((303, "/?open=src/a.py&line=4&col=0"),
+                             (r.status_code, r.headers["location"]))
             for bad in ("../etc/passwd", "/etc/passwd", ".mokata/config.json", ""):
                 with self.subTest(bad=bad):
                     self.assertEqual(400, c.get("/open", params={"path": bad, "line": 1},

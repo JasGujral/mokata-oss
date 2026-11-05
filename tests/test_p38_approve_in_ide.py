@@ -491,8 +491,8 @@ class TheCardInTheBrowser(_Repo):
         p = propose(self.d)
 
         def drive(pg, screen):
-            pg.click("nav.rail .rail-btn[data-screen=review]")
-            card = pg.locator(f"#approvals-review .ap-card[data-pid='{p.proposal_id}']")
+            pg.click("#wait-toggle")                  # UX-SIMPLIFY: the ONE waiting bar
+            card = pg.locator(f"#approvals-bar .ap-card[data-pid='{p.proposal_id}']")
             card.wait_for()
             self.assertIn("line two 1", card.inner_text())
             card.get_by_role("button", name="Approve", exact=True).click()
@@ -505,18 +505,74 @@ class TheCardInTheBrowser(_Repo):
             self.assertTrue(m, "the code was printed to the terminal")
             card.locator("input.ap-code").fill(m.group(1).lower())
             card.locator("input.ap-code").press("Enter")
-            pg.wait_for_function("(pid) => /approved by ide-tty/.test((document.querySelector(`#approvals-review .ap-card[data-pid='${pid}']`) || {}).innerText || '')", arg=p.proposal_id)
+            pg.wait_for_function("(pid) => /approved by ide-tty/.test((document.querySelector(`#approvals-bar .ap-card[data-pid='${pid}']`) || {}).innerText || '')", arg=p.proposal_id)
         self.run_page(True, drive)
         self.assertEqual("approved", approval.load(self.d, p.proposal_id).status)
         self.assertTrue(approval.consent(self.d, tool="remember", args={"n": 1}, run_id="R-1",
                                          proposal_id=p.proposal_id).granted)
 
+    def test_a_live_reload_while_the_code_is_in_flight_keeps_the_card(self):
+        """DEFLAKE (0.0.27): the SSE `open`/`approval` reload used to redraw an idle-looking card
+        while Approve's code request was still in flight, so the code row rendered into a detached
+        node and the user never saw the input. Held deterministically: the code response is parked,
+        a reload is forced and awaited, then the response is released."""
+        p = propose(self.d)
+
+        def drive(pg, screen):
+            held = []
+            pg.route("**/api/approvals/code", lambda route: held.append(route))
+            pg.click("#wait-toggle")                  # UX-SIMPLIFY: the ONE waiting bar
+            card = pg.locator(f"#approvals-bar .ap-card[data-pid='{p.proposal_id}']")
+            card.wait_for()
+            with pg.expect_request("**/api/approvals/code"):
+                card.get_by_role("button", name="Approve", exact=True).click()
+            pg.evaluate("() => MK.reloadApprovals()")            # resolves after the repaint
+            self.assertEqual(1, len(held), "the code request is still parked")
+            held[0].continue_()
+            card.locator("input.ap-code").wait_for()
+        self.run_page(True, drive)
+
+    def test_a_code_request_that_never_answers_leaves_a_cancel_and_a_retry(self):
+        """DEFLAKE L4 (0.0.27 SMALL-FIX): the code request is parked for ever. The card shows a
+        Cancel at once (no timer is waited on - the test never advances a clock), Cancel gives the
+        Approve/Reject buttons back, and Approve then works for real."""
+        p = propose(self.d)
+
+        def drive(pg, screen):
+            held = []
+            pg.route("**/api/approvals/code", lambda route: held.append(route))
+            pg.click("#wait-toggle")                  # UX-SIMPLIFY: the ONE waiting bar
+            card = pg.locator(f"#approvals-bar .ap-card[data-pid='{p.proposal_id}']")
+            card.wait_for()
+            with pg.expect_request("**/api/approvals/code"):
+                card.get_by_role("button", name="Approve", exact=True).click()
+            cancel = card.get_by_role("button", name="Cancel", exact=True)
+            cancel.wait_for()
+            self.assertTrue(pg.evaluate("() => document.activeElement.classList.contains('ap-cancel-ask')"),
+                            "keyboard focus is on Cancel, not <body>")
+            self.assertEqual(0, card.get_by_role("button", name="Approve", exact=True).count())
+            with pg.expect_event("requestfailed") as failed:     # the hung fetch is really aborted
+                cancel.click()
+            self.assertIn("/api/approvals/code", failed.value.url)
+            card.get_by_role("button", name="Approve", exact=True).wait_for()
+            self.assertIn("Cancelled", card.inner_text())
+            self.assertNotEqual("BODY", pg.evaluate("() => document.activeElement.tagName"))
+            pg.unroute("**/api/approvals/code")                  # the server answers this time
+            for route in held:
+                try:
+                    route.abort()
+                except Exception:                                # noqa: BLE001 - already aborted by Cancel
+                    pass
+            card.get_by_role("button", name="Approve", exact=True).click()
+            card.locator("input.ap-code").wait_for()
+        self.run_page(True, drive)
+
     def test_without_a_terminal_the_card_shows_why_and_the_command_and_updates_live(self):
         p = propose(self.d)
 
         def drive(pg, _screen):
-            pg.click("#activity-chip")
-            card = pg.locator(f"#approvals-drawer .ap-card[data-pid='{p.proposal_id}']")
+            pg.click("#wait-toggle")                  # UX-SIMPLIFY: the ONE waiting bar
+            card = pg.locator(f"#approvals-bar .ap-card[data-pid='{p.proposal_id}']")
             card.wait_for()
             txt = card.inner_text()
             self.assertIn(f"mokata approve {p.proposal_id}", txt)
@@ -528,7 +584,7 @@ class TheCardInTheBrowser(_Repo):
             # the human approves in a terminal (D) → the card turns approved, live, with its row
             from mokata.govern.ledger import AuditLedger
             approval.approve(self.d, p.proposal_id, ledger=AuditLedger.from_mokata_dir(os.path.join(self.d, ".mokata")))
-            pg.wait_for_function("(pid) => /approved by human/.test((document.querySelector(`#approvals-drawer .ap-card[data-pid='${pid}']`) || {}).innerText || '')", arg=p.proposal_id, timeout=15000)
+            pg.wait_for_function("(pid) => /approved by human/.test((document.querySelector(`#approvals-bar .ap-card[data-pid='${pid}']`) || {}).innerText || '')", arg=p.proposal_id, timeout=15000)
         self.run_page(False, drive)
 
 

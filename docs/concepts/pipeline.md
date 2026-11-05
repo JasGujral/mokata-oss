@@ -156,7 +156,9 @@ And the flow now **ends with `/ship`**: it verifies the work is *actually* done
 what's missing), summarizes what shipped, and **lets you choose how to land it** — merge, open
 a PR, keep the branch, or discard. mokata may prepare a commit/branch or a PR description, but
 runs a git action **only on your explicit confirmation**; it never merges, PRs, or deletes on
-its own, and the finish decision is recorded in the audit ledger.
+its own, and the finish decision is recorded in the audit ledger. A run bound to a session worktree
+lands through the **gated merge** (`mokata worktree test <worktree>`, then `mokata worktree merge
+<worktree>`): evidence at the branch's head, then your approval of exactly that merge.
 
 ## Progress & visibility — one model, many channels
 
@@ -174,7 +176,7 @@ second progress system, no duplicated logic:
 | **run-progress block** | the compact `done/current/pending` text tracker | `mokata progress` / `progress` MCP tool |
 | **native to-do widget** | the *same* run-progress in the harness's own to-do list (summary + steps) | the agent renders it; derived from `build_todo_items` |
 | **stage badge** | the always-on one-line mode badge in mokata's statusLine | on by default after `mokata setup` |
-| **lanes + watch dashboard** | parallel-aware lanes + a clickable local HTML dashboard | `mokata progress --lanes` / `mokata watch` |
+| **lanes + watch** | parallel-aware terminal lanes, or the IDE's Sessions screen for the run | `mokata progress --lanes` / `mokata watch [--open]` |
 | **govern "what changed"** | the read-only audit recap of what changed and why | `mokata govern` / `audit --why` |
 | **resume line** | the SessionStart one-liner for where to pick up | shown automatically on reopen |
 
@@ -327,7 +329,7 @@ never clobbers your line. Because Claude Code reads `statusLine` from your **set
 plugin-marketplace installs enable it by running `mokata setup` (or adding the one-line
 `statusLine` themselves). The CLI equivalent for terminal use is `mokata progress`.
 
-### Parallel-aware lanes + the clickable dashboard (Stage 40)
+### Parallel-aware lanes + watching in the IDE (Stage 40, 0.0.27)
 
 When mokata runs subagents in parallel, the progress view becomes **parallel-aware**.
 `mokata progress --lanes` shows one line per concurrent lane with its state
@@ -335,33 +337,21 @@ When mokata runs subagents in parallel, the progress view becomes **parallel-awa
 run renders as a single lane (the familiar feel). It's **derived** from the run-state plus the
 execmode records the orchestrator already writes to the audit ledger — nothing new is persisted.
 
-For a richer view, **`mokata watch`** writes a **self-contained, clickable local HTML
-dashboard** (no external assets, no network, no server — pure stdlib) under gitignored
-`.mokata/temp_local/`: a **"Running _N_ agents" panel**, the 7-phase pipeline, and a
-**bounded tail** of the gate/decision feed. Choose your tier with
-`mokata config set settings.ux.progress {terminal|dashboard|both}` (default `terminal`).
+For the browser view, **`mokata watch --open`** opens the [`mokata ide`](../how-to/review-agent-work.md)
+window on its **Sessions** screen for the current run — re-using the window already serving this
+repository, never a second one. Choose what plain `mokata watch` shows with
+`mokata config set settings.ux.progress {terminal|ide|both}` (default `terminal`: the lanes).
+(The self-contained HTML dashboard of earlier releases was folded into the IDE in 0.0.27.)
 
-The agents panel is a **responsive card grid** (Stage 54h) — a header counting the agents
-currently running over one **card per subagent**, each with the agent's title, a **status +
-activity pill** (the lane's state plus a short activity phrase derived from its latest ledger
-row, e.g. `running`, `review passed`, `blocked`), and a live **running/idle dot**. Click a card
-to drill into that lane's ledger rows — no detail is lost. A sequential run renders as a single
-card; no run shows the friendly empty state. This rich card grid is the **browser** `watch`
-view only: the Claude Code **terminal** keeps the text lanes and the [stage badge](#the-always-on-stage-badge-stage-54b)
-keeps its inline `N running · N done · N blocked` (a TUI can't draw the grid).
-
-Both tiers are **read-only and non-authoritative** — they only *reflect* run-state + the ledger;
-they never write durable state, never gate, never mutate a run. The dashboard is **frugal**
-(only the active run + a bounded ledger tail, no model-token cost — it's a human-facing file) and
-**degrade-clean** (no run → a friendly empty state; ledger absent → lanes only). See
-[watch a run](../how-to/watch-a-run.md).
+Both are **read-only and non-authoritative** — they only *reflect* run-state + the ledger;
+they never write durable state, never gate, never mutate a run, and **degrade clean** (no run →
+a friendly empty view; ledger absent → a single lane). See [watch a run](../how-to/watch-a-run.md).
 
 **Inside Claude Code (Stage 54d).** The same read-only engines are reachable *without leaving
-the harness*: the **`lanes`**, **`watch`**, and **`govern`** MCP tools (all declared `read`) and
-the **`/progress`** (incl. the parallel lanes), **`/watch`**, and
-**`/govern`** slash commands. They reuse `build_run_lanes` / `write_dashboard` /
-`build_governance_view` — no new engine, no gating, no durable writes (the `watch`/`govern` HTML
-is the existing self-contained artifact under gitignored `temp_local/`). And during a fan-out the
+the harness*: the **`lanes`** and **`govern`** MCP tools (both declared `read`), and the
+**`/progress`** (incl. the parallel lanes), **`/watch`** (opens the IDE on Sessions) and
+**`/govern`** slash commands. They reuse `build_run_lanes` / `build_governance_view` — no new
+engine, no gating, no durable writes. And during a fan-out the
 [stage badge](#the-always-on-stage-badge-stage-54b) appends a compact agents summary — e.g.
 `· 2 running · 1 blocked` — derived from the same lane view, omitted when the run is sequential
 or has no parallel batch.

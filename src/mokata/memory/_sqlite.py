@@ -233,7 +233,8 @@ def connect_sqlite(path: str, *, busy_timeout_ms: int = BUSY_TIMEOUT_MS,
     return conn
 
 
-def connect_sqlite_readonly(path: str, *, timeout_s: float = 1.0) -> sqlite3.Connection:
+def connect_sqlite_readonly(path: str, *, timeout_s: float = 1.0,
+                            immutable: bool = False) -> sqlite3.Connection:
     """Open SOMEONE ELSE'S SQLite file read-only (`mode=ro` URI) — the second door of this one
     factory, for a database mokata reads but does not own (code-review-graph's `graph.db`, probed by
     `knowledge.crg_build.probe_index`).
@@ -245,5 +246,9 @@ def connect_sqlite_readonly(path: str, *, timeout_s: float = 1.0) -> sqlite3.Con
     `ValueError` for an unencodable path); the caller decides what an unreadable file means."""
     from pathlib import Path
     import os
-    uri = Path(os.path.abspath(path)).as_uri() + "?mode=ro"
+    # `immutable=1` (0.0.27 P14): a `mode=ro` open of a WAL database whose `-wal`/`-shm` are absent
+    # CREATES both (measured; `tests/test_p14_next_step_hints.py` keeps the probe). An immutable
+    # open creates nothing — and takes no lock, so the CALLER must bracket the read (P14's
+    # `events.read_run_readonly` does) and discard it if the file moved underneath.
+    uri = Path(os.path.abspath(path)).as_uri() + ("?mode=ro&immutable=1" if immutable else "?mode=ro")
     return sqlite3.connect(uri, uri=True, timeout=timeout_s)

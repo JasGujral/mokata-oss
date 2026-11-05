@@ -1,0 +1,51 @@
+/* mokata ide — delimited text as a table + table diff (0.0.27 P8). Brand tokens only. */
+.code-scroll.tb-on { overflow: hidden; display: flex; flex-direction: column; }
+.tb-code { flex: 1; min-height: 0; display: flex; }
+.tb { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.tb-bar { display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.tb-bar .spacer { flex: 1; }
+.tb-meta { color: var(--text2); font-variant-numeric: tabular-nums; }
+.tb-chips { display: inline-flex; gap: 6px; }
+.tb-chip { font-size: 10.5px; border: 1px solid var(--amber-line); color: var(--amber); border-radius: 999px; padding: 0 7px; }
+.tb-job:empty { display: none; }
+.tb-note { padding: 4px 12px; color: var(--text2); border-bottom: 1px solid var(--line); }
+.tb-scroll { position: relative; flex: 1; min-height: 0; overflow: auto; }
+.tb-scroll:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.tb-head { position: sticky; top: 0; z-index: 2; display: flex; background: var(--panel); border-bottom: 1px solid var(--line2); }
+.tb-body { position: relative; }
+.tb-rows { position: absolute; left: 0; right: 0; }
+.tb-row, .tb-drow { display: flex; height: 26px; border-bottom: 1px solid var(--line); font: 12px/26px var(--mono); }
+.tb-th { position: relative; flex: none; height: 28px; line-height: 28px; font: 600 12px/28px var(--sans); color: var(--text); border-right: 1px solid var(--line); }
+.tb-sort { all: unset; box-sizing: border-box; width: 100%; padding: 0 14px 0 8px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tb-sort:hover { color: var(--accent-ink); }
+.tb-sort:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.tb-rz { position: absolute; right: -3px; top: 0; bottom: 0; width: 7px; cursor: col-resize; z-index: 3; }
+.tb-rz:hover, .tb-rz:focus-visible { background: var(--accent); opacity: .5; }
+.tb-rz:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.tb-gut { flex: none; width: 44px; box-sizing: border-box; padding: 0 6px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; border-right: 1px solid var(--line); cursor: pointer; overflow: hidden; white-space: nowrap; }
+.tb-head .tb-gut { cursor: default; }
+.tb-td { flex: none; box-sizing: border-box; padding: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: pre; border-right: 1px solid var(--line); color: var(--text); }
+.tb-td.dim { color: var(--muted); }
+.tb-extra { color: var(--amber); }
+.tb-ragged { background: var(--amber-bg); }
+.tb-ragged .tb-gut { color: var(--amber); }
+.tb-bad .tb-gut { color: var(--amber); }
+.tb-sel { background: var(--sel); }
+.tb-wait { opacity: .6; }
+.tb-dbar { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; }
+.tb-key { background: var(--panel2); color: var(--text); border: 1px solid var(--line2); border-radius: 6px; font-size: 12px; padding: 2px 6px; }
+.tb-dout { padding: 6px 0; }
+.tb-dsum { display: flex; flex-wrap: wrap; gap: 12px; margin: 4px 0 8px; font-size: 12px; }
+.tb-dwrap { overflow: auto; max-width: 100%; border: 1px solid var(--line); border-radius: 6px; }
+.tb-dgrid { display: inline-block; min-width: 100%; }
+.tb-dhead { font-weight: 600; background: var(--panel); }
+.tb-d-add { color: var(--add); } .tb-d-del { color: var(--del); } .tb-d-chg { color: var(--amber); }
+.tb-drow.tb-d-add { background: var(--add-bg); } .tb-drow.tb-d-del { background: var(--del-bg); }
+.tb-drow.tb-d-add .tb-td, .tb-drow.tb-d-del .tb-td { color: inherit; }
+.tb-drow .tb-gut { cursor: default; width: 64px; }
+.tb-cellchg { display: flex; gap: 6px; background: var(--amber-bg-strong); }
+.tb-old { color: var(--del); text-decoration: line-through; overflow: hidden; text-overflow: ellipsis; }
+.tb-new { color: var(--add); overflow: hidden; text-overflow: ellipsis; }
+.tb-filter { display: flex; align-items: center; gap: 8px; padding: 4px 12px; border-bottom: 1px solid var(--line); }
+.tb-fval { background: var(--panel2); color: var(--text); border: 1px solid var(--line2); border-radius: 6px; font-size: 12px; padding: 3px 8px; min-width: 14ch; }
+.tb-fval:focus-visible, .tb-key:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }

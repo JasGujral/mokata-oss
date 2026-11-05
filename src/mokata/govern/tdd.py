@@ -76,6 +76,16 @@ class TddGuard:
         try:
             self._red, self._green = record(self._store, self._run_id, red=red, green=green)
         except OSError:
+            return
+        # 0.0.27 P13 (ruling 2): the WHEN beside the WHAT — the per-test red/green times the proof
+        # trace reads (`test_runs` history). Same degrade: a failed write never weakens the gate.
+        try:
+            from ..test_runs import record_outcome
+            if red:
+                record_outcome(self._store, self._run_id, red, passed=False)
+            if green:
+                record_outcome(self._store, self._run_id, green, passed=True)
+        except OSError:
             pass
 
     @property

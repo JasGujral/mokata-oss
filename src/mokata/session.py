@@ -76,6 +76,17 @@ def _mint() -> Session:
     )
 
 
+def actor() -> str:
+    """Best-effort per-actor attribution (who) from the environment — the human this session runs
+    as, for the shared logs' who-did-what and the memory store's identity. Never a machine path; a
+    name only. (Defined here, not in `team_audit`, so a store open never imports the audit log.)"""
+    for var in ("MOKATA_ACTOR", "USER", "USERNAME", "LOGNAME"):
+        val = os.environ.get(var)
+        if val:
+            return val
+    return "unknown"
+
+
 def current_session() -> Session:
     """This process's session, minted lazily on first use and stable thereafter (double-checked
     under a lock so concurrent tool-call threads share the SAME identity)."""

@@ -47,6 +47,18 @@ jobs:
     # step re-derives it from this job's own clock (`scripts/ci_ceiling.py`) on every run.
     # 33 -> 47 (0.0.26 cut): the reference class grew — release.yml `test` re-assembled at 1799 s
     # (CI #172, run 40631802534). (1799 + 60) x 1.5 = 2788.5 s -> **47**.
+    #
+    # ⚠ DELIBERATELY NOT SHARDED when the tag gate was (0.0.27 R3, TAG-GATE-UNSHARDED). That row's
+    # reason — "tag time must test what it publishes", and a cancelled tag gate publishes nothing —
+    # does not hold here: this job gates nothing in the publish path, so a ceiling it outgrows
+    # costs a red weekly signal and a one-line raise (still far under the runner's 360-min cap),
+    # never a lost release. Sharding would buy ~4x the install minutes and four G4 runs (or a
+    # shard-1-only G4 like ci.yml's) for no gate. What it does need is to stay ONE
+    # unsharded `discover -s tests -t tests` (`tests/test_c_02_python_floor_leg.py`), so it is the
+    # tree's last whole-suite run and its clock is the whole suite's. Its reference class is now the
+    # MEASUREMENT above (CI #172's ubuntu suite, 1799 s) rather than release.yml's job, which
+    # bounds one shard since R3; the step below re-derives 47 from this job's own clock every week,
+    # and reds — while it is a one-line edit — when the suite grows past 1.2x of it.
     timeout-minutes: 47
     defaults:
       run:

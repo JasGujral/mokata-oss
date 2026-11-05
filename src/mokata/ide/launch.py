@@ -35,6 +35,7 @@ class Launched:
     url: str
     started: bool          # True: a new server; False: an open one was re-focused
     demo: bool
+    browser_opened: bool = False   # a browser accepted the link (False: print it, nobody saw it)
 
     def line(self) -> str:
         how = "opened" if self.started else "re-focused"
@@ -66,14 +67,26 @@ def running(root: str) -> Optional[dict]:
         os.path.realpath(root) else None
 
 
-def pair_url(rec: dict, focus: Optional[str]) -> str:
+def pair_url(rec: dict, focus: Optional[str], target: Optional[tuple] = None,
+             screen: Optional[str] = None) -> str:
+    """The pairing link. `target` = (repo-relative path, line, col|None) opens the window on that
+    file at that line and column (0.0.27 P11, `mokata ide path:line:col`). `screen` lands the page
+    that follows THIS link on that screen, once (WATCH-FOLD: `mokata watch` → `sessions`; the
+    server hands the follower a single-use landing cookie, so no other tab takes it)."""
+    from urllib.parse import quote
     url = f"http://127.0.0.1:{rec['port']}/pair?t={rec['token']}"
-    return url + (f"&focus={focus}" if focus else "")
+    url += f"&focus={focus}" if focus else ""
+    url += f"&screen={quote(screen, safe='')}" if screen else ""
+    if target:
+        path, line, col = target
+        url += f"&open={quote(path, safe='/')}&line={int(line)}&col={int(col or 0)}"
+    return url
 
 
 def open_or_focus(root: str, session: Optional[str] = None, demo: bool = False,
                   browser: bool = True, idle_secs: Optional[float] = None,
-                  terminal: bool = False) -> Launched:
+                  terminal: bool = False, target: Optional[tuple] = None,
+                  screen: Optional[str] = None) -> Launched:
     """Open the window, or re-focus the running one. Serialised per repo by a lock file, so two
     `/mokata:review-window` at once cannot both start a server (0.0.22 verification)."""
     from ..oslock import file_lock
@@ -84,11 +97,12 @@ def open_or_focus(root: str, session: Optional[str] = None, demo: bool = False,
     # `fcntl.flock` on POSIX, `msvcrt.locking` on Windows, released if the holder dies, and a
     # BOUNDED wait (a stuck launcher is named, never waited on forever).
     with file_lock(lock, timeout=START_TIMEOUT + LOCK_SLACK):
-        return _open_or_focus(root, session, demo, browser, idle_secs, terminal)
+        return _open_or_focus(root, session, demo, browser, idle_secs, terminal, target, screen)
 
 
 def _open_or_focus(root: str, session: Optional[str], demo: bool, browser: bool,
-                   idle_secs: Optional[float], terminal: bool = False) -> Launched:
+                   idle_secs: Optional[float], terminal: bool = False,
+                   target: Optional[tuple] = None, screen: Optional[str] = None) -> Launched:
     """`terminal` (ID.S3): the caller is a human at a TTY (`mokata ide`), so the window may run the
     embedded terminal. A running window WITHOUT it is restarted with it — the same "other mode"
     rule as demo vs real; a request without it never downgrades a window that has it."""
@@ -98,9 +112,8 @@ def _open_or_focus(root: str, session: Optional[str], demo: bool, browser: bool,
         # workspace); only a session that asked re-points it.
         if session:
             _call(int(rec["port"]), str(rec["token"]), "/api/focus", {"session": session})
-        url = pair_url(rec, session)
-        _open(url, browser)
-        return Launched(url, False, demo)
+        url = pair_url(rec, session, target, screen)
+        return Launched(url, False, demo, _open(url, browser))
     old_pid = _pinged_pid(rec) if rec else 0
     if old_pid:
         # ONE server per repo: the running one is the other mode (demo vs real) — stop it, so the
@@ -131,9 +144,8 @@ def _open_or_focus(root: str, session: Optional[str], demo: bool, browser: bool,
     while time.time() < deadline:
         rec = running(root)
         if rec and bool(rec.get("demo")) == demo and int(rec.get("pid") or 0) != old_pid:
-            url = pair_url(rec, session)
-            _open(url, browser)
-            return Launched(url, True, demo)
+            url = pair_url(rec, session, target, screen)
+            return Launched(url, True, demo, _open(url, browser))
         time.sleep(0.15)
     raise RuntimeError("mokata ide did not start within "
                        f"{START_TIMEOUT:g}s — run `mokata ide --foreground` to see why")
@@ -161,8 +173,10 @@ def _stop(pid: int, root: str, wait: float = 3.0) -> None:
     signal other than CTRL_C/CTRL_BREAK is `TerminateProcess` — and on POSIX a recycled pid
     answers it too. The server's own ping is the liveness signal on every OS."""
     import signal
+    from ..quiet_spawn import signal_pid
     try:
-        os.kill(pid, signal.SIGTERM)       # POSIX: SIGTERM · Windows: TerminateProcess
+        if not signal_pid(pid, signal.SIGTERM):   # POSIX: SIGTERM · Windows: TerminateProcess
+            return                                # 0, 1, our own pid: never a target
     except OSError:
         return
     deadline = time.time() + wait
@@ -172,14 +186,28 @@ def _stop(pid: int, root: str, wait: float = 3.0) -> None:
         time.sleep(0.05)
 
 
-def _open(url: str, browser: bool) -> None:
-    if not browser:
-        return
+def headless(environ: Optional[dict] = None, platform: Optional[str] = None) -> bool:
+    """True on a POSIX box with no desktop to show a window on (no X11/Wayland display) and no
+    browser the user chose (`BROWSER`). There `webbrowser` falls back to CONSOLE browsers (lynx,
+    w3m, links), which take the terminal over until quit — a launcher that waits on one never
+    returns. Windows and macOS always hand the link to the OS's own launcher."""
+    env = os.environ if environ is None else environ
+    plat = sys.platform if platform is None else platform
+    if plat.startswith("win") or plat == "darwin":
+        return False
+    return not any(env.get(k) for k in ("DISPLAY", "WAYLAND_DISPLAY", "BROWSER"))
+
+
+def _open(url: str, browser: bool) -> bool:
+    """Hand the link to a browser. False when none took it (asked not to, headless, or refused) —
+    the caller prints the link either way and never waits on a browser."""
+    if not browser or headless():
+        return False
     try:
         import webbrowser
-        webbrowser.open(url, new=2)
+        return bool(webbrowser.open(url, new=2))
     except Exception:  # noqa: BLE001 — the URL is printed either way
-        pass
+        return False
 
 
-__all__ = ["Launched", "running", "pair_url", "open_or_focus"]
+__all__ = ["Launched", "running", "pair_url", "open_or_focus", "headless"]

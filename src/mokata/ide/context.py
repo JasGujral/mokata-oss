@@ -28,10 +28,12 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 from __future__ import annotations
 
 import hashlib
+import io
 import os
+import re
 import threading
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from ..errors import MokataError
 
@@ -78,26 +80,56 @@ def _store(root: str):
     return StateStore(state_dir(root))
 
 
-def _redact(text: str, path: str) -> Tuple[str, int]:
-    """(text with every secret-bearing line replaced, how many lines). A sensitive PATH refuses."""
+#: the wording of a replaced line in the context sent to a session
+REDACTED = "‹line redacted by mokata's secret scan: {kind}›"
+
+
+def _redact(text: str, path: str, inside: bool = False) -> Tuple[str, int]:
+    """(text with every secret-bearing line replaced, how many lines). A sensitive PATH refuses.
+
+    A private key is replaced WHOLE, BEGIN through END (an unterminated BEGIN to the end), by the
+    one key pass Copy with Context uses (`usages.pem_lines`): the shared scanner flags a key's
+    BEGIN line only, and a body line wrapped narrow is too short for its entropy layer. `inside`:
+    the text starts inside a key whose BEGIN is above it. Every other finding replaces its own
+    line. Anything secret- or key-shaped left after that refuses the item."""
     from ..govern.secrets import scan
+    from . import usages as U
     findings = scan(text, path=path)
     if any(f.layer == "path" for f in findings):
         raise ContextRefused(f"{path} is a sensitive location — it is never sent as context")
-    bad: Dict[int, str] = {}
+    lines = text.splitlines()                   # the scanner's own line numbering
+    try:
+        out = list(U.pem_lines(lines, {}, path, inside=inside, mark=REDACTED))
+    except U.RefRefused as exc:
+        raise ContextRefused(str(exc)) from None
     for f in findings:
-        if f.layer in ("signature", "entropy") and f.line:
-            bad.setdefault(f.line, f.kind)
-    if not bad:
-        return text, 0
-    lines = text.splitlines()
-    for n, kind in bad.items():
-        if 1 <= n <= len(lines):
-            lines[n - 1] = f"‹line redacted by mokata's secret scan: {kind}›"
-    out = "\n".join(lines)
-    if any(f.layer in ("signature", "entropy") for f in scan(out)):
+        if f.layer in ("signature", "entropy") and f.line and 1 <= f.line <= len(out) \
+                and out[f.line - 1] == lines[f.line - 1]:
+            out[f.line - 1] = REDACTED.format(kind=f.kind)
+    n = sum(1 for a, b in zip(lines, out) if a != b)
+    joined = "\n".join(out) if n else text
+    if U._residual(joined):
         raise ContextRefused("the excerpt still carries a secret after redaction — not sent")
-    return out, len(bad)
+    return joined, n
+
+
+def _key_lines(lines: Iterable[str], wanted: Set[int]) -> Tuple[Set[int], bool]:
+    """(which of the 1-based line numbers `wanted` are private-key material, whether ANY line up
+    to the last of them is), reading `lines` from the first line with the shared key state
+    machine (`usages.pem_step`). Stops after the last wanted line."""
+    from .usages import pem_step
+    last = max(wanted, default=0)
+    hit: Set[int] = set()
+    seen = False
+    inside = False
+    for n, ln in enumerate(lines, start=1):
+        if n > last:
+            break
+        key, inside = pem_step(inside, ln)
+        seen = seen or key
+        if key and n in wanted:
+            hit.add(n)
+    return hit, seen
 
 
 def _lines(raw: Any) -> Optional[Tuple[int, int]]:
@@ -118,16 +150,49 @@ def _lines(raw: Any) -> Optional[Tuple[int, int]]:
     return a_, b_
 
 
-def _diff_text(root: str, rel: str) -> str:
+def _diff_text(root: str, rel: str) -> Tuple[str, int]:
+    """(the file's uncommitted change, how many of its lines were private-key material). A hunk
+    can start or end inside a key whose markers are outside it, so each line's side (HEAD for a
+    removed line, the working file for an added one, both for context) is read from its first
+    line to know whether that line is inside a key; such a line is replaced here. A hunk header's
+    function context is a line of the file too (git picks the nearest line above that starts with
+    a letter — a key body line qualifies), so it is dropped from every header of a file that has
+    a key above its last hunk."""
     from . import diffs as D
     for f in D.live(root).files:
         if f.path == rel:
+            olds = {ln.old for h in f.hunks for ln in h.lines if ln.op != "+" and ln.old}
+            news = {ln.new for h in f.hunks for ln in h.lines if ln.op != "-" and ln.new}
+            old_key: Set[int] = set()
+            new_key: Set[int] = set()
+            old_any = new_any = False
+            if olds and f.status != "added":
+                from .review_context import _git as git_bytes      # bytes: lines split on \n only
+                code, old, _err = git_bytes(root, "show", "--end-of-options",
+                                            f"HEAD:{f.old_path or rel}")
+                if code == 0:
+                    old_key, old_any = _key_lines(
+                        (b.decode("utf-8", "replace") for b in io.BytesIO(old)), olds)
+            if news:
+                got = D.open_contained(root, rel)
+                if got:
+                    fh, _st = got
+                    with fh:
+                        new_key, new_any = _key_lines(
+                            (b.decode("utf-8", "replace") for b in fh), news)
             out = []
+            n = 0
             for h in f.hunks:
-                out.append(h.header)
-                out.extend(ln.op + ln.text for ln in h.lines)
-            return "\n".join(out)
-    return ""
+                out.append(re.sub(r"^(@@[^@]*@@).*", r"\1", h.header)
+                           if old_any or new_any else h.header)
+                for ln in h.lines:
+                    if (ln.op != "+" and ln.old in old_key) or (ln.op != "-" and ln.new in new_key):
+                        out.append(ln.op + REDACTED.format(kind="private-key"))
+                        n += 1
+                    else:
+                        out.append(ln.op + ln.text)
+            return "\n".join(out), n
+    return "", 0
 
 
 def build_item(root: str, kind: Any, path: Any, lines: Any = None,
@@ -144,8 +209,10 @@ def build_item(root: str, kind: Any, path: Any, lines: Any = None,
     span = _lines(lines) if kind == "selection" else None
     if kind == "selection" and span is None:
         raise ContextRefused("a selection needs its lines")
+    inside = False
+    keyed = 0
     if kind == "diff":
-        text = _diff_text(root, rel)
+        text, keyed = _diff_text(root, rel)
         if not text:
             raise ContextRefused(f"{rel} has no uncommitted change to send")
     else:
@@ -158,7 +225,11 @@ def build_item(root: str, kind: Any, path: Any, lines: Any = None,
                 raise ContextRefused(f"{rel} has only {len(all_lines)} lines")
             text = "\n".join(all_lines[span[0] - 1:span[1]])
             span = (span[0], min(span[1], len(all_lines)))
-    text, redacted = _redact(text, rel)
+            from .usages import pem_step
+            for ln in all_lines[:span[0] - 1]:     # does the selection start inside a key?
+                inside = pem_step(inside, ln)[1]
+    text, redacted = _redact(text, rel, inside)
+    redacted += keyed
     truncated = len(text) > MAX_ITEM_CHARS
     text = text[:MAX_ITEM_CHARS]
     ident = hashlib.sha256(f"{kind}\0{rel}\0{span}\0{target or ''}\0{text}".encode("utf-8")
@@ -261,5 +332,73 @@ def delivered(root: str, ids: List[str]) -> None:
                         default={"items": []})
 
 
+
+
+# ============================================================ 0.0.27 P46 — an explain REQUEST
+
+#: Its OWN record, one slot per session — never the 8-item `ide_context` queue (an explain request
+#: must neither evict the human's selections nor be evicted by them).
+EXPLAIN_KEY = "ide_explain_request"
+#: The ONE text this channel can carry. It is an INSTRUCTION, and honestly labelled one: the human
+#: clicked "Explain changes" in the IDE (authenticated, Origin-checked). Only a validated target
+#: (`explain.bundle.parse_target` → ids, SHAs, `live`) is ever formatted into it — no repo text.
+EXPLAIN_HEADER = ("mokata ide — the human clicked \"Explain changes\" in the IDE for this "
+                  "session. This is their instruction for this turn: run "
+                  "`{command} {target}` (request {request_id}).")
+
+
+def queue_explain(root: str, session: str, target: str, request_id: str) -> Dict[str, Any]:
+    """Queue ONE explain request for `session`'s next turn. A newer request REPLACES an older one
+    for the same session and says so (`superseded`) — never silently."""
+    from ..explain.bundle import parse_target, target_text
+    text = target_text(parse_target(target))
+    out: Dict[str, Any] = {"superseded": None}
+
+    def mutate(cur: Any) -> Dict[str, Any]:
+        slots = dict((cur or {}).get("slots") or {})
+        old = slots.get(session)
+        if isinstance(old, dict):
+            out["superseded"] = old.get("request_id")
+        slots[session] = {"target": text, "request_id": request_id, "at": time.time()}
+        return {"slots": slots}
+    _store(root).update(EXPLAIN_KEY, mutate, default={"slots": {}})
+    return out
+
+
+def explain_pending(root: str) -> Dict[str, Dict[str, Any]]:
+    cur = _store(root).read(EXPLAIN_KEY) or {}
+    return {k: v for k, v in (cur.get("slots") or {}).items() if isinstance(v, dict)}
+
+
+def explain_block(root: str, session: Optional[str]) -> Tuple[str, Optional[str]]:
+    """(the instruction line, its request id) for `session`'s next turn, or ("", None)."""
+    if not session:
+        return "", None
+    item = explain_pending(root).get(session)
+    if not item:
+        return "", None
+    from ..plugin_runtime import slash_command
+    return (EXPLAIN_HEADER.format(command=slash_command("explain", root), target=item["target"],
+                                  request_id=item["request_id"]),
+            item["request_id"])
+
+
+def explain_clear(root: str, session: str, request_id: Optional[str] = None) -> bool:
+    """Drain `session`'s slot (delivered, or cancelled from the IDE). With `request_id`, only when
+    the slot still holds THAT request (a newer one is never cleared by an older delivery)."""
+    gone = {"v": False}
+
+    def mutate(cur: Any) -> Dict[str, Any]:
+        slots = dict((cur or {}).get("slots") or {})
+        item = slots.get(session)
+        if isinstance(item, dict) and (request_id is None or item.get("request_id") == request_id):
+            slots.pop(session, None)
+            gone["v"] = True
+        return {"slots": slots}
+    _store(root).update(EXPLAIN_KEY, mutate, default={"slots": {}})
+    return gone["v"]
+
 __all__ = ["send", "read", "clear", "pending_block", "delivered", "render", "build_item",
-           "ContextRefused", "KINDS", "MAX_ITEMS", "MAX_ITEM_CHARS", "KEY", "HEADER"]
+           "ContextRefused", "KINDS", "MAX_ITEMS", "MAX_ITEM_CHARS", "KEY", "HEADER",
+           "EXPLAIN_KEY", "EXPLAIN_HEADER", "queue_explain", "explain_pending", "explain_block",
+           "explain_clear"]

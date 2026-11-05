@@ -109,8 +109,8 @@ mutant "M12 the record is never written back after the walk" "$I" \
 
 mutant "M13 an abandoned walk keeps the PREVIOUS walk's record — declares a skip it never made" "$I" \
   '        self.skipped_checkouts = []
-        for dirpath, dirnames, filenames in os.walk(root):' \
-  '        for dirpath, dirnames, filenames in os.walk(root):' "$T"
+        self.unsupported = {}' \
+  '        self.unsupported = {}' "$T"
 
 mutant "M14 the extra checkouts are truncated SILENTLY — '+N more' dropped" "$I" \
   '    if remainder:

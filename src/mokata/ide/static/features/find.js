@@ -93,7 +93,13 @@
     if (f.obs) { f.obs.disconnect(); f.obs = null; }
     if (!on || !f.sc || !f.sc.root || typeof MutationObserver === "undefined") return;
     // the view re-rendered (another file opened, the plan refreshed): find again.
-    f.obs = new MutationObserver(() => { clearTimeout(f.timer); f.timer = setTimeout(() => search(true, true), 60); });
+    // The re-search is debounced, but the old "n of m" must not outlive the marks it counted:
+    // a re-render (e.g. highlight tokens arriving) detaches them, so say so at once (DEFLAKE).
+    f.obs = new MutationObserver(() => {
+      if (!f.open) return;
+      if (f.marks.some((m) => !m.isConnected)) count.textContent = "…";
+      clearTimeout(f.timer); f.timer = setTimeout(() => { if (f.open) search(true, true); }, 60);
+    });
     f.obs.observe(f.sc.root, { childList: true, subtree: true });
   }
 
@@ -167,6 +173,7 @@
   }
   function closeFind() {
     f.open = false;
+    clearTimeout(f.timer);               // a pending re-search must not outlive the bar
     observe(false);
     clearMarks();
     bar.hidden = true;
@@ -174,7 +181,7 @@
   }
   MK.openFind = openFind;
   // a mode change shows another pane: find there.
-  MK.onModeFind = () => { if (f.open) setTimeout(() => search(false), 0); };
+  MK.onModeFind = () => { if (f.open) setTimeout(() => { if (f.open) search(false); }, 0); };
 
   // --------------------------------------------------------------------------- the bar
   function btn(text, title, cls) {
@@ -200,14 +207,17 @@
     count = document.createElement("span"); count.className = "fb-count small dim"; count.setAttribute("aria-live", "polite");
     scopeEl = document.createElement("span"); scopeEl.className = "fb-scope small dim";
     const prev = btn("↑", "Previous match (⇧↵)"), next = btn("↓", "Next match (↵)"), x = btn("×", "Close (Esc)");
-    prev.onclick = () => step(-1); next.onclick = () => step(1); x.onclick = closeFind;
+    prev.onclick = () => step(-1); next.onclick = () => step(1); x.onclick = () => closeFind();
     bar.append(input, bCase, bRe, count, scopeEl, prev, next, x);
     const center = document.querySelector("main.center");
     (center || document.body).append(bar);
-    input.oninput = () => { clearTimeout(f.timer); f.timer = setTimeout(() => search(false), 80); };
+    input.oninput = () => { clearTimeout(f.timer); f.timer = setTimeout(() => { if (f.open) search(false); }, 80); };
     input.addEventListener("keydown", (ev) => {
       if (ev.key === "Escape") { ev.preventDefault(); closeFind(); }
-      else if (ev.key === "Enter") { ev.preventDefault(); step(ev.shiftKey ? -1 : 1); }
+      else if (ev.key === "Enter") {
+        ev.preventDefault();
+        step(ev.shiftKey ? -1 : 1);
+      }
     });
   };
 

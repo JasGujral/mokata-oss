@@ -135,7 +135,8 @@ def _emit_knowledge_layer(surface):
         return None
 
 
-def _await_a_human(surface, spec, store, run_id: "str | None", emit_args: dict) -> int:
+def _await_a_human(surface, spec, store, run_id: "str | None", emit_args: dict,
+                   tests: list) -> int:
     """A3 — the TTY-less decline, turned from a DEAD END into a redeemable WAIT.
 
     The refusal itself was always correct and is unchanged: a non-interactive shell must never emit
@@ -174,7 +175,7 @@ def _await_a_human(surface, spec, store, run_id: "str | None", emit_args: dict) 
         surface.root, tool=EMIT_TOOL, args=emit_args, run_id=run_id,
         target="state/emitted_spec.json",
         summary=f"emit the spec '{spec.title}' ({len(spec.criteria)} AC(s), all mapped)",
-        preview=preview_content(store, spec))
+        preview=preview_content(store, spec, tests))
     # The wording is `awaiting.py`'s, not this command's — see `awaiting_cli_lines`. The summary
     # and the preview above are stored for `mokata approve <id>` to show at the human's own
     # terminal; NEITHER is printed here.
@@ -214,7 +215,7 @@ def cmd_spec_emit(args: argparse.Namespace) -> int:
     surface = _load_surface(args.path)
     try:
         payload = _read_payload(args)
-        spec, tests = spec_for_emit(payload)
+        spec, tests = spec_for_emit(payload, surface.root)
     except (OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -306,6 +307,10 @@ def cmd_spec_emit(args: argparse.Namespace) -> int:
     from ..committed_specs import committed_path_for
     from ..engine.emit import _reemit_run
     committed = committed_path_for(surface.root, _reemit_run(store, run_id or ""))
+    # L9 r4 — every bare test name resolved to a file is NAMED before the write is approved.
+    from ..committed_specs import resolution_lines
+    for line in resolution_lines(tests):
+        print(f"test resolved to its file: {line}")
     if committed:
         print(f"approving also commits the spec to {committed} (settings.specs.commit — tracked "
               f"in git).")
@@ -350,7 +355,7 @@ def cmd_spec_emit(args: argparse.Namespace) -> int:
         # below — a blocked write is not a write awaiting permission (§7e).
         decision = decisions[-1] if decisions else None
         if decision is not None and not decision.answered_by_human:
-            return _await_a_human(surface, spec, store, run_id, emit_args)
+            return _await_a_human(surface, spec, store, run_id, emit_args, tests)
         print(f"emit declined at the write gate — nothing was written ({out.reason}).")
         return 1
 
@@ -615,7 +620,8 @@ def cmd_spec_migrate(args: argparse.Namespace) -> int:
     ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
     committed, reason, _size = commit_spec(store, spec, gate=WriteGate(ledger=ledger),
                                            assume_yes=args.yes,
-                                           confirm=None if args.yes else _confirm, run_id=run_id)
+                                           confirm=None if args.yes else _confirm, run_id=run_id,
+                                           tree=surface.root)
     if committed:
         note_plan_approved(ledger, run_id, store)
         print(f"migrated: run {run_id} now carries task plan T1 and its plan hash.")
@@ -664,7 +670,7 @@ def cmd_spec_amend(args: argparse.Namespace) -> int:
         return 1
 
     try:
-        spec, tests = spec_for_emit(_read_payload(args))
+        spec, tests = spec_for_emit(_read_payload(args), surface.root)
     except (OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -689,6 +695,9 @@ def cmd_spec_amend(args: argparse.Namespace) -> int:
 
     print(f"mokata · spec amend  v{plan.from_version} -> v{plan.to_version}")
     print(plan.diff.render())
+    from ..committed_specs import resolution_lines
+    for line in resolution_lines(tests):
+        print(f"test resolved to its file: {line}")
     if plan.scope_widened:
         print("  ! this WIDENS the scope — the blast radius was re-computed (Lens-1):")
         if plan.impact is not None:

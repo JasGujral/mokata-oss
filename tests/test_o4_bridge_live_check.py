@@ -200,7 +200,8 @@ class SetupWiresTheCommandFormOnWindows(unittest.TestCase):
         rec = B.read_bridge(str(self.root.resolve()))
         hooks = self._local()["hooks"]
         self.assertEqual({"PostToolUse", "Stop", "SessionEnd"}, set(hooks))
-        self.assertEqual(HS.HOOK_DIRTY_MATCHER, hooks["PostToolUse"][0]["matcher"])
+        # 0.0.27 P12 ruling: the bridge observes EVERY tool call (no matcher), name only.
+        self.assertNotIn("matcher", hooks["PostToolUse"][0])
         for event, groups in hooks.items():
             (h,) = groups[0]["hooks"]
             self.assertEqual("command", h["type"], event)

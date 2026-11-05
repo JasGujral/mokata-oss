@@ -102,13 +102,23 @@
 
   // ------------------------------------------------------------------------------- diffs
   const diffCache = new Map();       // fingerprint -> answer (bounded)
+  const fpMemo = new WeakMap();      // a diff file object -> its fingerprint (asked per cell)
   function fp(f) {
+    if (fpMemo.has(f)) return fpMemo.get(f);
+    const v = fpCompute(f);
+    fpMemo.set(f, v);
+    return v;
+  }
+  function fpCompute(f) {
     let h = 2166136261;
     const s = f.path + "|" + JSON.stringify(f.hunks || []);
     for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
     return f.path + "#" + (h >>> 0).toString(36) + ":" + s.length;
   }
 
+  // Each text cell names its line (`data-i`, the line's index in the hunk) — 0.0.27 P5: a Split
+  // row holds two lines and a big hunk builds its rows as they scroll in, so rows are no longer
+  // the hunk's lines in order. With diffview.js the cell is painted by it (syntax + intra-line).
   function paintDiff(box, f, res) {
     const secs = box.querySelectorAll("section.hunk");
     secs.forEach((sec) => {
@@ -116,14 +126,14 @@
       const rows = (res.hunks || [])[k];
       const h = (f.hunks || [])[k];
       if (!rows || !h) return;
-      const trs = sec.querySelectorAll("tr");
-      trs.forEach((tr, i) => {
-        const td = tr.querySelector("td.tx");
+      for (const td of sec.querySelectorAll("td.tx[data-i]")) {
+        const i = +td.dataset.i;
         const line = h.lines[i];
-        if (!td || !line || !rows[i]) return;
+        if (!line || !rows[i]) continue;
+        if (MK.dv && MK.dv.paintCell && td._f) { td._syn = rows[i]; MK.dv.paintCell(td); continue; }
         const op = line[0] === " " ? " " : line[0];
         paint(td, [["", op], ...rows[i]]);
-      });
+      }
     });
     box.dataset.hl = res.lang || "";
     if (res.plain_reason) box.title = res.plain_reason;
@@ -161,7 +171,14 @@
     if (res.plain_reason) pre.title = res.plain_reason;
   }
 
-  MK.hl = { open, row, want, paint, snippet, chunks, CHUNK };
+  // A diff line's spans from the answer already held for this exact diff (a block built later).
+  function diffRow(f, k, i) {
+    const res = diffCache.get(fp(f));
+    const rows = res && (res.hunks || [])[k];
+    return rows ? rows[i] || null : null;
+  }
+
+  MK.hl = { open, row, want, paint, snippet, chunks, CHUNK, diffRow };
 
   // The diff view is app.js's; it is re-painted after each render, without editing app.js:
   // a MutationObserver on #diff's own children (renderFile replaces them).

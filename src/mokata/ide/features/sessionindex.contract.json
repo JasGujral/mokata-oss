@@ -31,7 +31,8 @@
     },
     {
       "path": "/api/session/write", "method": "GET", "kind": "json",
-      "params": {"query": {"snap": "a snapshot id (one write)"}},
+      "params": {"query": {"snap": "a snapshot id (one write)",
+                           "ws": "ignore = whitespace-only line changes shown as context, counted (P5)"}},
       "responses": {
         "200": {"media": "json", "schema": {"type": "object",
           "required": ["added", "files", "note", "removed", "sample", "title"],
@@ -40,7 +41,9 @@
                          "sample": {"type": "boolean"}, "title": {"type": "string"}}}},
         "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
       },
-      "probes": [{"query": {"snap": "x"}, "status": 200}, {"status": 400}]
+      "probes": [{"query": {"snap": "x"}, "status": 200}, {"status": 400},
+                 {"query": {"snap": "x", "ws": "ignore"}, "status": 200},
+                 {"query": {"snap": "x", "ws": "bogus"}, "status": 400}]
     }
   ],
   "schemas": {

@@ -586,7 +586,8 @@ class SQLiteBackend(MemoryBackend):
     def lexical_search(self, query: str, top_k: int = DEFAULT_TOP_K,
                        *, scope_path: Optional[Sequence[Any]] = None,
                        statuses: Optional[Tuple[str, ...]] = None,
-                       kinds: Optional[Sequence[str]] = None
+                       kinds: Optional[Sequence[str]] = None,
+                       exclude_ids: Optional[Sequence[str]] = None
                        ) -> List[Tuple[MemoryItem, float]]:
         """DB.S3 — the lexical tier as ONE ranked SQL query: FTS5 `MATCH` + `bm25()`, top-k in the
         database. This is what replaces `tiered_recall`'s Python `lexical_score` scan over every
@@ -627,15 +628,24 @@ class SQLiteBackend(MemoryBackend):
         clause, params = filter_clause_for(None, statuses, scope_path=scope_path,
                                            kinds=kinds, kind_expr=_SQLITE_KIND_EXPR,
                                            placeholder="?", prefix="AND", qualifier="m.")
+        # R6 (0.0.27 TIERED-RECALL-SILENT-OFF) — `exclude_ids` (the ids a session was already
+        # handed) is taken out INSIDE the ranked query, so the LIMIT is a top-k of rows the caller
+        # can use. ONE bound parameter (a JSON array via `json_each`, the json1 functions the
+        # scope backfill already relies on), so a long session's list never meets SQLite's
+        # host-parameter limit.
+        excl, excl_params = "", ()
+        if exclude_ids:
+            excl = " AND m.id NOT IN (SELECT value FROM json_each(?))"
+            excl_params = (json.dumps(sorted(exclude_ids)),)
         with self._connect() as conn:
             rows = conn.execute(
                 f"""SELECT m.doc, bm25({FTS_TABLE}) AS lex_rank
                       FROM {FTS_TABLE}
                       JOIN memory m ON m.seq = {FTS_TABLE}.rowid
-                     WHERE {FTS_TABLE} MATCH ?{clause}
+                     WHERE {FTS_TABLE} MATCH ?{clause}{excl}
                      ORDER BY lex_rank ASC, m.seq ASC
                      LIMIT ?""",                                   # nosec B608 (fixed identifiers)
-                (match, *params, int(top_k)),
+                (match, *params, *excl_params, int(top_k)),
             ).fetchall()
         items = [MemoryItem.from_dict(json.loads(r[0])) for r in rows]
         scores = normalize_lexical_scores([r[1] for r in rows], higher_is_better=False)
@@ -1444,7 +1454,8 @@ class PostgresBackend(MemoryBackend):
     def lexical_search(self, query: str, top_k: int = DEFAULT_TOP_K,
                        *, scope_path: Optional[Sequence[Any]] = None,
                        statuses: Optional[Tuple[str, ...]] = None,
-                       kinds: Optional[Sequence[str]] = None
+                       kinds: Optional[Sequence[str]] = None,
+                       exclude_ids: Optional[Sequence[str]] = None
                        ) -> List[Tuple[MemoryItem, float]]:
         """DB.S3 — the lexical tier as ONE ranked SQL query: `@@` for the match, `ts_rank` for the
         order, top-k in the database. Replaces the Python Jaccard scan (see the SQLite twin).
@@ -1480,12 +1491,16 @@ class PostgresBackend(MemoryBackend):
         clause, params = filter_clause_for(None, statuses, scope_path=scope_path,
                                            kinds=kinds, kind_expr=_PG_KIND_EXPR,
                                            placeholder="%s", prefix="AND")
+        # R6 — `exclude_ids` inside the ranked query, as on the SQLite twin (one array parameter).
+        excl, excl_params = "", ()
+        if exclude_ids:
+            excl, excl_params = " AND NOT (id = ANY(%s))", (sorted(exclude_ids),)
         rows = self._conn.execute(
             f"SELECT doc, revision, ts_rank({vec}, {tsq}) AS lex_rank"      # nosec B608
             f"  FROM {self.TABLE}"
-            f" WHERE {vec} @@ {tsq}{scope}{clause}"
+            f" WHERE {vec} @@ {tsq}{scope}{clause}{excl}"
             f" ORDER BY lex_rank DESC, seq ASC LIMIT %s",
-            (tsquery, tsquery, *scope_params, *params, int(top_k)),
+            (tsquery, tsquery, *scope_params, *params, *excl_params, int(top_k)),
         ).fetchall()
         items = [_with_revision(r[0], r[1]) for r in rows]
         scores = normalize_lexical_scores([r[2] for r in rows], higher_is_better=True)

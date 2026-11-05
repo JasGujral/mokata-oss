@@ -1,0 +1,71 @@
+{
+  "routes": [
+    {
+      "path": "/api/image/info", "method": "GET", "kind": "read",
+      "params": {"query": {"path": "the image (its NEW path for a rename)", "old_path": "its path on the base side, when renamed",
+                           "base": "git revision of the before side (default HEAD)",
+                           "head": "git revision of the after side (empty = the working tree)"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"$ref": "#/schemas/ImagePair"}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"query": {"path": "assets/dot.png"}, "status": 200},
+                 {"query": {"path": "assets/dot.png", "base": "HEAD", "head": "HEAD"}, "status": 200},
+                 {"query": {"path": "assets/huge.png"}, "status": 200},
+                 {"query": {"path": "x.png"}, "status": 200, "demo": true},
+                 {"query": {"path": "../outside.png"}, "status": 400},
+                 {"query": {"path": "assets/dot.txt"}, "status": 400},
+                 {"query": {"path": "assets/dot.png", "base": "--output=x"}, "status": 400},
+                 {"query": {}, "status": 400}]
+    },
+    {
+      "path": "/api/image/raw", "method": "GET", "kind": "read",
+      "params": {"query": {"path": "the image file", "rev": "read it at this git revision (empty = the working tree)"}},
+      "responses": {
+        "200": {"media": "image"},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}},
+        "404": {"media": "json", "schema": {"$ref": "#/schemas/Error"}},
+        "413": {"media": "json", "schema": {"$ref": "#/schemas/ImageRefusal"}},
+        "415": {"media": "json", "schema": {"$ref": "#/schemas/ImageRefusal"}}
+      },
+      "probes": [{"query": {"path": "assets/dot.png"}, "status": 200},
+                 {"query": {"path": "assets/dot.png", "rev": "HEAD"}, "status": 200},
+                 {"query": {"path": "../outside.png"}, "status": 400},
+                 {"query": {"path": "assets/dot.png", "rev": "--output=x"}, "status": 400},
+                 {"query": {"path": "assets/none.png"}, "status": 404},
+                 {"query": {"path": "assets/huge.png"}, "status": 413},
+                 {"query": {"path": "assets/fake.png"}, "status": 415}]
+    }
+  ],
+  "schemas": {
+    "ImageSide": {
+      "type": "object", "required": ["state", "size", "mime", "width", "height", "note"],
+      "properties": {
+        "state": {"enum": ["ok", "missing", "too_large", "undecodable", "unreadable", "unresponsive"]},
+        "size": {"type": "integer"}, "mime": {"type": "string"}, "kind": {"type": "string"},
+        "width": {"type": ["integer", "null"]}, "height": {"type": ["integer", "null"]},
+        "note": {"type": "string"}, "rev": {"type": "string"}
+      }
+    },
+    "ImagePair": {
+      "type": "object", "required": ["state", "sample", "status", "path"],
+      "properties": {
+        "state": {"enum": ["ok", "sample"]}, "sample": {"type": "boolean"},
+        "status": {"enum": ["added", "deleted", "modified", "absent", "sample"]},
+        "path": {"type": "string"}, "old_path": {"type": "string"},
+        "base": {"type": "string"}, "head": {"type": "string"},
+        "old": {"$ref": "#/schemas/ImageSide"}, "new": {"$ref": "#/schemas/ImageSide"},
+        "diff": {"type": "object", "required": ["ok", "note"],
+                 "properties": {"ok": {"type": "boolean"}, "note": {"type": "string"}}},
+        "limits": {"type": "object", "required": ["bytes", "view_pixels", "diff_pixels"],
+                   "properties": {"bytes": {"type": "integer"}, "view_pixels": {"type": "integer"},
+                                  "diff_pixels": {"type": "integer"}}},
+        "note": {"type": "string"}
+      }
+    },
+    "ImageRefusal": {
+      "type": "object", "required": ["error", "state", "note"],
+      "properties": {"error": {"type": "string"}, "state": {"type": "string"}, "note": {"type": "string"}}
+    }
+  }
+}

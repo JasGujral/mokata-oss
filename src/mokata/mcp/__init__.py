@@ -7,7 +7,7 @@ tool delegates to the existing package; this package adds NO engine logic.
 Two safety rules are non-negotiable:
 
   * READ tools (query, recall, doctor, coverage, budget, audit, status, preview, progress,
-    lanes, watch, govern, vault_list/search/pull, and the Stage 54e parity reads — rules,
+    lanes, govern, vault_list/search/pull, and the Stage 54e parity reads — rules,
     skills, suggest, lat_check, index_status, baseline, sessions, config_get, export_preview,
     the Stage 55a session_list, and the Stage 70 stacks_list/stacks_search/stacks_show) are safe
     and expose their data directly. They live in `tools_read`.

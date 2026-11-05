@@ -71,6 +71,12 @@ def reporting(fn: Optional[Callable[..., None]]) -> Iterator[None]:
         _T.report = prev
 
 
+def current_reporter() -> Optional[Callable[..., None]]:
+    """This thread's armed progress sink (None: no job) — so a caller can wrap a nested walk's
+    reports in its own frame (0.0.27 P13 K5: an inner count must not overwrite an outer total)."""
+    return getattr(_T, "report", None)
+
+
 def report(**kw: Any) -> None:
     """Progress from inside a walk: `done`, `total`, `unit`, `note` (any subset). A no-op unless a
     job armed `reporting(...)` on this thread."""

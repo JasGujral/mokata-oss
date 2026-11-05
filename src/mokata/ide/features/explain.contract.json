@@ -1,0 +1,100 @@
+{
+  "routes": [
+    {
+      "path": "/api/explain/list", "method": "GET", "kind": "json",
+      "params": {"query": {"session": "only this session's pages and requests (a session id)"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"$ref": "#/schemas/ExplainList"}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"status": 200},
+                 {"query": {"session": "S1"}, "status": 200},
+                 {"query": {"session": "../x"}, "status": 400},
+                 {"query": {"session": "CON"}, "status": 400},
+                 {"status": 200, "demo": true}]
+    },
+    {
+      "path": "/api/explain/page", "method": "GET", "kind": "read",
+      "params": {"query": {"id": "a review id: <sid>/<timestamp>"}},
+      "responses": {
+        "200": {"media": "html"},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}},
+        "404": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"query": {"id": "../etc/passwd"}, "status": 400},
+                 {"query": {"id": "S1/x"}, "status": 400},
+                 {"query": {"id": "S1/20260101T000000.000000Z"}, "status": 404},
+                 {"query": {"id": "S1/20260101T000000.000000Z"}, "status": 200, "demo": true}]
+    },
+    {
+      "path": "/api/explain/sidecar", "method": "GET", "kind": "json",
+      "params": {"query": {"id": "a review id: <sid>/<timestamp>"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"$ref": "#/schemas/ExplainSidecar"}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"query": {"id": "../x"}, "status": 400},
+                 {"query": {"id": "S1/20260101T000000.000000Z"}, "status": 400},
+                 {"query": {"id": "S1/20260101T000000.000000Z"}, "status": 200, "demo": true}]
+    },
+    {
+      "path": "/api/explain/request", "method": "POST", "kind": "action",
+      "params": {"body": {"target": "session <id> | run <id> | range <base> <head> | live"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"type": "object", "required": ["id", "job"],
+          "properties": {"id": {"type": "string"}, "job": {"$ref": "#/schemas/JobSnapshot"}}}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"body": {}, "status": 400},
+                 {"body": {"target": "pr 12"}, "status": 400},
+                 {"body": {"target": "range a;rm b"}, "status": 400},
+                 {"body": {"target": "range nope-ref also-nope"}, "status": 400},
+                 {"body": {"target": "live"}, "status": 200, "demo": true}]
+    },
+    {
+      "path": "/api/explain/cancel", "method": "POST", "kind": "action",
+      "params": {"body": {"request": "a hand-off request id (16 hex)", "mcp_job": "or: an MCP-side bundle job id (16 hex)"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"type": "object", "required": ["cancelled", "id", "note"],
+          "properties": {"cancelled": {"enum": ["request", "mcp_job", "nothing"]}, "id": {"type": "string"},
+                         "note": {"type": "string"}, "sample": {"type": "boolean"}}}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"body": {}, "status": 400},
+                 {"body": {"request": "../x"}, "status": 400},
+                 {"body": {"mcp_job": "zz"}, "status": 400},
+                 {"body": {"request": "0123456789abcdef"}, "status": 400},
+                 {"body": {"request": "0123456789abcdef"}, "status": 200, "demo": true}]
+    },
+    {
+      "path": "/api/explain/commit", "method": "POST", "kind": "action",
+      "params": {"body": {"review": "the review id", "dest": "a repo-relative .html path",
+                          "proposal_id": "the approved proposal (second call)"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"type": "object", "required": ["status"],
+          "properties": {"status": {"type": "string"}, "committed": {"type": "boolean"},
+                         "proposal_id": {"type": "string"}, "message": {"type": "string"}}}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"body": {}, "status": 400},
+                 {"body": {"review": "S1/20260101T000000.000000Z", "dest": "docs/x.html"}, "status": 400},
+                 {"body": {"review": "S1/20260101T000000.000000Z", "dest": "docs/x.html"}, "status": 200, "demo": true}]
+    }
+  ],
+  "schemas": {
+    "ExplainList": {"type": "object",
+      "required": ["sample", "reviews", "requests", "jobs", "count", "size", "keep", "keep_bundles"],
+      "properties": {"sample": {"type": "boolean"}, "count": {"type": "integer"},
+                     "keep": {"type": "integer"}, "keep_bundles": {"type": "integer"},
+                     "reviews": {"type": "array", "items": {"type": "object", "required": ["id", "sid", "state"],
+                       "properties": {"id": {"type": "string"}, "sid": {"type": "string"},
+                                      "state": {"enum": ["fresh", "stale", "orphaned", "unreadable"]}}}},
+                     "requests": {"type": "array", "items": {"type": "object", "required": ["request_id", "state", "text"],
+                       "properties": {"state": {"enum": ["arrived", "cancelled", "queued", "waiting", "no page arrived"]}}}},
+                     "jobs": {"type": "array"},
+                     "size": {"type": "object", "required": ["pages", "bundles"]}}},
+    "ExplainSidecar": {"type": "object", "required": ["sample", "cites", "diagrams", "dropped"],
+      "properties": {"sample": {"type": "boolean"}, "cites": {"type": "array"}, "diagrams": {"type": "array"},
+                     "dropped": {"type": "array"}}}
+  }
+}

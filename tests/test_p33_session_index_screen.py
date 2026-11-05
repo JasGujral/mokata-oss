@@ -554,7 +554,10 @@ class TheScreenIsOneSessionSource(unittest.TestCase):
     def test_R8_a_session_click_opens_the_sessions_screen_with_its_files(self):
         self.assertIn('"/api/sessions/list', self.sessions_js)
         self.assertIn('MK.setMode("sessions")', self.sessions_js)
-        self.assertIn('id="session-files"', self.html)
+        # UX-SIMPLIFY: the session's files are reviewed in Review ("Review changes (n)"), not
+        # listed a second time inside Sessions
+        self.assertIn('id="s1-review"', self.html)
+        self.assertNotIn('id="session-files"', self.html)
         self.assertNotIn('id="sb-list"', self.html, "the second session list is gone")
         self.assertNotIn('id="session-pick"', self.html, "the left-panel session list is gone")
 

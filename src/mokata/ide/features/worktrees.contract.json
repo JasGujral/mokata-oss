@@ -109,6 +109,13 @@
        },
        "sample": {
         "type": "boolean"
+       },
+       "interrupted": {
+        "type": "array",
+        "items": {
+         "type": "object"
+        },
+        "description": "0.0.27 P21: merges whose journal is not done — shown until recovered"
        }
       }
      }
@@ -282,8 +289,173 @@
    "kind": "action",
    "params": {
     "body": {
+     "path": "the worktree (path or branch) — first call",
+     "strategy": "merge-commit | squash | ff (default merge-commit)",
+     "message": "the merge commit message (default: drafted from the spec)",
+     "proposal_id": "the approved proposal — starts the merge job"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "stage",
+       "sample"
+      ],
+      "properties": {
+       "stage": {
+        "enum": [
+         "sample",
+         "blocked",
+         "proposed",
+         "refused",
+         "started"
+        ]
+       },
+       "sample": {
+        "type": "boolean"
+       },
+       "reason": {
+        "type": "string"
+       },
+       "proposal_id": {
+        "type": "string"
+       },
+       "command": {
+        "type": "string"
+       },
+       "plan": {
+        "type": "object"
+       },
+       "state": {
+        "type": "string"
+       },
+       "blocked": {
+        "type": "array",
+        "items": {
+         "type": "object"
+        }
+       },
+       "code": {
+        "type": "string"
+       },
+       "id": {
+        "type": "string"
+       },
+       "job": {
+        "type": "object"
+       },
+       "expires_in": {
+        "type": "integer"
+       }
+      }
+     }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "body": {
+      "path": "/no/such/worktree"
+     },
+     "status": 200
+    },
+    {
+     "body": {},
+     "status": 400
+    },
+    {
+     "body": {
+      "path": "/x"
+     },
+     "status": 200,
+     "demo": true
+    },
+    {
+     "body": {
+      "proposal_id": "nope-0000"
+     },
+     "status": 200
+    }
+   ]
+  },
+  {
+   "path": "/api/worktree/suite",
+   "method": "POST",
+   "kind": "action",
+   "params": {
+    "body": {
+     "path": "the session worktree to run the full suite in"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "stage",
+       "sample"
+      ],
+      "properties": {
+       "stage": {
+        "enum": [
+         "sample",
+         "started"
+        ]
+       },
+       "sample": {
+        "type": "boolean"
+       },
+       "reason": {
+        "type": "string"
+       },
+       "id": {
+        "type": "string"
+       },
+       "job": {
+        "type": "object"
+       }
+      }
+     }
+    },
+    "400": {
+     "media": "json",
+     "schema": {
+      "$ref": "#/schemas/Error"
+     }
+    }
+   },
+   "probes": [
+    {
+     "body": {},
+     "status": 400
+    },
+    {
+     "body": {
+      "path": "/x"
+     },
+     "status": 200,
+     "demo": true
+    }
+   ]
+  },
+  {
+   "path": "/api/worktree/merge-override",
+   "method": "POST",
+   "kind": "action",
+   "params": {
+    "body": {
      "path": "the worktree",
-     "proposal_id": "the approved proposal (second call)"
+     "reason": "why (8+ characters, kept in the ledger)",
+     "proposal_id": "the approved override (second call)"
     }
    },
    "responses": {
@@ -311,14 +483,17 @@
        "reason": {
         "type": "string"
        },
+       "code": {
+        "type": "string"
+       },
        "proposal_id": {
         "type": "string"
        },
        "command": {
         "type": "string"
        },
-       "plan": {
-        "type": "object"
+       "expires_in": {
+        "type": "integer"
        },
        "result": {
         "type": "object"
@@ -336,7 +511,8 @@
    "probes": [
     {
      "body": {
-      "path": "/no/such/worktree"
+      "path": "/no/such/worktree",
+      "reason": "testing the probe"
      },
      "status": 200
     },
@@ -348,6 +524,64 @@
      "body": {
       "path": "/x"
      },
+     "status": 200,
+     "demo": true
+    }
+   ]
+  },
+  {
+   "path": "/api/worktree/merge-recover",
+   "method": "POST",
+   "kind": "action",
+   "params": {
+    "body": {
+     "merge_id": "the interrupted merge (its proposal id)",
+     "unlock_proposal": "the approved removal of mokata's stale index lock"
+    }
+   },
+   "responses": {
+    "200": {
+     "media": "json",
+     "schema": {
+      "type": "object",
+      "required": [
+       "stage",
+       "sample"
+      ],
+      "properties": {
+       "stage": {
+        "enum": [
+         "sample",
+         "blocked",
+         "done"
+        ]
+       },
+       "sample": {
+        "type": "boolean"
+       },
+       "reason": {
+        "type": "string"
+       },
+       "result": {
+        "type": "object"
+       }
+      }
+     }
+    }
+   },
+   "probes": [
+    {
+     "body": {},
+     "status": 200
+    },
+    {
+     "body": {
+      "merge_id": "nope"
+     },
+     "status": 200
+    },
+    {
+     "body": {},
      "status": 200,
      "demo": true
     }

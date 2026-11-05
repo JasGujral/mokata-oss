@@ -174,7 +174,8 @@ class TheEndpoint(unittest.TestCase):
         c = TestClient(build_app(AppState(root, "tok", 9999, None, demo)),
                        base_url="http://127.0.0.1:9999")
         c.get("/pair?t=tok")
-        return c
+        from _ide_follow import Following
+        return Following(c)
 
     def test_views_bad_requests_and_the_demo(self):
         with tempfile.TemporaryDirectory() as d:
@@ -216,8 +217,10 @@ class TheBundleIsReproducible(unittest.TestCase):
             self.pins = json.load(fh)
 
     def test_every_vendored_file_matches_its_pinned_sha256_and_ships_its_mit_license(self):
-        from mokata.ide.server import VENDOR_FILES
-        self.assertEqual(set(VENDOR_FILES), {r["file"] for r in self.pins["files"]})
+        from mokata.ide.server import RENDER_VENDOR_FILES, VENDOR_FILES
+        # 0.0.26 P7: the same pins also hold the Markdown + Mermaid renderers (group "render")
+        self.assertEqual(set(VENDOR_FILES) | set(RENDER_VENDOR_FILES),
+                         {r["file"] for r in self.pins["files"]})
         self.assertEqual(list(VENDOR_FILES), self.pins["load_order"])
         for row in self.pins["files"]:
             with self.subTest(file=row["file"]):
@@ -277,7 +280,8 @@ class ThePage(unittest.TestCase):
         for v in ("ripple", "focus", "path"):            # P37 §5.1: three tabs + a toggle
             self.assertIn(f'data-gview="{v}"', html)
         self.assertIn('data-gview-toggle="untested"', html)
-        for needle in ("structural edge", "lexical edge", "reached by no test", 'id="cy"'):
+        # UX-SIMPLIFY plain words: "from the call graph" / "name match only" (the basis word is the tooltip)
+        for needle in ("from the call graph", "name match only", "reached by no test", 'id="cy"'):
             self.assertIn(needle, html)
         with open(os.path.join(STATIC, "graph.js"), encoding="utf-8") as fh:
             js = fh.read()

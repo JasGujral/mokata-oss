@@ -14,10 +14,12 @@ result `note` announces it is lexical; the adopted graph adapter is always prefe
 
 from __future__ import annotations
 
+import codecs
 import os
 import re
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass, field
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from .. import languages
 from .cancel import checkpoint, report
@@ -34,6 +36,49 @@ SOURCE_EXTENSIONS = languages.SOURCE_EXTENSIONS
 
 
 _CALL_RE_CACHE: Dict[Tuple[str, str], "re.Pattern"] = {}
+
+#: 0.0.27 P4 (R2-2) — the streaming `refs` scan reads at most this many bytes of a line at once,
+#: so one huge line never becomes one huge string.
+REFS_BLOCK = 1 << 20
+#: A reference's snippet is a DISPLAY window: at most this many characters around the match, `…`
+#: marking a clip. A clip of the snippet is never a clip of the answer (every row is kept).
+REFS_SNIPPET_MAX = 240
+
+
+def _clip(text: str, a: int, b: int, cut: bool = False) -> str:
+    """The snippet for a match at text[a:b]: the whole stripped line when it fits, else a window
+    of `REFS_SNIPPET_MAX` characters around the match with `…` where it was cut. `cut` says the
+    text is itself a piece of a longer line."""
+    if not cut and len(text) <= REFS_SNIPPET_MAX:
+        return text.strip()
+    half = max(0, (REFS_SNIPPET_MAX - (b - a)) // 2)
+    lo, hi = max(0, a - half), min(len(text), b + half)
+    out = text[lo:hi].strip()
+    return ("…" if lo > 0 or cut else "") + out + ("…" if hi < len(text) or cut else "")
+
+
+@dataclass
+class RefsScope:
+    """What one lexical `refs` scan covered — so its label states both error sides and its reach,
+    not only "approximate"."""
+    listed: int = 0                     # source files in scope (after pruning + extension filter)
+    scanned: int = 0                    # of those, read to the end
+    unreadable: List[str] = field(default_factory=list)
+    pruned_dirs: int = 0                # directories the walk skipped (hidden/vendor/env/checkout)
+    other_files: int = 0                # files the walk saw with a non-source extension
+    extensions: Tuple[str, ...] = ()
+
+    def line(self) -> str:
+        """The scope sentence an answer carries."""
+        exts = " ".join(self.extensions)
+        un = len(self.unreadable)
+        return (f"lexical scan of {self.scanned} of {self.listed} source files ({exts})"
+                + (f"; {un} unreadable" if un else "")
+                + (f"; skipped {self.other_files} files of other types" if self.other_files else "")
+                + (f" and {self.pruned_dirs} hidden/vendor/environment/nested-checkout "
+                   f"directories" if self.pruned_dirs else "")
+                + "; word matches, one row per matching LINE — may include comments, strings and other symbols of the same "
+                  "name, and misses names built at run time")
 
 
 #: What may precede a called name. Unqualified only (`x(`, never `a.x(`) — or, for a language
@@ -114,7 +159,8 @@ class GrepBackend(GraphBackend):
         elif kind == "defs":
             refs = self._defs(target)
         elif kind == "refs":
-            refs = self._refs(target)
+            scope = RefsScope()
+            refs = list(self.iter_refs(target, scope))
         else:
             refs = self._blast_radius(target, depth)
         # CRG-NAV (d): a NAVIGATION answer produced by the lexical floor says so, and names the
@@ -123,6 +169,8 @@ class GrepBackend(GraphBackend):
         # direct grep-only repo) with no second mechanism. Impact (`blast_radius`) is excluded:
         # that is GRAPH-FIRST-IMPACT's surface, not this row's.
         note = LEXICAL_NOTE
+        if kind == "refs":
+            note = f"{note} | {scope.line()}"
         if kind in NAVIGATION_KINDS:
             note = f"{note} | {GREP_FLOOR_NAV_NOTE}"
         elif kind in IMPACT_KINDS:
@@ -307,23 +355,141 @@ class GrepBackend(GraphBackend):
                     out.append(Reference(self._rel(path), i + 1, line.strip(), target))
         return out
 
-    def _refs(self, target: str) -> List[Reference]:
-        """CRG-NAV (b) — EVERYWHERE the symbol is referenced. Word-boundary matches across the
-        source walk: the lexical superset (a comment or a same-named local counts), which is
-        exactly the floor's contract — approximate, marked degraded, and honest about it."""
-        word = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(target) + r"(?![A-Za-z0-9_])")
-        out: List[Reference] = []
-        files = self._files()
+    def iter_refs(self, target: str, scope: Optional["RefsScope"] = None) -> Iterator[Reference]:
+        """0.0.27 P4 (R2-2) — the lexical `refs` scan, STREAMED: one file at a time, in repo
+        path order, read in blocks of at most `REFS_BLOCK` bytes, with a cancel checkpoint per
+        block. Nothing is cached across files and no line is ever held whole: a 200 MB one-line
+        file costs one block, and each reference's snippet is clipped AT MATCH TIME to
+        `REFS_SNIPPET_MAX` characters around the match (`…` marks a clip).
+
+        Word boundary: a match may not touch a Unicode word character or `$` on either side.
+        Lines are the viewer's (`textlines`): split on `\n` only. One Reference per matching
+        line (the first match's 1-based column in `metadata["col"]`), the symbol it sits in by
+        the same indentation rule `_enclosing` uses. `scope` (optional) is filled with what the
+        scan covered, so a caller can say it — the floor's label is never only its false
+        positives."""
+        scope = scope if scope is not None else RefsScope()
+        if not target:
+            return
+        word = re.compile(r"(?<![\w$])" + re.escape(target) + r"(?![\w$])")
+        files = self._refs_files(scope)
         tick = _Counts(f"references to {target}", files)
+        found = 0
         for n, path in enumerate(files):
-            tick(n, len(out))
-            lang = self._lang(path)
-            lines = self._read(path)
-            for i, line in enumerate(lines):
-                if word.search(line):
-                    out.append(Reference(self._rel(path), i + 1, line.strip(),
-                                         self._enclosing(lang, lines, i)))
-        return out
+            tick(n, found)
+            checkpoint()
+            try:
+                fh = open(path, "rb")
+            except OSError:
+                scope.unreadable.append(str(self._rel(path)))
+                continue
+            try:
+                with fh:
+                    for ref in self._scan_refs(fh, path, word, target):
+                        found += 1
+                        yield ref
+            except OSError:
+                scope.unreadable.append(str(self._rel(path)))
+                continue
+            scope.scanned += 1
+        report(done=len(files), total=len(files), unit="files",
+               note=f"references to {target}: {found}")
+
+    def _refs_files(self, scope: "RefsScope") -> List[str]:
+        """The files a `refs` scan reads, sorted by their repo name (so rows come out in
+        (path, line) order): the scoped list the AST floor handed over, else the repo walk —
+        whose listing phase reports a running count (it has no total until it ends)."""
+        cache = getattr(self, "_corpus_cache", None)
+        listed = cache.get(None) if cache else None
+        if listed is None:
+            listed = []
+            t0 = time.monotonic()
+            for dirpath, dirnames, filenames in os.walk(self.root):
+                before = len(dirnames)
+                prune_source_dirs(dirpath, dirnames)
+                scope.pruned_dirs += before - len(dirnames)
+                dirnames.sort()
+                checkpoint()
+                for fn in filenames:
+                    if fn.endswith(self.extensions):
+                        listed.append(os.path.join(dirpath, fn))
+                    else:
+                        scope.other_files += 1
+                if time.monotonic() - t0 >= 0.3:
+                    t0 = time.monotonic()
+                    report(done=len(listed), unit="files listed", note="listing source files")
+        files = sorted(listed, key=lambda p: str(self._rel(p)))
+        scope.listed = len(files)
+        scope.extensions = tuple(self.extensions)
+        return files
+
+    def _scan_refs(self, fh: Any, path: str, word: "re.Pattern[str]",
+                   target: str) -> Iterator[Reference]:
+        rel = self._rel(path)
+        lang = self._lang(path)
+        openers: List[Tuple[int, str]] = []      # (indent, name), indents strictly increasing
+        carry_n = len(target) + 1
+        lineno = 0
+        while True:
+            chunk = fh.readline(REFS_BLOCK)
+            if not chunk:
+                return
+            lineno += 1
+            if lineno % 1024 == 0:
+                checkpoint()
+            dec = codecs.getincrementaldecoder("utf-8")("replace")
+            final = chunk.endswith(b"\n") or len(chunk) < REFS_BLOCK
+            head = dec.decode(chunk, final=final)
+            first = head[:-1] if head.endswith("\n") else head
+            first = first[:-1] if final and first.endswith("\r") else first
+            indent = len(first) - len(first.lstrip())
+            hit: Optional[Tuple[int, str]] = None     # (col, snippet)
+            if final:
+                m = word.search(first)
+                if m:
+                    hit = (m.start() + 1, _clip(first, m.start(), m.end()))
+            else:
+                # a line longer than one block: scan it in pieces, never whole
+                base, buf = 0, first
+                while True:
+                    checkpoint()
+                    for m in word.finditer(buf):
+                        if base and m.start() == 0:
+                            continue           # its left neighbour is in the previous piece
+                        if not final and m.end() >= len(buf):
+                            break              # its right neighbour is in the next piece
+                        hit = (base + m.start() + 1, _clip(buf, m.start(), m.end(), True))
+                        break
+                    if hit is not None or final:
+                        break
+                    more = fh.readline(REFS_BLOCK)
+                    final = not more or more.endswith(b"\n") or len(more) < REFS_BLOCK
+                    piece = dec.decode(more, final=final)
+                    if final:
+                        piece = piece[:-1] if piece.endswith("\n") else piece
+                        piece = piece[:-1] if piece.endswith("\r") else piece
+                    keep = buf[-carry_n:]
+                    base += len(buf) - len(keep)
+                    buf = keep + piece
+                while not final:                 # drain the rest of the line, unread
+                    checkpoint()
+                    more = fh.readline(REFS_BLOCK)
+                    final = not more or more.endswith(b"\n") or len(more) < REFS_BLOCK
+            if hit is not None:
+                enc = None
+                for oi, oname in reversed(openers):
+                    if oi < indent:
+                        enc = oname
+                        break
+                meta: Dict[str, Any] = {"col": hit[0]}
+                if lang.defines(first, target):
+                    meta["defines"] = True         # this line DEFINES the name (P4 ambiguity)
+                yield Reference(rel, lineno, hit[1], enc, metadata=meta)
+            name = lang.scope_name(first) if first.strip() else None
+            if name:
+                while openers and openers[-1][0] >= indent:
+                    openers.pop()
+                openers.append((indent, name))
 
     def _blast_radius(self, target: str, depth: int) -> List[Reference]:
         """Transitive callers up to `depth` hops — the impact surface of `target`."""

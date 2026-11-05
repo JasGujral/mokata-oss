@@ -85,7 +85,7 @@ def load_emitted_spec(store: Any) -> Optional[Spec]:
 
 
 def check_spec_persisted(store: Any, ledger: Any = None,
-                         phase: str = "develop") -> SpecGateResult:
+                         phase: str = "develop", *, run_id: str) -> SpecGateResult:
     """Block implementation unless a persisted spec with ≥1 acceptance criterion exists.
 
     `store` is the pipeline state surface (`surface.state`); None (uninitialized repo) reads
@@ -108,7 +108,7 @@ def check_spec_persisted(store: Any, ledger: Any = None,
                   f"criterion{'' if ac_count == 1 else 'a'}")
 
     if ledger is not None:
-        ledger.record("gate", gate=SPEC_PERSISTED_GATE_ID, phase=phase,
+        ledger.record("gate", gate=SPEC_PERSISTED_GATE_ID, phase=phase, run=run_id,
                       decision="passed" if passed else "blocked",
                       reason=reason, ac_count=ac_count)
     return SpecGateResult(passed=passed, reason=reason, ac_count=ac_count)

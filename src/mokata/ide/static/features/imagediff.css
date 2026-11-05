@@ -1,0 +1,37 @@
+/* mokata ide - image diff panel (0.0.27 P9). Colours are the theme's tokens, so light, dark and
+   high contrast are the theme's choice; the mode bar is the diff view's own segmented control. */
+.imd { border: 1px solid var(--line2); border-radius: 8px; background: var(--panel); margin: 0 0 10px; padding: 8px 10px 10px; }
+.imd-pending { padding: 4px 2px; }
+.imd-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.imd-actual[aria-pressed="true"] { color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+.imd-meta { margin: 6px 0 8px; }
+.imd-stage { min-width: 0; }
+.imd-side { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 12px; align-items: start; }
+.imd-side.imd-one { grid-template-columns: minmax(0, 1fr); }
+.imd-fig { margin: 0; min-width: 0; }
+.imd-cap { margin-top: 5px; color: var(--muted); overflow-wrap: anywhere; }
+.imd-cap b { color: var(--text); font-weight: 600; }
+/* transparency reads as a checkerboard, from the theme's own lines */
+.imd-frame { width: fit-content; max-width: 100%; overflow: auto; max-height: 70vh; border: 1px solid var(--line); border-radius: 6px; line-height: 0;
+  background: conic-gradient(var(--panel2) 25%, var(--line) 0 50%, var(--panel2) 0 75%, var(--line) 0) 0 0 / 16px 16px; }
+.imd-img, .imd-canvas { max-width: 100%; height: auto; display: block; }
+.imd-1to1 .imd-img, .imd-1to1 .imd-canvas { max-width: none; image-rendering: pixelated; }
+.imd-stack { display: grid; width: max-content; max-width: 100%; }
+.imd-1to1 .imd-stack { max-width: none; }
+.imd-stack > .imd-img { grid-area: 1 / 1; }
+.imd-slider { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; flex-wrap: wrap; }
+.imd-slider input[type="range"] { flex: 1 1 180px; min-width: 120px; accent-color: var(--accent); }
+.imd-slider input[type="range"]:focus-visible, .imd-slider select:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.imd-slider select { background: var(--panel2); color: var(--text); border: 1px solid var(--line2); border-radius: 6px; padding: 2px 6px; font: inherit; }
+.imd-note { padding: 14px 12px; border: 1px dashed var(--line2); border-radius: 6px; color: var(--text2); background: var(--panel2); line-height: 1.45; overflow-wrap: anywhere; }
+.imd-big { border-style: solid; color: var(--del); background: var(--del-bg); }
+.imd-path { display: block; margin-top: 4px; color: var(--muted); overflow-wrap: anywhere; }
+.imd-strip { display: flex; align-items: center; gap: 10px; margin: 0 0 8px; flex-wrap: wrap; }
+.imd-strip progress { flex: 1 1 180px; min-width: 120px; height: 8px; accent-color: var(--accent); }
+.imd-sum { margin: 0 0 8px; font-weight: 600; }
+.imd-sum.imd-diff { color: var(--del); }
+.imd-sum.imd-same { color: var(--add); }
+/* the spoken twin of the summary: for a screen reader, not a second line on the page */
+.imd-live { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@media (max-width: 560px) { .imd { padding: 6px 8px 8px; } .imd-frame { max-height: 60vh; } }
+@media (prefers-reduced-motion: reduce) { .imd * { scroll-behavior: auto; } }

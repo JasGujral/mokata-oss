@@ -44,12 +44,29 @@ TOKEN, PORT = "tok", 9999
 BASE = f"http://127.0.0.1:{PORT}"
 ORIGIN = {"Origin": BASE}
 _MEDIA = {"json": "application/json", "html": "text/html", "text": "text/plain",
-          "js": "text/javascript", "css": "text/css", "svg": "image/svg+xml",
+          "js": "text/javascript", "css": "text/css", "svg": "image/svg+xml", "image": "image/",
           "sse": "text/event-stream"}
 
 CORE = ("def parse(text):\n    if not text:\n        return []\n"
         "    return [p.strip() for p in text.split(',')]\n\n\ndef total(text):\n"
         "    return len(parse(text))\n")
+
+
+def _png(w, h, fill=True):
+    import struct
+    import zlib
+
+    def chunk(t, body):
+        return struct.pack(">I", len(body)) + t + body + struct.pack(">I", zlib.crc32(t + body))
+    out = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+    if fill:
+        out += chunk(b"IDAT", zlib.compress((b"\0" + b"\x20\xc0\x60" * w) * h))
+    return out + chunk(b"IEND", b"")
+
+
+#: assets/huge.png is a header for a 20000x20000 image (a few dozen bytes on disk): "too large to diff".
+_IMAGES = {"assets/dot.png": _png(4, 4), "assets/huge.png": _png(20000, 20000, fill=False),
+           "assets/fake.png": b"<html><script>alert(1)</script></html>"}
 
 
 def _silent(*_a, **_k):
@@ -77,6 +94,10 @@ def fixture(d: str) -> None:
     _write(d, "src/app/core.py", CORE)
     _write(d, "tests/test_core.py",
            "from app.core import parse\n\n\ndef test_parse():\n    assert parse('a') == ['a']\n")
+    for rel, data in _IMAGES.items():                # P9: the image routes' probes need real files
+        os.makedirs(os.path.join(d, "assets"), exist_ok=True)
+        with open(os.path.join(d, *rel.split("/")), "wb") as fh:
+            fh.write(data)
     _git(d, "add", "-A")
     _git(d, "commit", "-qm", "init")
     path = os.path.join(d, "src", "app", "core.py")
@@ -512,7 +533,7 @@ process.stdout.write(JSON.stringify(out));
         js = (STATIC / "features" / "core-commands.js").read_text(encoding="utf-8")
         o = self._node(r"""
 globalThis.window = globalThis;
-MK.SCREENS = ["sessions", "review", "navigate", "search", "graph", "plan"].map((id) => ({ id, title: id, chord: id[0] }));
+MK.TABS = [["review", "r"], ["sessions", "s"], ["navigate", "c"]].map(([id, chord]) => ({ id, title: id, chord }));
 let opened = 0; MK.openQuick = () => { opened++; };
 """ + js + r"""
 const out = { list: mokataIDE.commands().map((c) => [c.id, c.keys.join(",")]) };
@@ -520,10 +541,10 @@ mokataIDE.run("quickopen.open"); out.opened = opened;
 """)
         got = dict(map(tuple, o["list"]))
         self.assertEqual("Mod+P", got["quickopen.open"])
-        # P34 (IA-ONE-NAV): one command per SCREEN ("Go to: …"); the search screen owns ⌘⇧F.
-        for m in ("review", "navigate", "graph", "plan", "sessions", "search"):
-            self.assertIn("screen." + m, got)
-        self.assertEqual("Mod+Shift+F", got["screen.search"])
+        # UX-SIMPLIFY: one command per top tab ("Go to: …"), none for a view; ⌘⇧F is Code's search.
+        self.assertEqual(["screen.navigate", "screen.review", "screen.sessions"],
+                         sorted(k for k in got if k.startswith("screen.")))
+        self.assertEqual("Mod+Shift+F", got["code.search"])
         self.assertEqual(1, o["opened"])
         app = (STATIC / "app.js").read_text(encoding="utf-8")
         self.assertNotIn('ev.key === "p"', app, "⌘P is handled twice (app.js and the registry)")

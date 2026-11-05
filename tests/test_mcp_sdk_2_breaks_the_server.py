@@ -90,7 +90,7 @@ class TestPyprojectBoundsTheBreakingMajor(unittest.TestCase):
     def test_default_dependency_excludes_the_breaking_major(self):
         m = re.search(r"(?m)^dependencies = \[(?P<body>.*)\]", self.pyproject)
         self.assertIsNotNone(m, "pyproject.toml has no top-level [project].dependencies array")
-        self.assertIn("mcp>=1.2,<2", m.group("body"),
+        self.assertIn("mcp>=1.30,<2", m.group("body"),
                       "the MCP SDK must be bounded BELOW 2.0.0 — 2.x removed `mcp.server.fastmcp` "
                       "and a fresh resolve picks it, shipping a server that cannot start")
 
@@ -99,7 +99,7 @@ class TestPyprojectBoundsTheBreakingMajor(unittest.TestCase):
         # DIFFERENTLY is not an alias — `pip install "mokata[mcp]"` would still get 2.0.0.
         m = re.search(r"(?m)^mcp = \[(?P<body>.*)\]", self.pyproject)
         self.assertIsNotNone(m, "the [mcp] compat-alias extra is gone")
-        self.assertIn("mcp>=1.2,<2", m.group("body"),
+        self.assertIn("mcp>=1.30,<2", m.group("body"),
                       "the [mcp] alias must carry the SAME bound as the default dependency")
 
     def test_declared_bound_matches_the_code_constants(self):
@@ -125,9 +125,9 @@ class TestFourStatesFourRepresentations(unittest.TestCase):
     `broken` all collapsed to False and the caller could not tell which one it had."""
 
     def test_supported_sdk_reports_supported(self):
-        st = MS.classify_sdk(version="1.29.0", import_error=None)
+        st = MS.classify_sdk(version="1.30.0", import_error=None)
         self.assertEqual(st.state, MS.SDK_SUPPORTED)
-        self.assertEqual(st.version, "1.29.0")
+        self.assertEqual(st.version, "1.30.0")
 
     def test_incompatible_sdk_is_not_reported_as_absent(self):
         """THE REGRESSION. Under `mcp` 2.0.0 the old code returned False == "not installed"."""
@@ -147,7 +147,7 @@ class TestFourStatesFourRepresentations(unittest.TestCase):
     def test_present_but_unimportable_at_a_supported_major_is_broken(self):
         """Reachable TODAY on CI's `jsonschema: absent` leg — `mcp` hard-requires
         `jsonschema>=4.20.0`, and that leg uninstalls it. Neither absent nor incompatible."""
-        st = MS.classify_sdk(version="1.29.0",
+        st = MS.classify_sdk(version="1.30.0",
                              import_error=ModuleNotFoundError("No module named 'jsonschema'"))
         self.assertEqual(st.state, MS.SDK_BROKEN)
         self.assertIn("jsonschema", st.detail,
@@ -157,15 +157,21 @@ class TestFourStatesFourRepresentations(unittest.TestCase):
         st = MS.classify_sdk(version="1.1.0", import_error=None)
         self.assertEqual(st.state, MS.SDK_INCOMPATIBLE)
 
-    def test_the_floor_itself_is_INSIDE_the_bound(self):
-        """BOTH boundaries, because a mutant proved one of them was ungraded: flipping the floor
-        comparison from `>=` to `>` SURVIVED the first batch (M04). `mcp>=1.2` admits 1.2 exactly,
-        and no test used exactly 1.2 — so the code could have started refusing the oldest version
-        it advertises support for and every test would still have passed."""
-        for version in ("1.2", "1.2.0"):
-            st = MS.classify_sdk(version=version, import_error=None)
-            self.assertEqual(st.state, MS.SDK_SUPPORTED,
-                             f"`mcp {version}` is the declared FLOOR and must be supported")
+    def test_the_floor_is_the_first_release_with_no_known_advisory(self):
+        """Users must not be left able to run an SDK with published advisories: the declared floor
+        is the first `mcp` release that fixes them, and that release itself is supported.
+
+        0.0.27 R2 (DEPENDABOT-10): mcp <= 1.29.1 carries CVE-2026-59951, CVE-2026-116684,
+        CVE-2026-116685 and CVE-2026-116686 (all fixed in 1.30.0 and 2.2.0). The constant is
+        typed here on purpose - the test is offline, so a later advisory means raising BOTH this
+        constant and the floor in one reviewed change."""
+        first_fixed = (1, 30)
+        self.assertEqual(MS.SDK_MIN_VERSION, first_fixed,
+                         "the floor parted from the first mcp release without known advisories")
+        self.assertEqual(MS.classify_sdk(version="1.30.0", import_error=None).state,
+                         MS.SDK_SUPPORTED)
+        self.assertEqual(MS.classify_sdk(version="1.29.1", import_error=None).state,
+                         MS.SDK_INCOMPATIBLE)
 
     def test_an_sdk_lacking_the_module_we_build_on_is_incompatible_whatever_its_version(self):
         """🔴 FOUND BY PROBING THE 2026-07-28 WORLD — and it was a hole in this stage's own fix.
@@ -191,7 +197,7 @@ class TestFourStatesFourRepresentations(unittest.TestCase):
         # so its absence is a broken machine, not an unusable SDK. Conflating the two would send
         # a user with a repairable env the "your SDK is wrong" remedy.
         st = MS.classify_sdk(
-            version="1.29.0",
+            version="1.30.0",
             import_error=ModuleNotFoundError("No module named 'jsonschema'", name="jsonschema"))
         self.assertEqual(st.state, MS.SDK_BROKEN)
 
@@ -213,7 +219,7 @@ class TestFourStatesFourRepresentations(unittest.TestCase):
         self.assertEqual(st.state, MS.SDK_SUPPORTED)
 
     def test_mcp_available_is_true_only_for_supported(self):
-        self.assertTrue(MS.mcp_available(state=_disposition(MS.SDK_SUPPORTED, "1.29.0")))
+        self.assertTrue(MS.mcp_available(state=_disposition(MS.SDK_SUPPORTED, "1.30.0")))
         for bad in (MS.SDK_ABSENT, MS.SDK_BROKEN, MS.SDK_INCOMPATIBLE):
             self.assertFalse(MS.mcp_available(state=_disposition(bad, "2.0.0")), bad)
 
@@ -263,7 +269,7 @@ class TestTheRemedyMustActuallyWork(unittest.TestCase):
                             "absent and incompatible must not share one message (§7g)")
 
     def test_broken_message_names_the_underlying_import_error(self):
-        msg = _disposition(MS.SDK_BROKEN, "1.29.0", "No module named 'jsonschema'").diagnosis()
+        msg = _disposition(MS.SDK_BROKEN, "1.30.0", "No module named 'jsonschema'").diagnosis()
         self.assertIn("jsonschema", msg)
 
 
@@ -378,7 +384,7 @@ class TestTheGateRefusesRatherThanSkips(unittest.TestCase):
     def test_broken_skips_when_not_required(self):
         with self.assertRaises(unittest.SkipTest):
             _mcp_sdk.check_sdk_or_raise(
-                state=_disposition(MS.SDK_BROKEN, "1.29.0", "no jsonschema"), require=False)
+                state=_disposition(MS.SDK_BROKEN, "1.30.0", "no jsonschema"), require=False)
 
     def test_absent_FAILS_when_the_leg_declared_the_sdk_required(self):
         """THE POSITIVE CONTROL. Two states still skip, so on a leg that installs the SDK a skip
@@ -389,12 +395,12 @@ class TestTheGateRefusesRatherThanSkips(unittest.TestCase):
     def test_broken_FAILS_when_the_leg_declared_the_sdk_required(self):
         with self.assertRaises(AssertionError):
             _mcp_sdk.check_sdk_or_raise(
-                state=_disposition(MS.SDK_BROKEN, "1.29.0", "no jsonschema"), require=True)
+                state=_disposition(MS.SDK_BROKEN, "1.30.0", "no jsonschema"), require=True)
 
     def test_supported_returns_quietly_in_both_modes(self):
         for require in (True, False):
             self.assertIsNone(_mcp_sdk.check_sdk_or_raise(
-                state=_disposition(MS.SDK_SUPPORTED, "1.29.0"), require=require))
+                state=_disposition(MS.SDK_SUPPORTED, "1.30.0"), require=require))
 
     def test_required_reads_the_declared_env_var(self):
         original = os.environ.get(_mcp_sdk.REQUIRE_ENV)
@@ -416,7 +422,7 @@ class TestTheGateRefusesRatherThanSkips(unittest.TestCase):
             calls.append(1)
 
         original = MS.sdk_state
-        MS.sdk_state = lambda: _disposition(MS.SDK_SUPPORTED, "1.29.0")
+        MS.sdk_state = lambda: _disposition(MS.SDK_SUPPORTED, "1.30.0")
         try:
             body()
         finally:
@@ -435,7 +441,7 @@ class TestTheGateRefusesRatherThanSkips(unittest.TestCase):
         try:
             with self.assertRaises(AssertionError):
                 body()
-            MS.sdk_state = lambda: _disposition(MS.SDK_SUPPORTED, "1.29.0")
+            MS.sdk_state = lambda: _disposition(MS.SDK_SUPPORTED, "1.30.0")
             self.assertEqual(body(), "ran")
         finally:
             MS.sdk_state = original
@@ -511,7 +517,7 @@ class TestNoTestReturnsToTheTwoMeaningsGate(unittest.TestCase):
 
 class TestTheHomebrewLockAgreesWithTheBound(unittest.TestCase):
     """Homebrew installs Python formulae with `--no-deps`, so `packaging/homebrew/` vendors the
-    dependency tree itself. It pins `mcp==1.28.1`, which means **Homebrew would have shipped a
+    dependency tree itself. It pins an `mcp` inside the bound (1.30.0 at 0.0.27 R2), which means **Homebrew would have shipped a
     WORKING server through the entire fifteen days pip shipped a dead one** — the lockfile was
     accidentally right.
 

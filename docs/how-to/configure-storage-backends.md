@@ -71,8 +71,12 @@ A hosted Postgres store is an **opt-in** remote backend. Two rules keep it local
 
    ```bash
    export MOKATA_PG_DSN="postgresql://user:password@db.example.com:5432/mokata"
+   mokata reconfigure --add postgres        # put postgres into the memory_store chain (asks first)
    mokata config set tools.postgres.config.dsn_env MOKATA_PG_DSN
    ```
+
+   The `reconfigure --add` comes first: until the chain names `postgres`, the manifest has no
+   `tools.postgres` entry and `config set` refuses the key (the manifest would be invalid).
 
    If you try to put a DSN with credentials *into* the manifest, the secret-guard blocks the
    write:

@@ -64,6 +64,8 @@ PATH_KEYS = ("file_path", "notebook_path", "path", "target_file")
 #: `ide.snapshots.MAX_FILE_BYTES` (pinned): a larger file is recorded "too-large", with no content —
 #: exactly what the snapshot store would keep — so its bytes are never read or spooled.
 MAX_SNAPSHOT_BYTES = 1024 * 1024
+#: `ide.snapshots.PRIVATE` (pinned): the observed state of a private path — no bytes were read.
+PRIVATE_STATE = "private"
 #: One spool entry (payload + spooled file bytes) larger than this runs inline instead.
 MAX_ENTRY_BYTES = 8 * 1024 * 1024
 
@@ -83,6 +85,237 @@ LOCK_STALE_SECS = 60.0
 ENV_PREFIXES = ("CLAUDE_", "MOKATA_")
 
 _STDIN_READ_TIMEOUT_SECS = 2.0
+
+
+# ------------------------------------------------------------------------- the private-path rule
+# THE one predicate for "is this git's store or mokata's private store" — single-sourced HERE, in the
+# stdlib-only front door, because the front door must apply it BEFORE it copies a written file's
+# bytes into its spool (0.0.27 SEC-HARDEN), and it may import nothing from `mokata`. The engine reads
+# it through `mokata.repo_paths` (which re-exports these names); every IDE read route reaches it
+# through `ide.snapshots.rel_path`.
+
+#: The two directories of a repository that are NEVER repo content: git's own store and mokata's
+#: private store. Refused at ANY depth (a nested checkout's `.git`, a sub-project's `.mokata`).
+PRIVATE_DIRS = (".git", ".mokata")
+
+#: Inside a git store, the content-addressed object database is the one subtree the hard-link index
+#: does not walk: it can hold millions of files, and its bytes are repo HISTORY — content the IDE
+#: already serves through its diffs — not git's configuration or hooks.
+_GIT_OBJECT_DIRS = ("objects",)
+
+
+def split_any(path: str) -> list:
+    """The components of `path`, split on EITHER separator (a name or a native path). A split, not
+    a respelling: nothing is converted, so no name is born here (`repo_paths` owns that)."""
+    return [q for p in str(path).split("/") for q in p.split("\\") if q]
+
+
+def fold_component(part: str) -> str:
+    """The comparison key of ONE path component — the same key on every filesystem (0.0.27
+    CASEFOLD-FIX).
+
+    A filesystem decides what a name OPENS, and they disagree: APFS (default) and NTFS ignore case,
+    APFS also ignores Unicode normalisation (the KELVIN SIGN is a canonical twin of `K`), and
+    Windows drops trailing dots and spaces from a component and reads `name:stream` as `name`.
+    A refusal that compares spellings case-sensitively is therefore a refusal of one spelling out
+    of many — `.MOKATA/x` was served on a Mac. So the key is the union of those foldings, applied
+    on EVERY platform: canonical caseless (NFC, then casefold — NFC first, or two canonically
+    equal spellings with their marks in a different order fold apart),
+    the stream suffix after the first `:` dropped, trailing dots and spaces dropped. Over-refusing
+    a Linux file called `.Git` or `.git.` is the stated cost; a decision that depends on the
+    filesystem it happens to run on is the defect."""
+    import unicodedata
+    key = unicodedata.normalize("NFC", part).casefold()
+    return key.split(":", 1)[0].rstrip(". ")
+
+
+def is_private_name(name: str) -> bool:
+    """True when ANY component of `name` (either separator) folds to `.git` or `.mokata` — the
+    NAME half of the rule. It can raise (a component that cannot be folded); the caller refuses on
+    that — fail closed."""
+    private = {fold_component(d) for d in PRIVATE_DIRS}
+    return any(fold_component(p) in private for p in split_any(name))
+
+
+def _gitfile_dirs(gitfile: str) -> list:
+    """The git dir a `.git` FILE points at (a linked worktree, a submodule, `--separate-git-dir`),
+    plus that dir's `commondir` (where a linked worktree's config and hooks really live). [] when it
+    is not a readable pointer."""
+    try:
+        with open(gitfile, "r", encoding="utf-8", errors="replace") as fh:
+            line = fh.read(4096).strip()
+    except OSError:
+        return []
+    if not line.startswith("gitdir:"):
+        return []
+    gitdir = os.path.join(os.path.dirname(gitfile), line[len("gitdir:"):].strip())
+    out = [gitdir]
+    try:
+        with open(os.path.join(gitdir, "commondir"), "r", encoding="utf-8",
+                  errors="replace") as fh:
+            common = fh.read(4096).strip()
+        if common:
+            out.append(os.path.join(gitdir, common))
+    except OSError:
+        pass
+    return out
+
+
+def store_dirs(root: str) -> list:
+    """Every directory that IS a private store of the repo at `root`, as paths: its `.mokata`, its
+    `.git` (a directory, or the FILE itself plus the git dir and common dir that file points at).
+    Paths only — whether each exists is the caller's question."""
+    out = [os.path.join(root, d) for d in PRIVATE_DIRS]
+    dot_git = os.path.join(root, PRIVATE_DIRS[0])
+    if os.path.isfile(dot_git):
+        out.extend(_gitfile_dirs(dot_git))
+    return out
+
+
+def _store_ids(root: str) -> set:
+    targets = set()
+    for d in store_dirs(root):
+        try:
+            st = os.stat(d)
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        if st.st_ino:
+            targets.add((st.st_dev, st.st_ino))
+    return targets
+
+
+#: realpath(root) -> (directory signature, {(dev, ino) of every file in the stores}). Re-validated on
+#: every use by re-stating the directories it was built from: a file created, renamed or replaced in
+#: a store changes its directory's mtime, so a stale index is rebuilt, never served.
+_LINK_INDEX: dict = {}
+
+
+def _dir_sig(path: str) -> tuple:
+    st = os.stat(path)
+    return (st.st_dev, st.st_ino, st.st_mtime_ns)
+
+
+def _walk_store(base: str, git: bool, files: set, dirs: list) -> None:
+    """Every regular file's (dev, ino) under `base` into `files`, every directory's signature into
+    `dirs`. Iterative (no recursion limit), symlinks not followed, git's object database skipped."""
+    stack = [base]
+    while stack:
+        here = stack.pop()
+        try:
+            dirs.append((here, _dir_sig(here)))
+            with os.scandir(here) as it:
+                entries = list(it)
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        for e in entries:
+            if e.is_dir(follow_symlinks=False):
+                if git and fold_component(e.name) in _GIT_OBJECT_DIRS:
+                    continue
+                stack.append(e.path)
+            elif e.is_file(follow_symlinks=False):
+                st = os.lstat(e.path)          # DirEntry.stat carries no inode on Windows
+                if st.st_ino:
+                    files.add((st.st_dev, st.st_ino))
+
+
+def _store_file_ids(root: str) -> set:
+    """(dev, ino) of every file in the repo's private stores (git's object database aside)."""
+    key = os.path.realpath(root)
+    cached = _LINK_INDEX.get(key)
+    if cached is not None:
+        sig, ids = cached
+        try:
+            if all(_dir_sig(p) == s for p, s in sig):
+                return ids
+        except (FileNotFoundError, NotADirectoryError):
+            pass
+    files: set = set()
+    dirs: list = []
+    for d in store_dirs(key):
+        if os.path.isdir(d):
+            _walk_store(d, fold_component(os.path.basename(d)) != PRIVATE_DIRS[1], files, dirs)
+    _LINK_INDEX[key] = (tuple(dirs), files)
+    return files
+
+
+def hardlinked_private(root: str, st) -> bool:
+    """Is the regular file whose `os.stat` is `st` a HARD LINK to a file inside the repo's private
+    stores? Identity, not spelling: a second name for `.git/config` is `.git/config`. Only a file
+    with more than one link can be one, so the common case costs nothing."""
+    import stat as _stat
+    if not _stat.S_ISREG(st.st_mode) or st.st_nlink < 2 or not st.st_ino:
+        return False
+    return (st.st_dev, st.st_ino) in _store_file_ids(root)
+
+
+def aliases_private(root: str, name: str) -> bool:
+    """True when a leading run of `name`'s components IS, on disk, the repo's own `.git` or
+    `.mokata` — or when the file `name` opens is a hard link to a file inside one of them — the
+    IDENTITY half of the rule, compared as (device, inode), never by spelling.
+
+    It catches what no spelling rule can: an 8.3 short name (`MOKATA~1`), a directory symlink or
+    junction called anything at all, whatever folding THIS filesystem applies beyond the name
+    rule's, and (0.0.27 SEC-HARDEN) a second hard-link name for a store file. A component that does
+    not exist (or, on Windows, whose name is malformed) ends the walk (nothing past it can be the
+    store); any OTHER failure to look
+    (permission, a loop) raises, and the caller refuses — fail closed. An identity of inode 0 (a
+    filesystem without stable ids) is not used; the name rule still is."""
+    targets = _store_ids(root)
+    if not targets:
+        return False
+    here, st = root, None
+    for part in split_any(name):
+        here = os.path.join(here, part)
+        try:
+            st = os.stat(here)
+        except (FileNotFoundError, NotADirectoryError):
+            return False
+        except OSError as exc:
+            if _is_invalid_name(exc):
+                return False          # a name the filesystem cannot hold names no file at all
+            raise
+        if (st.st_dev, st.st_ino) in targets:
+            return True
+    return st is not None and hardlinked_private(root, st)
+
+
+#: Windows' ERROR_INVALID_NAME: `os.stat('core.py:3:x')` is a malformed alternate-data-stream name, so
+#: it answers EINVAL (not "not found"). It is the same fact as a missing component - no file has this
+#: name, so none of it can be the store - and must not be read as "could not look" (which refuses).
+_WIN_INVALID_NAME = 123
+
+
+def _is_invalid_name(exc: OSError) -> bool:
+    return getattr(exc, "winerror", None) == _WIN_INVALID_NAME
+
+
+def _nearest_repo(path: str) -> "str | None":
+    """The nearest ancestor of `path` holding a `.git` or a `.mokata`, or None."""
+    cur = os.path.dirname(path)
+    while True:
+        if any(os.path.lexists(os.path.join(cur, d)) for d in PRIVATE_DIRS):
+            return cur
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return None
+        cur = parent
+
+
+def private_path(path: str) -> bool:
+    """The rule for an ABSOLUTE path with no repo handed in (the front door's question): private by
+    NAME anywhere along the path as written or as resolved, or by IDENTITY against the nearest
+    repo's stores. Undecidable is private — the caller then reads no byte."""
+    try:
+        real = os.path.realpath(path)
+        if is_private_name(path) or is_private_name(real):
+            return True
+        root = _nearest_repo(real)
+        if root is None:
+            return False
+        # `root` is an ancestor of `real` (found by walking up from it): the components below it.
+        return aliases_private(root, real[len(root):])
+    except (OSError, ValueError, TypeError):
+        return True
 
 
 # ------------------------------------------------------------------------------ the fast "no repo"
@@ -604,6 +837,10 @@ def _observations(payload: dict) -> dict:
         return {}
     cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else None
     ab = target if os.path.isabs(target) else os.path.join(cwd or os.getcwd(), target)
+    if private_path(ab):
+        # 0.0.27 SEC-HARDEN — git's store or mokata's private store (any spelling, any alias, a
+        # hard link into either): the path is recorded and NO byte is read, so none is spooled.
+        return {os.path.realpath(ab): (PRIVATE_STATE, 0, time.time(), None)}
     real, seen = observe_file(ab)
     return {real: seen}
 
@@ -734,5 +971,7 @@ def main(argv: "list | None" = None) -> int:
         engine.FRONT_DOOR = prior
 
 
-__all__ = ["DEFERRED", "QUIET_OUTSIDE_MOKATA", "SYNC_OBSERVE", "drain", "emit", "loads", "main",
-           "pending", "registered_run", "spool_dir", "spool_entry", "surely_not_mokata"]
+__all__ = ["DEFERRED", "PRIVATE_DIRS", "QUIET_OUTSIDE_MOKATA", "SYNC_OBSERVE", "aliases_private",
+           "drain", "emit", "fold_component", "hardlinked_private", "is_private_name", "loads",
+           "main", "pending", "private_path", "registered_run", "split_any", "spool_dir",
+           "spool_entry", "store_dirs", "surely_not_mokata"]

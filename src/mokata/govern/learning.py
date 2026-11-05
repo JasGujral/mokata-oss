@@ -237,5 +237,12 @@ def apply_gate_promotion(promotion: RulePromotion, gate: Any, ledger: Any, decis
     # path writes in `memory/store.py`.
     ledger.record("enforcement_change", subject=gate.id, item_id=gate.id, gkind=GATE_GKIND,
                   direction="promote", old=old, new=GATE_PROMOTION_TARGET, actor=actor,
-                  approval_seq=approval_seq)
+                  approval_seq=approval_seq, run=_current_run())
     return True
+
+
+def _current_run() -> str:
+    """G3-EVIDENCE — the run this ledger row belongs to (`session.current_run_id`), so a committed
+    run record can export it. Imported late: the session module must not load at import time here."""
+    from ..session import current_run_id
+    return current_run_id()

@@ -17,8 +17,11 @@ import json
 import os
 from typing import Any, List, Optional
 
-from .healing import ConflictRecord
 from .item import MemoryItem
+
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from .healing import ConflictRecord
 
 _OP_PUT = "memory_put"
 
@@ -57,7 +60,7 @@ class TeamWriter:
         except Exception:
             project = None
         try:
-            from ..team_audit import actor as _actor
+            from ..session import actor as _actor
             who = _actor()
         except Exception:
             who = "user"
@@ -108,6 +111,9 @@ class TeamWriter:
         unparseable local doc falls back to the entry's own plain columns (which the flush already
         relies on), and an unparseable REMOTE doc yields `remote=None` — rendered as
         "unreadable" rather than as an invented value the human might resolve against."""
+        # R6 (0.0.27): imported here, not at module scope — every store open imports this module
+        # (the per-prompt hook among them); only a TEAM seat with a journal conflict reaches here.
+        from .healing import ConflictRecord
         entry = view.entry
         local = (cls._item(entry.payload.get("doc"))
                  or MemoryItem(id=entry.key,

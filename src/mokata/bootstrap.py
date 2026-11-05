@@ -685,9 +685,17 @@ def _fit_to_budget(header: str, reserved: List[str], ranked: List[str], budget: 
     return "", 0, 0, total
 
 
+#: R6 (0.0.27 TIERED-RECALL-SILENT-OFF) — what the turn is told when the tiered stack raised and
+#: the keyword floor ranked its memory instead (the O12 rule: a turn whose ranking could not use a
+#: tier SAYS so). It rides the pack's header like the other ranking notes.
+TIERED_RECALL_FALLBACK_NOTE = ("ranked by keyword overlap only this turn — the tiered recall "
+                               "failed ({exc}); `mokata doctor` checks the memory store")
+
+
 def _ranked_injection_items(store: Any, query: str, exclude: "set",
                             kinds: tuple, jit_recall: Any,
-                            top_k: int = INJECTION_JIT_TOP_K, graph_scorer: Any = None) -> list:
+                            top_k: int = INJECTION_JIT_TOP_K, graph_scorer: Any = None,
+                            notes: "Optional[list]" = None) -> list:
     """The ranked half of the per-turn pack: the FULL tiered stack, degrading to the lexical floor.
 
     JIT-STAMP-SEAM. `recall_relevant(stamp=False, kinds=…)` is what makes this legal on a hook that
@@ -696,12 +704,13 @@ def _ranked_injection_items(store: Any, query: str, exclude: "set",
     preserved exactly as H-1a shipped them, and each is preserved by construction rather than by
     hoping the new path happens to keep it:
 
-      * **DEDUP BEFORE THE CUT (S4).** `recall_relevant` has no `exclude_ids`, so the exclusion is
-        paid for by OVER-FETCHING exactly `len(exclude)` extra slots and dropping the seen items
-        from the result. That is equivalent to excluding from the candidate set for the property
-        that matters: if every excluded item lands in the top `k + len(exclude)`, removing them
-        still leaves `k` unseen items, so the freed budget promotes what the session has not seen
-        instead of silencing the channel. Filtering a plain top-`k` is what would silence it.
+      * **DEDUP BEFORE THE CUT (S4).** The exclusion goes INTO `recall_relevant(exclude_ids=…)`
+        (R6, 0.0.27). It returns the top `k + len(exclude)` minus the seen items, which is what
+        this function used to compute by over-fetching, so a short session is byte-identical. A
+        long session no longer over-fetches past the 150-candidate bound: that over-fetch tripped
+        the bound's assert on every turn and silently handed the pack to the keyword floor
+        (TIERED-RECALL-SILENT-OFF). `tiered.nomination_window` moves the exclusion inside the
+        ranked query there instead.
 
       * **ADMISSION (C2).** A ranked list has no admission threshold — `recall_relevant` returns
         the top-k of whatever it ranked, matching or not. `injection_admits` is re-applied here so
@@ -712,8 +721,10 @@ def _ranked_injection_items(store: Any, query: str, exclude: "set",
         on the FTS path it is nearly unreachable because only matches are candidates at all.
 
       * **DEGRADE.** Any failure falls back to `jit_recall` — the exact pre-seam behaviour, not an
-        empty pack. A store with no tiered path (a duck-typed double, a backend without
-        `recall_relevant`) is a normal outcome here, not an error.
+        empty pack — and is SAID: `TIERED_RECALL_FALLBACK_NOTE` is appended to `notes`, which
+        `build_injection` puts in the pack's header (R6; it used to be silent). A store with no
+        tiered path (a duck-typed double, a backend without `recall_relevant`) is a normal
+        outcome here, not an error, and says nothing.
     """
     from .memory.brain import injection_admits
     recall = getattr(store, "recall_relevant", None)
@@ -727,16 +738,17 @@ def _ranked_injection_items(store: Any, query: str, exclude: "set",
             # the identical notice would print every turn and what it would report is that one
             # turn got less context than it could have — never that a guarantee was broken. The
             # same degrade still announces loudly on every path a human actually invoked.
-            hits = recall(query, top_k=top_k + len(exclude), graph_scorer=graph_scorer,
+            hits = recall(query, top_k=top_k, graph_scorer=graph_scorer, exclude_ids=exclude,
                           stamp=False, kinds=kinds, degrade_out=lambda _msg: None)
             items = [h.item for h in hits if h.item.id not in exclude
                      and injection_admits(query, h.item)]
             return items[:top_k]
-        except Exception:  # noqa: BLE001
-            # The tiered stack is an UPGRADE over a floor that still works. Falling back to it is
-            # the designed outcome, and announcing it every turn would train the user to ignore
-            # the channel (the same reasoning `build_injection`'s own handler carries).
-            pass
+        except Exception as exc:  # noqa: BLE001
+            # The tiered stack is an UPGRADE over a floor that still works, so falling back is
+            # the designed outcome. But it is SAID in the pack (R6): before, a long session lost
+            # the graph, meaning and expansion ranking on every turn and nothing told anyone.
+            if notes is not None:
+                notes.append(TIERED_RECALL_FALLBACK_NOTE.format(exc=type(exc).__name__))
     return jit_recall(store, query, top_k=top_k, exclude_ids=exclude)
 
 
@@ -771,6 +783,7 @@ def build_injection(surface: Surface, query: str,
         return InjectionResult(text="", token_estimate=0, budget=budget)
 
     exclude = exclude_ids or set()
+    ranking_notes: list = []          # R6 — a ranking that fell back is said (see below)
     evidence = [ln for ln in (evidence_lines or []) if isinstance(ln, str) and ln.strip()]
     try:
         from .memory import JIT_KINDS, MemoryStore, always_on_lines, jit_recall, render_item_line
@@ -797,7 +810,8 @@ def build_injection(surface: Surface, query: str,
         # `stamp=False` suppresses BOTH instrumentation writes (`record_usage` AND the read
         # counter), so the read-only guarantee H-1a pins by byte snapshot is unchanged.
         hits = _ranked_injection_items(store, query, exclude, JIT_KINDS, jit_recall,
-                                       top_k=cb.turn_top_k, graph_scorer=graph_scorer)
+                                       top_k=cb.turn_top_k, graph_scorer=graph_scorer,
+                                       notes=ranking_notes)
     except Exception:  # noqa: BLE001
         # (iv) SUPPRESS-OK, and the one place the usual "announce the degrade" answer is wrong:
         # see the D5 register entry for `hook_cli.user_prompt_submit_main`. This runs on EVERY
@@ -823,7 +837,7 @@ def build_injection(surface: Surface, query: str,
     # line rides the header and is admitted only when it displaces NOTHING: a note about ranking
     # quality never costs the turn a guardrail or an item (under a budget that tight, the pack's own
     # "+N more" line is what speaks).
-    notes = []
+    notes = list(ranking_notes)
     if hits and hasattr(graph_scorer, "note"):
         notes.append(graph_scorer.note())
     if hits and getattr(store, "semantic_skipped", False):

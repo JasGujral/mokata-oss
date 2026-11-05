@@ -72,11 +72,12 @@ Each runs standalone — no full-pipeline prerequisite, and each applies its own
 | Command | What it does |
 |---|---|
 | `/mokata:progress` | The 7-phase tracker **and** the parallel-agent lanes (running / done / blocked) |
-| `/mokata:watch` | Open the self-contained, clickable dashboard of the run (lanes + pipeline + gate feed) |
+| `/mokata:watch` | Open the `mokata ide` window on its Sessions screen for the run (re-uses the open window) |
 | `/mokata:govern` | The governed-state view — rules, memory-by-kind, read/write ratio, pending proposals |
 
-These call mokata's read-only MCP tools (`progress`/`lanes`/`watch`/`govern`) so you watch the
-governed fan-out **without leaving Claude Code**; nothing is written or gated.
+`/mokata:progress` and `/mokata:govern` call mokata's read-only MCP tools (`progress`/`lanes`/
+`govern`) so you watch the governed fan-out **without leaving Claude Code**; `/mokata:watch` runs
+`mokata watch --open`. Nothing is written or gated.
 
 **Workflow & utilities (slash commands):**
 
@@ -179,7 +180,7 @@ can call these too (see [Integrate with other AI tools](integrate-other-ai-tools
 
 > mokata **ships its own MCP server** (`mokata-mcp`) — the plugin registers it so mokata's
 > operations are callable as native tools. Read tools (query, recall, doctor, coverage, budget,
-> audit, status, preview, progress, **lanes / watch / govern**, rules, skills, suggest,
+> audit, status, preview, progress, **lanes / govern**, rules, skills, suggest,
 > lat_check, index_status, baseline, sessions, config_get, export_preview, vault_*) expose
 > data directly; write tools (remember, init, config_set, export_stack, vault_push,
 > import_stack, spec_check, reset, …) are **always human-gated** — a write tool call returns a
@@ -208,7 +209,10 @@ can call these too (see [Integrate with other AI tools](integrate-other-ai-tools
 4. `/mokata:review` the diff — spec-compliance first, then quality.
 5. `/mokata:ship` to finish — mokata verifies it's *truly* green (tests + ACs + review) and
    lets **you** choose how to land it (merge / PR / keep / discard). It never merges, opens a
-   PR, or deletes on its own — only on your explicit confirmation.
+   PR, or deletes on its own — only on your explicit confirmation. Work in a session worktree
+   lands through the gated merge: `mokata worktree test <worktree>` runs the full suite there,
+   then `mokata worktree merge <worktree>` shows the evidence and proposes the merge for you to
+   approve (`mokata approve <id>`).
 6. Memory captures the decisions (human-gated); next session inherits them.
 
 ## Configuration

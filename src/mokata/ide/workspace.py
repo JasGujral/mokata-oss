@@ -1,5 +1,5 @@
 """The IDE workspace — open tabs, the active tab, closed tabs (for reopen), expanded tree dirs,
-scroll positions, the mode/panel and the focused session — persisted per repository on the
+scroll positions, the view (mode), the colour theme (0.0.27 P6) and the focused session — persisted per repository on the
 SERVER (0.0.26 P2, `ID-TABS` + session restore; doc 109 §13.4).
 
 WHERE. `<repo>/.mokata/temp_local/ide/workspace.json`, beside the server's own record
@@ -46,6 +46,10 @@ MAX_ID = 200
 MAX_BYTES = 64 * 1024
 TAB_KINDS = ("file", "commit")     # "commit": pinned commit tabs — format reserved
 TAB_VIEWS = ("code", "diff")       # a file tab shows the file (Code) or its change (Review): the Δ toggle
+#: The theme choices (0.0.27 P6, `ID-THEMES-FULL`) — `static/theme.js` CHOICES is this list, pinned by
+#: a test. "system" follows the OS (prefers-color-scheme + prefers-contrast) live.
+THEMES = ("system", "dark", "light", "hc-dark", "hc-light")
+SAVED_AT_ROOM = 32
 MODES_RE = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
 SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 _DRIVE = re.compile(r"^[A-Za-z]:")
@@ -68,7 +72,7 @@ def workspace_path(root: str) -> str:
 
 def empty() -> Dict[str, Any]:
     return {"schema": SCHEMA, "tabs": [], "active": None, "closed": [], "expanded": [],
-            "collapsed": [], "mode": None, "panel": None, "focus": None, "run": None,
+            "collapsed": [], "mode": None, "theme": "system", "theme_unknown": None, "single_keys": True, "focus": None, "run": None,
             "saved_at": 0.0}
 
 
@@ -168,9 +172,21 @@ def normalize(doc: Any) -> Tuple[Dict[str, Any], int]:
     out["closed"] = closed[-MAX_CLOSED:]
     out["expanded"] = _paths(d.get("expanded"), MAX_DIRS)
     out["collapsed"] = _paths(d.get("collapsed"), MAX_DIRS)
-    for k in ("mode", "panel"):
-        v = d.get(k)
-        out[k] = v if isinstance(v, str) and MODES_RE.match(v) else None
+    v = d.get("mode")
+    out["mode"] = v if isinstance(v, str) and MODES_RE.match(v) else None
+    out["theme"] = d.get("theme") if d.get("theme") in THEMES else "system"
+    # A name this build does not know (a hand edit, a newer mokata) falls back to "system" — and SAYS
+    # so once: the page shows it at load, and the next save (which carries a real theme) clears it.
+    t = d.get("theme")
+    carried = d.get("theme_unknown")            # a workspace already normalised once (route -> save)
+    if isinstance(t, str) and t and t not in THEMES:
+        out["theme_unknown"] = t[:40]
+    elif isinstance(carried, str) and carried and out["theme"] == "system":
+        out["theme_unknown"] = carried[:40]
+    else:
+        out["theme_unknown"] = None
+    # WCAG 2.1.4 (UX-SIMPLIFY §6): the one-key shortcuts are on unless the person turned them off.
+    out["single_keys"] = d.get("single_keys") is not False
     out["focus"] = _ident(d.get("focus"))
     out["run"] = _ident(d.get("run"))
     try:
@@ -178,7 +194,9 @@ def normalize(doc: Any) -> Tuple[Dict[str, Any], int]:
     except (TypeError, ValueError):
         out["saved_at"] = 0.0
     # The byte bound: shed the oldest closed tabs, then dirs, then tabs, until it fits.
-    while len(_dump(out)) > MAX_BYTES:
+    # `save` stamps `saved_at` AFTER this (a 0.0 here, 17 digits there): leave room for it, or a
+    # workspace at the cap lands a few bytes over.
+    while len(_dump(out)) + SAVED_AT_ROOM > MAX_BYTES:
         for k in ("closed", "collapsed", "expanded", "tabs"):
             if out[k]:
                 out[k] = out[k][1:]
@@ -259,5 +277,5 @@ def save(root: str, doc: Any) -> Dict[str, Any]:
     return clean
 
 
-__all__ = ["SCHEMA", "MAX_TABS", "MAX_CLOSED", "MAX_DIRS", "MAX_BYTES", "TAB_KINDS",
+__all__ = ["SCHEMA", "THEMES", "MAX_TABS", "MAX_CLOSED", "MAX_DIRS", "MAX_BYTES", "TAB_KINDS",
            "workspace_path", "empty", "clean_path", "clean_tab", "normalize", "load", "save"]

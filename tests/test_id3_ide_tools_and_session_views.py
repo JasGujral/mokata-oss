@@ -13,8 +13,8 @@ Business rules — what must be true for the user:
     has moved past, a secret block — each is a needs-you reason, the queue is sorted by RISK (the
     formula is shown), and a proposal's content is never shown (only its id and the command).
   * A session can be replayed (time-lapse: every capture and gate decision, in order, with the
-    lines each write changed — an unmeasurable write says so, it is never a zero) and its changes
-    seen as a treemap of the repo sized by LOC, coloured by change volume.
+    lines each write changed — an unmeasurable write says so, it is never a zero). The repo
+    treemap is gone (0.0.27 UX-SIMPLIFY #28): its route answers 404.
   * The page's server routes are paired, Host-checked and contained like every other route; the
     SAMPLE server labels every answer as SAMPLE.
 
@@ -224,117 +224,18 @@ class WaitingOnAHumanIsImpossibleToMiss(_Repo):
         self.assertEqual([], self.row(data, "S1")["needs_you"])
 
 
-# ===================================================================== ID-VIS-SESSION time-lapse
+# ===================================================================== the Replay scrubber is deleted
 
-class ASessionCanBeReplayedStepByStep(_Repo):
+class TheReplayScrubberIsDeletedNotHidden(_Repo):
+    """UX-SIMPLIFY §5: the session time-lapse (the Replay scrubber) answered no review question the
+    Timeline does not; its reader, its route and its contract entry are gone, not hidden."""
 
-    def test_steps_are_ordered_with_before_write_and_gate_and_each_write_names_its_lines(self):
-        _edit(self.d, "src/a.py", "a = 1\nb = 2\nc = 3\n", "S1", "R1")
-        _edit(self.d, "src/pkg/b.py", "only\n", "S1", "R1")
-        time.sleep(1.1)
-        _gate(self.d, "R1", "tdd", "block", "src/a.py")
-        _edit(self.d, "src/b2.py", "new\n", "S-other", "R-other")
-        tl = SV.timelapse(self.d, "S1")
-        kinds = [(s["kind"], s.get("path") or s.get("gate")) for s in tl["steps"]]
-        self.assertEqual([("before", "src/a.py"), ("write", "src/a.py"),
-                          ("before", "src/pkg/b.py"), ("write", "src/pkg/b.py"),
-                          ("gate", "tdd")], kinds)
-        w = tl["steps"][1]
-        self.assertEqual((2, 0, True), (w["added"], w["removed"], w["measured"]))
-        b = tl["steps"][3]
-        self.assertEqual((1, 40), (b["added"], b["removed"]))
-        self.assertTrue(tl["steps"][4]["blocked"])
-        self.assertEqual(["src/a.py", "src/pkg/b.py"], tl["files"])
-        self.assertEqual(list(range(5)), [s["i"] for s in tl["steps"]])
-        self.assertNotIn("src/b2.py", json.dumps(tl), "another session's write leaked in")
-        self.assertIn("reads are not recorded", tl["reads"])
-
-    def test_a_write_whose_content_was_not_kept_is_unmeasured_never_zero(self):
-        with mock.patch.object(S, "MAX_FILE_BYTES", 10):
-            _edit(self.d, "src/a.py", "x" * 50 + "\n", "S1", "R1")
-        w = [s for s in SV.timelapse(self.d, "S1")["steps"] if s["kind"] == "write"][0]
-        self.assertEqual((None, None, False), (w["added"], w["removed"], w["measured"]))
-        self.assertEqual(1, SV.timelapse(self.d, "S1")["unmeasured"])
-
-    def test_a_missing_session_id_is_refused(self):
-        from mokata.ide.nav import PathRefused
-        with self.assertRaises(PathRefused):
-            SV.timelapse(self.d, "")
-
-
-# ===================================================================== ID-VIS-SESSION treemap
-
-class TheChangeTreemap(_Repo):
-
-    def _check_tiling(self, rects, w, h, eps=1e-6):
-        """Tiles exactly (to `eps` per coordinate: the server rounds to 0.01 px)."""
-        area = sum(r[2] * r[3] for r in rects)
-        self.assertAlmostEqual(w * h, area, delta=w * h * 1e-6 + len(rects) * eps * (w + h))
-        for x, y, rw, rh in rects:
-            self.assertGreaterEqual(x, -eps)
-            self.assertGreaterEqual(y, -eps)
-            self.assertLessEqual(x + rw, w + eps)
-            self.assertLessEqual(y + rh, h + eps)
-        for i, a in enumerate(rects):
-            for b in rects[i + 1:]:
-                ox = min(a[0] + a[2], b[0] + b[2]) - max(a[0], b[0])
-                oy = min(a[1] + a[3], b[1] + b[3]) - max(a[1], b[1])
-                self.assertFalse(ox > 2 * eps and oy > 2 * eps, f"{a} overlaps {b}")
-
-    def test_squarify_tiles_the_canvas_with_areas_proportional_to_weight(self):
-        weights = [60, 30, 20, 10, 6, 3, 1]
-        rects = SV.squarify(weights, 0, 0, 1000, 600)
-        self._check_tiling(rects, 1000, 600)
-        total = sum(weights)
-        for wt, r in zip(weights, rects):
-            self.assertAlmostEqual(wt / total, r[2] * r[3] / 600000, places=6)
-        worst = max(max(r[2] / r[3], r[3] / r[2]) for r in rects)
-        self.assertLess(worst, 4.0, "squarified rectangles should stay near-square")
-
-    def test_the_repo_is_sized_by_loc_and_coloured_by_what_the_session_changed(self):
-        _edit(self.d, "src/a.py", "a = 1\n" * 30, "S1", "R1")
-        tm = SV.treemap(self.d, "S1")
-        by = {f["path"]: f for f in tm["files"]}
-        self.assertIn("src/pkg/b.py", by)
-        self.assertEqual(40, by["src/pkg/b.py"]["loc"])
-        self.assertEqual(0, by["src/pkg/b.py"]["heat"])
-        self.assertGreater(by["src/a.py"]["heat"], 0)
-        self.assertEqual(1, by["src/a.py"]["writes"])
-        self._check_tiling([(f["x"], f["y"], f["w"], f["h"]) for f in tm["files"]], 1000, 600,
-                           eps=0.02)
-        pkg = next(dr for dr in tm["dirs"] if dr["path"] == "src/pkg")
-        f = by["src/pkg/b.py"]
-        self.assertTrue(pkg["x"] - 0.01 <= f["x"] and f["x"] + f["w"] <= pkg["x"] + pkg["w"] + 0.01
-                        and pkg["y"] - 0.01 <= f["y"] and f["y"] + f["h"] <= pkg["y"] + pkg["h"] + 0.01,
-                        "a file is drawn inside its directory's frame")
-        self.assertEqual("lines of code", tm["sized_by"])
-        self.assertFalse(any(p.startswith(".mokata") for p in by), "mokata's own record is not code")
-
-    def test_sized_by_change_shows_only_changed_files_weighted_by_lines_changed(self):
-        _edit(self.d, "src/a.py", "a = 1\n" * 30, "S1", "R1")
-        _edit(self.d, "README.md", "# changed\n", "S2", "R2")
-        one = SV.treemap(self.d, "S1", size="change")
-        self.assertEqual(["src/a.py"], [f["path"] for f in one["files"]])
-        both = SV.treemap(self.d, None, size="change")
-        self.assertEqual({"src/a.py", "README.md"}, {f["path"] for f in both["files"]})
-        a = next(f for f in both["files"] if f["path"] == "src/a.py")
-        self.assertEqual(a["added"] + a["removed"], a["weight"])
-
-    def test_a_huge_repo_keeps_every_changed_file_and_says_how_many_were_omitted(self):
-        for i in range(12):
-            _write(self.d, f"src/f{i}.py", "x\n" * (i + 1))
-        _edit(self.d, "src/f0.py", "y\n", "S1", "R1")             # the SMALLEST file changes
-        with mock.patch.object(SV, "MAX_TREEMAP_FILES", 4):
-            tm = SV.treemap(self.d, "S1")
-        paths = [f["path"] for f in tm["files"]]
-        self.assertEqual(4, len(paths))
-        self.assertIn("src/f0.py", paths)
-        self.assertEqual(tm["total_files"] - 4, tm["omitted"])
-
-    def test_a_binary_file_has_no_loc_and_is_left_out(self):
-        with open(os.path.join(self.d, "src", "blob.bin"), "wb") as fh:
-            fh.write(b"\0\1\2" * 100)
-        self.assertNotIn("src/blob.bin", [f["path"] for f in SV.treemap(self.d)["files"]])
+    def test_no_reader_no_route_no_contract_entry(self):
+        from mokata.ide import source as SRC
+        self.assertFalse(hasattr(SV, "timelapse"))
+        self.assertFalse(hasattr(SRC.RealSource, "timelapse") or hasattr(SRC.DemoSource, "timelapse"))
+        contract = json.loads((Path(SV.__file__).parent / "api_contract.json").read_text(encoding="utf-8"))
+        self.assertNotIn("/api/timelapse", [r["path"] for r in contract["routes"]])
 
 
 # ===================================================================== the server routes
@@ -358,7 +259,7 @@ class TheServerRoutesAreGuardedAndContained(_Repo):
         super().tearDown()
 
     def test_every_new_read_route_needs_pairing_and_answers_once_paired(self):
-        for path in ("/api/sessions", "/api/timelapse?session=S1", "/api/treemap?session=S1"):
+        for path in ("/api/sessions",):
             self.assertEqual(401, self.c.get(path).status_code, path)
             r = self.c.get(path, headers=self.tok)
             self.assertEqual(200, r.status_code, path)
@@ -366,9 +267,13 @@ class TheServerRoutesAreGuardedAndContained(_Repo):
         self.assertEqual(["S1"], [s["id"] for s in
                                   self.c.get("/api/sessions", headers=self.tok).json()["sessions"]])
 
-    def test_bad_parameters_are_a_400(self):
-        self.assertEqual(400, self.c.get("/api/timelapse", headers=self.tok).status_code)
-        self.assertEqual(400, self.c.get("/api/treemap?size=bogus", headers=self.tok).status_code)
+    def test_the_replay_route_is_deleted(self):
+        self.assertEqual(404, self.c.get("/api/timelapse?session=S1", headers=self.tok).status_code)
+
+    def test_the_repo_treemap_is_deleted_not_hidden(self):
+        """UX-SIMPLIFY #28: the Sessions Map answered no review question; its route is gone."""
+        self.assertEqual(404, self.c.get("/api/treemap?session=S1", headers=self.tok).status_code)
+        self.assertFalse(hasattr(SV, "treemap"))
 
     def test_the_browser_reads_the_bus_ring(self):
         r = self.c.post("/api/bus", json={"kind": "session_end", "session": "S1"}, headers=self.tok)
@@ -411,8 +316,7 @@ class TheServerRoutesAreGuardedAndContained(_Repo):
     def test_the_sample_server_labels_every_answer(self):
         c, _ = _client(self.d, demo=True)
         try:
-            for path in ("/api/sessions", "/api/timelapse?session=sample-session-a",
-                         "/api/treemap"):
+            for path in ("/api/sessions",):
                 body = c.get(path, headers=self.tok).json()
                 self.assertTrue(body["sample"], path)
             sb = c.get("/api/sessions", headers=self.tok).json()
@@ -436,7 +340,11 @@ class TheIdeToolsAreReadOnlyAndRegisteredAtTheReadTail(unittest.TestCase):
                              annotations_for("read", n), n)
         names = REG.tool_names()
         reads = REG.read_tool_names()
-        self.assertEqual(list(self.NAMES), reads[-3:], "appended at the READ tail")
+        # 0.0.27 P46 appended `explain_bundle`/`explain_save` after these three: the ide_* block
+        # stays contiguous and in order, and every later read tool sits after it.
+        at = reads.index("ide_status")
+        self.assertEqual(list(self.NAMES), reads[at:at + 3], "appended at the READ tail")
+        self.assertEqual(["explain_bundle", "explain_save"], reads[at + 3:])
         self.assertLess(names.index("ide_sessions"), names.index("remember"))
 
 
@@ -587,13 +495,16 @@ class TheIdeToolsAgainstARealWindow(unittest.TestCase):
 
 class ThePageHasTheSessionsMode(unittest.TestCase):
 
-    def test_the_sessions_view_needs_you_marker_and_script_are_served(self):
+    def test_the_sessions_tab_list_waiting_bar_and_script_are_served(self):
+        """UX-SIMPLIFY: Sessions is a top tab whose list sits in the side panel; what waits on a
+        human is the ONE waiting bar in the top bar (no needs-you strip, no time-lapse range)."""
         from mokata.ide.server import STATIC_FILES
         html = (STATIC / "index.html").read_text(encoding="utf-8")
-        for needle in ('data-screen="sessions"', 'id="view-sessions"', 'id="needs-you"',
-                       'id="tl-range"', 'id="tm"', 'id="s1-rows"', 'id="ny-list"',
+        for needle in ('id="tab-sessions"', 'id="panel-sessions"', 'id="s1-rows"', 'id="waiting"',
                        '/static/sessions.js'):
             self.assertIn(needle, html)
+        for gone in ('id="needs-you"', 'id="tl-range"', 'id="ny-list"', 'data-screen='):
+            self.assertNotIn(gone, html)
         self.assertIn("sessions.js", STATIC_FILES)
         self.assertLess(html.index("/static/sessions.js"), html.index("/static/boot.js"),
                         "a view registers its hooks before boot runs them")
@@ -606,7 +517,7 @@ class ThePageHasTheSessionsMode(unittest.TestCase):
         self.assertNotIn("innerHTML", js)
         self.assertNotIn("insertAdjacentHTML", js)
         for hook in ("MK.wireSessions", "MK.onModeSessions", "MK.onRefreshSessions",
-                     "/api/sessions", "/api/timelapse", "/api/treemap"):
+                     "/api/sessions"):
             self.assertIn(hook, js)
 
 

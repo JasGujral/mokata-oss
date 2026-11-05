@@ -237,7 +237,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         store = surface.state if surface is not None else None
         ledger = (AuditLedger.from_mokata_dir(surface.mokata_dir)
                   if surface is not None else None)
-        res = check_spec_persisted(store, ledger=ledger, phase=skill.name)
+        from ..session import current_run_id
+        res = check_spec_persisted(store, ledger=ledger, phase=skill.name,
+                                   run_id=current_run_id())
         if not res.passed:
             print(f"[BLOCKED] {res.gate_id} — {res.reason}", file=sys.stderr)
             return 1

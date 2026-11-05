@@ -38,6 +38,10 @@ MAX_FILE_BYTES = 1024 * 1024
 MAX_ENTRIES = 20000
 BEFORE, AFTER = "before", "after"
 OK, ABSENT, TOO_LARGE = "ok", "absent", "too-large"
+#: 0.0.27 CASEFOLD-FIX r2: a write into `.git/` or `.mokata/` (any spelling) is RECORDED - its path,
+#: its time, its session - but its content is never read, stored or served.
+PRIVATE = "private"
+PRIVATE_NOTE = "private path \u2014 content not captured"
 
 _SID_SAFE = "".join(chr(c) for c in range(48, 58)) + "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_"
 
@@ -72,18 +76,86 @@ class Snapshot:
 
 def rel_path(root: str, path: str, cwd: Optional[str] = None) -> Optional[str]:
     """`path` as a repo-relative '/' name, or None when it is outside the repo (realpath'd —
-    a symlink out of the tree is outside)."""
-    from ..repo_paths import name_of
+    a symlink out of the tree is outside) or is PRIVATE: inside `.git/` or `.mokata/` at any depth.
+
+    THE ONE CONTAINMENT RULE every IDE read route goes through (directly, or via
+    `nav.contained_rel` / `diffs.open_contained`). 0.0.27 CASEFOLD-FIX: "private" is decided
+    twice, and either refuses — by NAME (`repo_paths.is_private_name`: every component compared
+    case-folded and Windows-folded, so the answer is the same on every filesystem) and by IDENTITY
+    (`repo_paths.aliases_private`: the same file on disk as the repo's own `.git`/`.mokata`, for
+    an 8.3 short name or a folding the name rule does not model). Anything that cannot be decided
+    is refused — fail closed.
+
+    This answers "may I READ it". "May I RECORD a write to it" is `record_name`."""
+    got = record_name(root, path, cwd)
+    if got is None or got[1]:
+        return None                               # git's store and mokata's record are not "code"
+    return got[0]
+
+
+def record_name(root: str, path: str, cwd: Optional[str] = None) -> Optional[Tuple[str, bool]]:
+    """`(name, private)` for a path INSIDE the repo, or None when it is outside (realpath'd).
+
+    The RECORD side of the split (verify M1): a write into `.git/hooks/` is exactly what the
+    activity feed and the snapshot timeline must still show, so the private rule does not drop it
+    here - it is reported as `private`, and the caller records the path and never the content.
+    Undecidable means private: the content is then not read (fail closed)."""
+    from .. import repo_paths as RP
     try:
+        real_root = os.path.realpath(root)
         ab = path if os.path.isabs(path) else os.path.join(cwd or root, path)
-        rel = str(name_of(os.path.realpath(ab), os.path.realpath(root)))
-    except (OSError, ValueError):
+        rel = str(RP.name_of(os.path.realpath(ab), real_root))
+    except (OSError, ValueError, TypeError):
         return None
     if rel in (".", "..") or rel.startswith("../") or os.path.isabs(rel):
         return None
-    if rel.split("/", 1)[0] == ".mokata":
-        return None                               # mokata's own record is not "code"
-    return rel
+    try:
+        private = bool(RP.is_private_name(rel) or RP.aliases_private(real_root, rel))
+    except (OSError, ValueError, TypeError):
+        private = True
+    return rel, private
+
+
+#: The plain words of a read refusal for each kind of private path (0.0.27 SEC-HARDEN). A refusal
+#: that says "outside the repository" about `.git/config` is wrong about where the file is, and a
+#: reader who knows it is inside the repo concludes the IDE is broken, not deliberate.
+REFUSE_GIT = ("{path} is inside git's own store (.git/) — git's config, hooks and history are not "
+              "code, and mokata ide does not open them")
+REFUSE_MOKATA = "{path} is mokata's own record (.mokata/), not code — mokata ide does not open it"
+REFUSE_ALIAS = ("{path} is another name (a link or an alias) for a file in git's or mokata's "
+                "private store (.git/ or .mokata/) — mokata ide does not open it")
+
+
+def refusal(root: str, path: str, otherwise: str, cwd: Optional[str] = None) -> str:
+    """The plain-words reason `rel_path(root, path, cwd)` said no: git's store, mokata's record, an
+    alias of either, or — for a path that is not private — `otherwise` (the caller's own words for
+    "outside"/"not a repo path"). Words only; never a decision."""
+    got = record_name(root, path, cwd) if path else None
+    if got is None or not got[1]:
+        return otherwise
+    from .. import repo_paths as RP
+    try:
+        keys = [RP.fold_component(p) for p in RP.split_path(got[0])]
+    except (ValueError, TypeError):
+        keys = []
+    for k in keys:
+        if k == RP.fold_component(RP.PRIVATE_DIRS[0]):
+            return REFUSE_GIT.format(path=path)
+        if k == RP.fold_component(RP.PRIVATE_DIRS[1]):
+            return REFUSE_MOKATA.format(path=path)
+    return REFUSE_ALIAS.format(path=path)
+
+
+def git_hook(rel: str) -> bool:
+    """Is `rel` inside a `.git/hooks/` directory (any spelling, any depth)? A hook runs on the
+    next commit, so a write there is flagged in the activity panel, never shown as an ordinary
+    edit. Undecidable is a hook."""
+    from .. import repo_paths as RP
+    try:
+        keys = [RP.fold_component(p) for p in RP.split_path(rel)]
+    except (ValueError, TypeError):
+        return True
+    return any(a == ".git" and b == "hooks" for a, b in zip(keys, keys[1:]))
 
 
 def _safe_sid(session_id: str) -> str:
@@ -124,11 +196,16 @@ def capture(root: str, path: str, kind: str, session_id: Optional[str] = None,
     snapshot is what the file held when the tool finished, not whatever the working tree holds by
     the time the drainer runs. With `observed`, the working tree is NEVER read."""
     try:
-        rel = rel_path(root, path, cwd)
-        if rel is None:
+        got = record_name(root, path, cwd)
+        if got is None:
             return None
+        rel, private = got
         sha, state, size = "", ABSENT, 0
-        if observed is not None:
+        if private or (observed is not None and observed[0] == PRIVATE):
+            # path only: no byte is read, kept or served. The front door's own PRIVATE verdict
+            # (0.0.27 SEC-HARDEN: it read no byte) is honoured even if the tree changed since.
+            state, t = PRIVATE, (observed[2] if observed is not None else time.time())
+        elif observed is not None:
             o_state, size, t, data = observed
             if o_state == OK and data is not None and len(data) <= MAX_FILE_BYTES:
                 sha, state = _write_object(root, data), OK
@@ -164,9 +241,10 @@ def capture_before_first_write(root: str, path: str, session_id: Optional[str],
         return None
     try:
         from ..oslock import file_lock
-        rel = rel_path(root, path, cwd)
-        if rel is None:
+        got = record_name(root, path, cwd)
+        if got is None:
             return None
+        rel = got[0]
         idx_path = os.path.join(store_dir(root), "first", _safe_sid(session_id) + ".json")
         os.makedirs(os.path.dirname(idx_path), exist_ok=True)
         # 0.0.23 C4 (VERIFICATION-MINORS-0022 "first-write index unlocked"): the read → check →
@@ -307,5 +385,6 @@ def content_of(root: str, snap: Snapshot) -> Optional[str]:
 
 
 __all__ = ["MAX_FILE_BYTES", "MAX_ENTRIES", "BEFORE", "AFTER", "OK", "ABSENT", "TOO_LARGE",
-           "Snapshot", "store_dir", "rel_path", "read_object", "capture",
+           "Snapshot", "store_dir", "rel_path", "record_name", "git_hook", "PRIVATE", "refusal",
+           "PRIVATE_NOTE", "read_object", "capture",
            "capture_before_first_write", "timeline", "get", "content_of"]
