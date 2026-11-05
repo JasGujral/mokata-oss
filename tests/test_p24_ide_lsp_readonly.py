@@ -794,9 +794,12 @@ class ProcessManagement(_Repo):
             dirs = L.path_dirs(env)
             self.assertEqual([good_dir], dirs)
             self.assertEqual(good, L.which_in("solargraph", dirs, nt=False))
-            # case-insensitively: on a folding FS (macOS, Windows) `.EXE` answers for `.exe`
+            # case-insensitively: on a folding FS (macOS, Windows) `.EXE` answers for `.exe`; on a
+            # case-sensitive one (Linux) only the file's own spelling does — Windows is never that
+            folds = os.path.exists(good_nt[:-4] + ".EXE")
             self.assertEqual(good_nt.lower(),
-                             (L.which_in("solargraph", dirs, nt=True, pathext=".EXE;.CMD") or "").lower())
+                             (L.which_in("solargraph", dirs, nt=True,
+                                         pathext=".EXE;.CMD" if folds else ".exe;.cmd") or "").lower())
             self.assertIsNone(L.which_in("solargraph", ["", ".", "relative"], nt=True, pathext=".EXE"))
             self.assertNotEqual(decoy, L.which_in("solargraph", [self.repo], nt=False) or "")
             # a user-configured server name: PATH only, so the repo's venv copy is not it either

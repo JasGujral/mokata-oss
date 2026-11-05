@@ -480,8 +480,9 @@ def _kill_tree(proc: Any, leftovers_only: bool = False, job: Any = None) -> None
             _end_tree(proc)
         return
     import signal
+    from ..quiet_spawn import signal_group
     try:
-        os.killpg(proc.pid, signal.SIGKILL)
+        signal_group(proc.pid, signal.SIGKILL)          # never 0/1/our own group (0.0.27 CI)
     except (ProcessLookupError, PermissionError, OSError):
         pass
     if not leftovers_only:

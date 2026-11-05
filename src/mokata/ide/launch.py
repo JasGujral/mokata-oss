@@ -173,8 +173,10 @@ def _stop(pid: int, root: str, wait: float = 3.0) -> None:
     signal other than CTRL_C/CTRL_BREAK is `TerminateProcess` — and on POSIX a recycled pid
     answers it too. The server's own ping is the liveness signal on every OS."""
     import signal
+    from ..quiet_spawn import signal_pid
     try:
-        os.kill(pid, signal.SIGTERM)       # POSIX: SIGTERM · Windows: TerminateProcess
+        if not signal_pid(pid, signal.SIGTERM):   # POSIX: SIGTERM · Windows: TerminateProcess
+            return                                # 0, 1, our own pid: never a target
     except OSError:
         return
     deadline = time.time() + wait

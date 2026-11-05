@@ -41,7 +41,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..billing_env import terminal_preface
 from ..errors import MokataError
-from ..quiet_spawn import hidden
+from ..quiet_spawn import hidden, signal_group
 
 MAX_TERMINALS = 4                  # alive at once, per server
 MAX_BUFFER = 512 * 1024            # bytes of output kept per terminal (in memory only)
@@ -310,7 +310,8 @@ class Terminal:
         if not self._closed and self.proc.poll() is None:
             for sig, wait in ((signal.SIGHUP, KILL_GRACE), (signal.SIGKILL, KILL_GRACE)):
                 try:
-                    os.killpg(self.proc.pid, sig)
+                    if not signal_group(self.proc.pid, sig):
+                        raise ProcessLookupError("not a group mokata may signal")
                 except (ProcessLookupError, PermissionError):
                     # no group yet: the launcher has not reached setsid() — signal the process
                     try:
@@ -326,7 +327,7 @@ class Terminal:
             # the leader is gone; anything left in its group (a job that ignored SIGHUP, like a
             # `nohup` child) dies with the terminal too — no orphan outlives its window
             try:
-                os.killpg(self.proc.pid, signal.SIGKILL)
+                signal_group(self.proc.pid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 pass
         with self._cond:

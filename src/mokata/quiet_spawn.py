@@ -64,4 +64,33 @@ def detached(suspended: bool = False, nt: "Optional[bool]" = None) -> "Dict[str,
     return {"start_new_session": True}
 
 
-__all__ = ["detached", "hidden"]
+def _signalable(n: object, *own: int) -> bool:
+    """A real process number we may signal: a plain `int` (not `bool`, not a test double whose
+    `__index__` is 1), greater than 1, and none of `own`. 0, 1 and negatives are never a target:
+    POSIX `killpg(1, sig)` is `kill(-1, sig)` on Linux — EVERY process the user owns (it took
+    down the CI runner, 0.0.27) — and `killpg(0)` / `kill(0)` is the caller's own group."""
+    return type(n) is int and n > 1 and n not in own
+
+
+def signal_group(pgid: object, sig: int) -> bool:
+    """`os.killpg(pgid, sig)` — only for a group that is not 0, 1, negative, a non-int, or OUR OWN
+    group or our own pid (POSIX only; there is no process group to signal on Windows). Returns False, sending
+    nothing, when refused; OS errors (the group is gone, not ours) propagate as from `killpg`.
+    The ONE door for a group signal in mokata (`tests/test_signals_never_broadcast.py`)."""
+    if _windows() or not _signalable(pgid, os.getpgrp(), os.getpid()):
+        return False
+    os.killpg(pgid, sig)  # type: ignore[arg-type]
+    return True
+
+
+def signal_pid(pid: object, sig: int) -> bool:
+    """`os.kill(pid, sig)` — only for a pid that is not 0, 1, negative, a non-int, or OUR OWN
+    process. Returns False, sending nothing, when refused; OS errors propagate as from `os.kill`.
+    The ONE door for a non-probe signal to a pid in mokata."""
+    if not _signalable(pid, os.getpid()):
+        return False
+    os.kill(pid, sig)  # type: ignore[arg-type]
+    return True
+
+
+__all__ = ["detached", "hidden", "signal_group", "signal_pid"]

@@ -53,7 +53,7 @@ from urllib.parse import unquote, urlsplit
 from .. import __version__
 from ..errors import MokataError
 from ..knowledge import cancel as C
-from ..quiet_spawn import detached, hidden
+from ..quiet_spawn import detached, hidden, signal_group
 from ..exe_path import _under, path_dirs, which_in
 from ..repo_paths import name_of, split_path
 
@@ -526,7 +526,7 @@ def _kill_tree(proc: Any, pgid: Optional[int] = None, job: Optional[WinJob] = No
             import signal
             if pgid is not None:                # None: the group was already killed (verify2 N1)
                 try:
-                    os.killpg(pgid, signal.SIGKILL)
+                    signal_group(pgid, signal.SIGKILL)   # never 0/1/our own group (0.0.27 CI)
                 except (ProcessLookupError, PermissionError, OSError):
                     pass
         if proc.poll() is None:
