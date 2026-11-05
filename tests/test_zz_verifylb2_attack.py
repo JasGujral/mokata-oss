@@ -292,22 +292,20 @@ class WinCreationTimes(unittest.TestCase):
                  "    open(sys.argv[2], 'w').write(str(z.pid))\n")
         tries, hit = 0, False
         sysdir = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32")
+        from mokata.ide.lsp import _resume_process
         t1 = time.time()
-        while time.time() - t1 < 240 and not hit:
-            # cheap suspended probes to see whether K's pid comes back; launch Y only on a hit
-            p = subprocess.Popen([os.path.join(sysdir, "whoami.exe")], stdout=subprocess.DEVNULL,
-                                 creationflags=0x4)
+        while time.time() - t1 < 120 and not hit:
+            # Y is created SUSPENDED (cheap) until it lands on K's pid; only then is it resumed
+            y = subprocess.Popen([sys.executable, "-c", y_src, str(k), zfile], creationflags=0x4)
             tries += 1
-            got = p.pid
-            p.kill(); p.wait(); p._handle.Close()
-            if got == k:
-                # the pid is free again right now: the next process likely gets it
-                y = subprocess.Popen([sys.executable, "-c", y_src, str(k), zfile])
-                y.wait()
-                ypid = y.pid
-                y._handle.Close()
-                hit = os.path.exists(zfile)
-                say("WIN reuse: probe hit after", tries, "tries; Y pid=", ypid, "Y took K pid=", hit)
+            if y.pid != k:
+                y.kill(); y.wait(); y._handle.Close()
+                continue
+            _resume_process(y)
+            y.wait()
+            y._handle.Close()
+            hit = os.path.exists(zfile)
+            say("WIN reuse: Y landed on K's pid after", tries, "tries; Z started =", hit)
         if not hit:
             say("WIN reuse: K's pid never came back to Y in", tries, "tries")
             self.skipTest("pid reuse not reproduced")
