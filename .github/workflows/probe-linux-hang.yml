@@ -31,7 +31,7 @@ jobs:
           cat > /tmp/run1.py <<'PYEOF'
           import faulthandler, sys, unittest
           faulthandler.dump_traceback_later(90, repeat=True)
-          sys.path.insert(0, "tests")
+          sys.path.insert(0, sys.argv.pop(1)); import os; os.chdir(sys.path[0] + "/..")
           names = sys.argv[1:]
           suite = unittest.defaultTestLoader.loadTestsFromNames(names)
           r = unittest.TextTestRunner(verbosity=2).run(suite)
@@ -39,7 +39,7 @@ jobs:
           PYEOF
           chmod a+r /tmp/run1.py
           sudo -u probe -H env PYTHONUNBUFFERED=1 PATH="$(dirname $PY):/usr/bin:/bin" \
-            timeout -s KILL 600 "$PY" /tmp/run1.py \
+            timeout -s KILL 600 "$PY" /tmp/run1.py "$GITHUB_WORKSPACE/tests" \
             test_p24_ide_lsp_readonly.StoppingNeverHangsAndKillsTheTree \
             > p24.log 2>&1 < /dev/null
           echo "exit: $?"
