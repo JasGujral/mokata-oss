@@ -9,7 +9,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        attempt: [1, 2]
+        attempt: [1]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -21,8 +21,13 @@ jobs:
           python-version: "3.12"
       - run: pip install --require-hashes -r requirements/e2e.txt
       - run: python -m playwright install chromium
-      - name: time the first open of the uncountable CSV
+      - name: full e2e, with the busiest processes every 20 s
+        env:
+          MOKATA_REQUIRE_E2E: '1'
         run: |
-          timeout 200 python .github/probe/time_first_open.py "$PWD/tests/e2e_ide" 2>&1 | tail -60 || true
-          echo "---- the same, run in a second fresh repo"
-          timeout 200 python .github/probe/time_first_open.py "$PWD/tests/e2e_ide" 2>&1 | tail -60 || true
+          ( while true; do sleep 20; echo "=== $(date +%T) load $(cut -d' ' -f1-3 /proc/loadavg)"; ps -eo pid,ppid,etimes,pcpu,rss,args --sort=-pcpu | grep -v "ps -eo" | head -8 | cut -c1-220; echo "mokata procs: $(ps -eo args | grep -c '[m]okata')"; done ) &
+          W=$!
+          python tests/e2e_ide/run_e2e.py -v > e2e.log 2>&1; echo "e2e exit $?"
+          kill $W
+          grep -E "^Ran|^OK|^FAILED|^(ERROR|FAIL):" e2e.log
+          echo "---- left running after the suite"; ps -eo pid,ppid,etimes,pcpu,args | grep -E "[m]okata|[c]ode-review|[p]ython" | cut -c1-220
