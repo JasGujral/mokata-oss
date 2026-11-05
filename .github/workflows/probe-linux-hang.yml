@@ -39,11 +39,11 @@ jobs:
           PYEOF
           chmod a+r /tmp/run1.py
           sudo -u probe -H env PYTHONUNBUFFERED=1 PATH="$(dirname $PY):/usr/bin:/bin" \
-            timeout -s KILL 900 "$PY" /tmp/run1.py "$GITHUB_WORKSPACE/tests" \
-            test_p24_ide_lsp_readonly \
+            timeout -s KILL 420 "$PY" /tmp/run1.py "$GITHUB_WORKSPACE/tests" \
+            test_p24_ide_lsp_readonly.ProcessManagement test_p24_ide_lsp_readonly.StoppingNeverHangsAndKillsTheTree \
             > p24.log 2>&1 < /dev/null
           echo "exit: $?"
-          head -c 60000 p24.log
+          grep -v "HTTP Request" p24.log | tail -c 90000
           echo "---- processes of user probe"; ps -u probe -o pid,ppid,pgid,sid,etimes,stat,args --forest
           sudo pkill -9 -u probe || true
           exit 0
