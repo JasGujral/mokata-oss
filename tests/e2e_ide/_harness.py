@@ -380,7 +380,21 @@ class IdeFlow(unittest.TestCase):
         p.wait_for_selector("#qo:not([hidden])")
         p.fill("#qo-input", path)
         p.locator("#qo-results .qo-row", has_text=path.rsplit("/", 1)[-1]).first.click()
-        p.wait_for_selector("#view-navigate:not([hidden])")
+        try:
+            p.wait_for_selector("#view-navigate:not([hidden])")
+        except Exception:
+            import json as _j
+            print("\nPROBE-DUMP", path, _j.dumps(p.evaluate("""() => ({
+              mode: window.MK && MK.ui && MK.ui.mode, navPath: window.MK && MK.nav && MK.nav.path,
+              qoHidden: document.querySelector('#qo') && document.querySelector('#qo').hidden,
+              qoInput: (document.querySelector('#qo-input')||{}).value,
+              rows: [...document.querySelectorAll('#qo-results .qo-row')].map(r => r.textContent.slice(0,80)),
+              views: [...document.querySelectorAll('[id^=view-]')].map(v => v.id + (v.hidden ? ':hidden' : ':shown')),
+              modal: [...document.querySelectorAll('[role=dialog]:not([hidden]), .modal:not([hidden])')].map(d => d.id || d.className),
+              active: document.activeElement && (document.activeElement.id || document.activeElement.tagName),
+              body: document.body.innerText.slice(0, 600)})"""), indent=1), flush=True)
+            print("PROBE-ERRORS", self.errors[-10:], "PROBE-REQS", self.requests[-25:], flush=True)
+            raise
         self.until("!!(window.MK && MK.nav && MK.nav.path === %r)" % path, "%s to open" % path)
 
     # -- the step every flow gets ---------------------------------------------------------------

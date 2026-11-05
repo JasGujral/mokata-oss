@@ -21,13 +21,13 @@ jobs:
           python-version: "3.12"
       - run: pip install --require-hashes -r requirements/e2e.txt
       - run: python -m playwright install chromium
-      - name: full e2e, with the busiest processes every 20 s
+      - name: table view alone, then the full suite, dumping the page on a failed open
         env:
           MOKATA_REQUIRE_E2E: '1'
         run: |
-          ( while true; do sleep 20; echo "=== $(date +%T) load $(cut -d' ' -f1-3 /proc/loadavg)"; ps -eo pid,ppid,etimes,pcpu,rss,args --sort=-pcpu | grep -v "ps -eo" | head -8 | cut -c1-220; echo "mokata procs: $(ps -eo args | grep -c '[m]okata')"; done ) &
-          W=$!
-          python tests/e2e_ide/run_e2e.py -v > e2e.log 2>&1; echo "e2e exit $?"
-          kill $W
-          grep -E "^Ran|^OK|^FAILED|^(ERROR|FAIL):" e2e.log
-          echo "---- left running after the suite"; ps -eo pid,ppid,etimes,pcpu,args | grep -E "[m]okata|[c]ode-review|[p]ython" | cut -c1-220
+          set +e
+          python tests/e2e_ide/run_e2e.py -v -k test_table_view > tv.log 2>&1; echo "tv-alone exit $?"
+          grep -E "^Ran|^OK|^FAILED|^(ERROR|FAIL):" tv.log; grep -A40 "PROBE-DUMP" tv.log | head -120
+          python tests/e2e_ide/run_e2e.py -v > e2e.log 2>&1; echo "full exit $?"
+          grep -E "^Ran|^OK|^FAILED|^(ERROR|FAIL):" e2e.log; grep -A40 "PROBE-DUMP" e2e.log | head -160
+          exit 0
