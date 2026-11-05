@@ -31,6 +31,8 @@ from mokata.ide import review_context as RC
 
 SRC = Path(__file__).resolve().parent.parent / "src" / "mokata"
 POSIX = os.name != "nt"
+#: Windows has no SIGKILL; the door must refuse before any signal number matters
+KILL = getattr(signal, "SIGKILL", signal.SIGTERM)
 
 
 def _unsafe_numbers():
@@ -59,7 +61,7 @@ class TheDoorRefusesEveryUnsafeTarget(unittest.TestCase):
         spy = _Spy()
         with mock.patch.object(os, "killpg", spy, create=True):
             for v in _unsafe_numbers():
-                self.assertFalse(quiet_spawn.signal_group(v, signal.SIGKILL), repr(v))
+                self.assertFalse(quiet_spawn.signal_group(v, KILL), repr(v))
         self.assertEqual([], spy.calls)
 
     def test_a_pid_signal_never_reaches_a_broadcast_or_ourselves(self):
@@ -162,27 +164,68 @@ class EveryKillPathGoesThroughTheDoor(unittest.TestCase):
 
 
 class NoOtherDoorExists(unittest.TestCase):
-    """Derived from the tree: outside `quiet_spawn`, no `os.killpg(...)` at all, and no
-    `os.kill(...)` with a signal other than the literal 0 (a liveness probe)."""
+    """Derived from the tree: outside `quiet_spawn`, no group signal at all and no pid signal other
+    than the literal 0 (a liveness probe) — however `os` is spelled: `os.killpg`, an alias
+    (`import os as _os`), a bare name (`from os import killpg as k`) or `getattr(os, "killpg")`."""
+
+    @staticmethod
+    def _offences(source: str, where: str):
+        tree = ast.parse(source, filename=where)
+        os_names, fn_names = {"os"}, {}               # local name -> "kill" / "killpg"
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for a in node.names:
+                    if a.name == "os":
+                        os_names.add(a.asname or "os")
+            elif isinstance(node, ast.ImportFrom) and node.module == "os":
+                for a in node.names:
+                    if a.name in ("kill", "killpg"):
+                        fn_names[a.asname or a.name] = a.name
+        bad = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            f, name = node.func, None
+            if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) \
+                    and f.value.id in os_names and f.attr in ("kill", "killpg"):
+                name = f.attr
+            elif isinstance(f, ast.Name) and f.id in fn_names:
+                name = fn_names[f.id]
+            elif isinstance(f, ast.Call) and isinstance(f.func, ast.Name) and f.func.id == "getattr" \
+                    and len(f.args) >= 2 and isinstance(f.args[1], ast.Constant) \
+                    and f.args[1].value in ("kill", "killpg"):
+                name = f.args[1].value
+            if name == "killpg":
+                bad.append(f"{where}:{node.lineno} killpg")
+            elif name == "kill":
+                sig = node.args[1] if len(node.args) > 1 else None
+                if not (isinstance(sig, ast.Constant) and sig.value == 0):
+                    bad.append(f"{where}:{node.lineno} kill")
+        return bad
 
     def test_every_group_or_pid_signal_in_src_uses_the_door(self):
         bad = []
         for path in sorted(SRC.rglob("*.py")):
             if path.name == "quiet_spawn.py":
                 continue
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            for node in ast.walk(tree):
-                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                        and isinstance(node.func.value, ast.Name) and node.func.value.id == "os"):
-                    continue
-                name = node.func.attr
-                if name == "killpg":
-                    bad.append(f"{path.relative_to(SRC)}:{node.lineno} os.killpg")
-                elif name == "kill":
-                    sig = node.args[1] if len(node.args) > 1 else None
-                    if not (isinstance(sig, ast.Constant) and sig.value == 0):
-                        bad.append(f"{path.relative_to(SRC)}:{node.lineno} os.kill")
+            bad += self._offences(path.read_text(encoding="utf-8"), str(path.relative_to(SRC)))
         self.assertEqual([], bad, "route these through quiet_spawn.signal_group / signal_pid")
+
+    def test_the_sweep_sees_every_spelling(self):
+        """The sweep's own control: each spelling of a raw signal is caught; a probe is not."""
+        caught = {
+            "import os\nos.killpg(1, 9)": 1,
+            "import os as _os\n_os.killpg(p, 9)": 1,
+            "from os import killpg\nkillpg(p, 9)": 1,
+            "from os import killpg as k\nk(p, 9)": 1,
+            "import os\ngetattr(os, 'killpg')(p, 9)": 1,
+            "import os as _o\n_o.kill(p, 15)": 1,
+            "from os import kill\nkill(p, sig)": 1,
+            "import os\nos.kill(p, 0)": 0,
+            "import os as _os\n_os.kill(p, 0)": 0,
+        }
+        for src, n in caught.items():
+            self.assertEqual(n, len(self._offences(src, "x.py")), src)
 
 
 if __name__ == "__main__":
