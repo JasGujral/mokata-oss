@@ -26,7 +26,7 @@ jobs:
         run: |
           set +e
           sudo useradd -m probe
-          chmod -R a+rwX "$GITHUB_WORKSPACE"
+          chmod -R a+rwX "$GITHUB_WORKSPACE"; chmod a+rx /home/runner /home/runner/work
           PY=$(which python)
           cat > /tmp/run1.py <<'PYEOF'
           import faulthandler, sys, unittest
