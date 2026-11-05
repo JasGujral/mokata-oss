@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [master, main, "probe/0027-release-*"]
+    branches: [master, main]
   pull_request:
 
 # Least-privilege default: read-only workspace-wide; each job re-declares the minimum it needs.

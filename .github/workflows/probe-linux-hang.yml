@@ -1,0 +1,26 @@
+name: probe-linux-hang
+on:
+  push:
+    branches: ["probe/0027-linuxhang-*"]
+permissions:
+  contents: read
+jobs:
+  shard2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - run: pip install -e . && pip install --require-hashes -r requirements/ci.txt && pip install --require-hashes -r requirements/jsonschema.txt
+      - name: shard 2 verbose, dump every thread at 35 min
+        env:
+          MOKATA_REQUIRE_MCP_SDK: "1"
+          PYTHONUNBUFFERED: "1"
+        run: timeout -s ABRT 2100 python -X faulthandler scripts/shard_tests.py run --shard 2 --of 4 -s tests -t tests -v 2>&1 | tee shard2.log; exit ${PIPESTATUS[0]}
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: shard2-log
+          path: shard2.log
