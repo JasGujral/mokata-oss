@@ -5,29 +5,45 @@ on:
 permissions:
   contents: read
 jobs:
-  shard2:
+  p24:
+    strategy:
+      fail-fast: false
+      matrix:
+        tree: [cifix, release0027]
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - if: matrix.tree == 'release0027'
+        run: git checkout origin/release/0.0.27 -- src tests
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
       - run: pip install -e . && pip install --require-hashes -r requirements/ci.txt && pip install --require-hashes -r requirements/jsonschema.txt
-      - name: shard 2 as a separate user (a stray kill cannot reach the runner), to a file
+      - name: the p24 stopping class, as another user, all-thread dumps every 90 s
         run: |
           set +e
           sudo useradd -m probe
           chmod -R a+rwX "$GITHUB_WORKSPACE"
-          chmod a+rx /home/runner || true
           PY=$(which python)
-          ( sudo -u probe -H env MOKATA_REQUIRE_MCP_SDK=1 PYTHONUNBUFFERED=1 PATH="$(dirname $PY):/usr/bin:/bin" \
-              timeout -s ABRT 1800 "$PY" -X faulthandler scripts/shard_tests.py run --shard 2 --of 4 -s tests -t tests -v \
-              > shard2.log 2>&1 < /dev/null; echo "probe-user exit: $?" >> shard2.log ) &
-          W=$!
-          for i in $(seq 1 40); do sleep 60; kill -0 $W 2>/dev/null || break; echo "min $i: $(grep -c ' \.\.\. ' shard2.log) tests; last: $(grep ' \.\.\. ' shard2.log | tail -1 | cut -c1-200)"; done
-          echo "---- summary"; grep -nE "^Ran |^OK|^FAILED|^(FAIL|ERROR):|probe-user exit|Fatal Python|Current thread|Thread 0x" shard2.log | tail -40
-          echo "---- last 80 lines"; tail -80 shard2.log
+          cat > /tmp/run1.py <<'PYEOF'
+          import faulthandler, sys, unittest
+          faulthandler.dump_traceback_later(90, repeat=True)
+          sys.path.insert(0, "tests")
+          names = sys.argv[1:]
+          suite = unittest.defaultTestLoader.loadTestsFromNames(names)
+          r = unittest.TextTestRunner(verbosity=2).run(suite)
+          sys.exit(0 if r.wasSuccessful() else 1)
+          PYEOF
+          chmod a+r /tmp/run1.py
+          sudo -u probe -H env PYTHONUNBUFFERED=1 PATH="$(dirname $PY):/usr/bin:/bin" \
+            timeout -s KILL 600 "$PY" /tmp/run1.py \
+            test_p24_ide_lsp_readonly.StoppingNeverHangsAndKillsTheTree \
+            > p24.log 2>&1 < /dev/null
+          echo "exit: $?"
+          head -c 60000 p24.log
           echo "---- processes of user probe"; ps -u probe -o pid,ppid,pgid,sid,etimes,stat,args --forest
           sudo pkill -9 -u probe || true
           exit 0
