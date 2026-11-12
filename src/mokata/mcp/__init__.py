@@ -22,9 +22,9 @@ Two safety rules are non-negotiable:
     content-hashed, single-use, session-scoped and TTL-bounded, so what was approved is what
     commits. The commit still goes through the universal WriteGate (secrets are a hard block
     that approval cannot override) and is recorded in the audit ledger. An MCP call NEVER
-    writes silently — and, since SI.3, never writes on its own say-so either: `approve=true` /
-    `confirm=true` are still ACCEPTED (schema stability) but DEMOTED — they commit nothing,
-    because a consent flag the model types itself was never a human gate. See `approval.py`.
+    writes silently — and never writes on its own say-so either: there is no consent flag a model
+    can type (the `approve`/`confirm` booleans were deleted pre-1.0, 0.0.28 I2), because a flag the
+    model types itself was never a human gate. See `approval.py`.
     They live in `tools_write`.
 
 Layout:

@@ -99,10 +99,18 @@ jobs:
     # The 1.8 is the worst/mean the local 4-shard run actually showed (1091 s vs 602 s mean; the
     # record was measured on a contended box), so a worst Windows shard could reach ~30 min
     # before real Windows shard clocks exist; 29 (the balanced prediction) was too tight.
-    # This is provisional until `shard_tests.py absorb` of the first sharded CI run: absorb drops the
-    # imbalance allowance and `tests/test_o6_shard_tests.py` then derives the tighter number
-    # (it reds if the record stops clearing this, or this sits >5 above what the record derives).
-    timeout-minutes: 45
+    # The record was then absorbed, as this comment said it would be:
+    #
+    # 45 -> 47 (0.0.28 W5, `ci_ceiling` on Windows). The 1.8 allowance was wrong in BOTH directions
+    # at once: mirror run 43159611113 (probe/matrix/W5) ran shard 1 in 12 s of unit time and shard
+    # 4 in 1622-2339 s — the LPT plan balanced on a Linux record that Windows does not scale
+    # uniformly (lane F's runs measured absent 4/4 at 2306 s and 2458 s against 2700 s, under the
+    # 1.2x floor). `shard_tests.py absorb` of that run's complete windows-latest-absent leg
+    # (4 ci-clock artifacts) re-based the record on Windows' own per-module seconds and dropped
+    # the allowance: predicted 1570 s per shard, worst on a Windows runner 1870 s with overhead,
+    # x1.5 = 47 (`shard_tests.py plan --of 4 --os Windows`). `tests/test_o6_shard_tests.py`
+    # derives the same number from the record and reds if this stops clearing it or sits >5 above.
+    timeout-minutes: 47
     # Every `run:` step uses bash on both OSes — windows-latest defaults to pwsh, which would
     # break the `mktemp -d` / `|| true` POSIX steps. windows-latest ships Git Bash.
     defaults:
@@ -324,14 +332,20 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-    # Measured locally: install ~1 min, the e2e ~25 s. 15 is a backstop for a wedged browser with
-    # room for a slow package mirror (the 0.0.26 cut lost 10 minutes to apt alone).
-    timeout-minutes: 15
+    # CEILING = a RUNNER measurement x 1.5, rounded up (scripts/ci_ceiling.py `derive_minutes`), never a
+    # laptop time: mirror run 42638305064, job 129232266078 ran 305s by the job's own clock on
+    # ubuntu-24.04 (install + browser + the whole suite, 275 flows after 0.0.28 D; the slowest of three
+    # green runs) -> ceil(305 x 1.5 / 60) = 8. The job's last step re-grades it (exit 1 when under
+    # 1.2x) so suite growth reds a PR, not a cut.
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
+      - name: Start the ceiling clock (CI-CEILING)
+        # After checkout + setup-python; the last step of this job reads it (scripts/ci_ceiling.py).
+        run: echo "MOKATA_CLOCK_T0=$(date +%s)" >> "$GITHUB_ENV"
       - name: Install the e2e set (playwright + mokata's runtime and [ide] deps), hash-pinned
         # No mokata install: the e2e runs THIS checkout's src/ (PYTHONPATH), so every package the
         # job fetches is hash-pinned in requirements/e2e.txt — no editable-install site added.
@@ -349,6 +363,55 @@ jobs:
         # suite) and it never imports `tests/_support.py`, so it needs no PyYAML. It exits 2 when
         # it finds no flow — a runner that ran nothing never reads green.
         run: python tests/e2e_ide/run_e2e.py -v
+      - name: This job's ceiling still clears this leg (CI-CEILING)
+        run: python scripts/ci_ceiling.py --since "$MOKATA_CLOCK_T0" --workflow .github/workflows/ci.yml --job ide-e2e
+
+  ide-e2e-firefox:
+    # CI-E2E-FIREFOX-LEG (0.0.28 H). The SAME whole suite as `ide-e2e`, in real Firefox: a page that
+    # works in Chromium and breaks in Firefox (a clipboard API, a selection model, a locale) shipped
+    # behind a green Chromium-only suite. A separate job, not a step of the Chromium one, so each
+    # browser has its own check, its own red and its own ceiling. `MOKATA_E2E_BROWSER` is validated
+    # by the harness (an unknown name is an error, never Chromium); `MOKATA_REQUIRE_E2E=1` turns a
+    # Firefox that cannot launch into a red.
+    name: ide e2e · headless Firefox
+    # ubuntu-24.04, not -latest: `ubuntu-latest` moved to Ubuntu 26 on 2026-10-19 and the pinned
+    # playwright's `install --with-deps` does not know that OS yet (the 0.0.26 cut's red leg).
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    # CEILING = a RUNNER measurement x 1.5, rounded up (scripts/ci_ceiling.py `derive_minutes`), never a
+    # laptop time: mirror run 42638304994, job 129232265659 ran 397s by the job's own clock on
+    # ubuntu-24.04 (install + browser + the whole suite, 275 flows; the slowest of three GREEN runs
+    # after 0.0.28 D closed the full-suite reds) -> ceil(397 x 1.5 / 60) = 10. The job's last step
+    # re-grades it (exit 1 when under 1.2x) so suite growth reds a PR, not a cut.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Start the ceiling clock (CI-CEILING)
+        # After checkout + setup-python; the last step of this job reads it (scripts/ci_ceiling.py).
+        run: echo "MOKATA_CLOCK_T0=$(date +%s)" >> "$GITHUB_ENV"
+      - name: Install the e2e set (playwright + mokata's runtime and [ide] deps), hash-pinned
+        # No mokata install: the e2e runs THIS checkout's src/ (PYTHONPATH), so every package the
+        # job fetches is hash-pinned in requirements/e2e.txt — no editable-install site added.
+        run: pip install --require-hashes -r requirements/e2e.txt
+      - name: Install the Firefox build that playwright version pins
+        # No `--with-deps`, as for Chromium (a slow apt mirror ate a whole 0.0.26 job). If the
+        # runner image lacks a Firefox library the launch reds by name (MOKATA_REQUIRE_E2E=1).
+        run: python -m playwright install firefox
+      - name: IDE end-to-end in a real browser
+        env:
+          MOKATA_REQUIRE_E2E: '1'
+          MOKATA_E2E_BROWSER: firefox
+        # Run as a SCRIPT, not `unittest discover`: it is not part of the suite the release
+        # preflight mirrors (`tests/_preflight_parity.py` reads every `discover -s tests…` as that
+        # suite) and it never imports `tests/_support.py`, so it needs no PyYAML. It exits 2 when
+        # it finds no flow — a runner that ran nothing never reads green.
+        run: python tests/e2e_ide/run_e2e.py -v
+      - name: This job's ceiling still clears this leg (CI-CEILING)
+        run: python scripts/ci_ceiling.py --since "$MOKATA_CLOCK_T0" --workflow .github/workflows/ci.yml --job ide-e2e-firefox
 
   skill-evals:
     # SE.S1/S2 (0.0.26 L5) — A BROKEN SKILL TRIGGER REDS THE BUILD. Claude Code picks a skill from

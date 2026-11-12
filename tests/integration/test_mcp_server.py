@@ -156,13 +156,14 @@ class TestWriteToolsAreHumanGated(unittest.TestCase):
             store.close()
 
     def test_a_model_typed_confirm_does_not_write(self):
-        """SI.3 — `confirm`/`approve` are still ACCEPTED (schema stability) but commit NOTHING.
-        They were a consent flag the MODEL typed; consent is now minted out-of-band by a human."""
+        """SI.3 — `confirm`/`approve` were a consent flag the MODEL typed; consent is minted
+        out-of-band by a human. 0.0.28 I2: the flags are DELETED (no longer "accepted but demoted"),
+        so a typed one is a TypeError and nothing is written."""
         with tempfile.TemporaryDirectory() as d:
             _init(d, "standard")
-            res = M.remember(path=d, subject="decision:db", value="postgres", confirm=True)
-            self.assertEqual(res["status"], "proposed")
-            self.assertFalse(res.get("committed", False))
+            for flag in ("confirm", "approve"):
+                with self.assertRaises(TypeError):
+                    M.remember(path=d, subject="decision:db", value="postgres", **{flag: True})
             store = MemoryStore.from_surface(Surface.load(d))
             self.assertEqual(store.all_active(), [])    # nothing landed on the model's say-so
             store.close()
@@ -238,7 +239,9 @@ class TestServerConstructsWithSdk(unittest.TestCase):
         import asyncio
 
         server = M.build_server()
-        self.assertEqual(type(server).__name__, "FastMCP")
+        # 0.0.28 I1: the server is `_MokataFastMCP`, a FastMCP subclass carrying the front door
+        from mcp.server.fastmcp import FastMCP
+        self.assertIsInstance(server, FastMCP)
         names = {t.name for t in asyncio.run(server.list_tools())}
         self.assertEqual(names, EXPECTED_READ | EXPECTED_WRITE | EXPECTED_APPROVE)
 

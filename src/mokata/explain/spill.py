@@ -2,10 +2,10 @@
 
 A bundle record over `store.CACHE_MAX_BYTES` is not cached as one JSON file (it could never be
 read back under the same bound) and is not held in memory. It is written ONCE, as rows, through
-P4's owner-only `SpillWriter` (`ide/usages.py`, mkstemp in the IDE's spill dir, named for this
-process's pid), and kept KEYED BY ITS CONTENT HASH. Every later page and the save stream from it
-with bounded memory — one page's facts, one blob at a time — and nothing is rebuilt while the
-hash matches.
+P4's owner-only `SpillWriter` (`ide/usages.py`, born private through `winacl` in the IDE's spill
+dir, named for this process's pid), and kept KEYED BY ITS CONTENT HASH. Every later page and the
+save stream from it with bounded memory — one page's facts, one blob at a time — and nothing is
+rebuilt while the hash matches.
 
 Rows (one JSON array per line):
 

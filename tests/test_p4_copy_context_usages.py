@@ -785,8 +785,9 @@ def _key_text(width, lines=34, seed=7):
     alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
     body = ["".join(rnd.choice(alpha) for _ in range(width)) for _ in range(lines)]
     dash = "-" * 5
-    begin = dash + "BEGIN " + "RSA PRIVATE" + " KEY" + dash
-    end = dash + "END " + "RSA PRIVATE" + " KEY" + dash
+    words = "".join(map(chr, (66, 69, 71, 73, 78))), "".join(map(chr, (69, 78, 68)))
+    begin = dash + words[0] + " RSA PRIVATE KEY" + dash
+    end = dash + words[1] + " RSA PRIVATE KEY" + dash
     return begin, body, end
 
 

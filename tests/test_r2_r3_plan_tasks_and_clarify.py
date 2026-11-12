@@ -29,6 +29,7 @@ import _support  # noqa: F401
 from _support import mcp_commit
 
 from mokata import gate_hook as G                                  # noqa: E402
+from mokata.mcp.validation import ValidationError                  # noqa: E402
 from mokata import plan_tasks as P                                 # noqa: E402
 from mokata import session, tdd_state as T                         # noqa: E402
 from mokata.brainstorm import Approach, BrainstormSession          # noqa: E402
@@ -157,12 +158,20 @@ class TestR2ThePlanIsRequired(unittest.TestCase):
         self.assertIn("task plan", str(cm.exception))
         with _Repo() as repo:
             _approve(repo)
-            res = TW.spec_emit(path=repo.path, title=p["title"], approach="rest",
-                               criteria=p["criteria"], tests=p["tests"], scope=p["scope"])
-            self.assertEqual(res["status"], "error")
-            self.assertIn("task plan", res["reason"])
-            self.assertNotIn("proposal_id", res, "refused before any human is asked")
+            # 0.0.28 round 3: `tasks` is required unless `proposal_id` alone redeems — omitting it
+            # with no id is the body's strict refusal naming it, before any human is asked ...
+            with self.assertRaises(ValidationError) as cm:
+                TW.spec_emit(path=repo.path, title=p["title"], approach="rest",
+                             criteria=p["criteria"], tests=p["tests"], scope=p["scope"])
+            self.assertEqual("tasks", cm.exception.field)
             self.assertIsNone(repo.spec())
+            # ... and an EMPTY plan is the body's own refusal, now RAISED as a ValidationError.
+            with self.assertRaises(ValidationError) as cm:
+                TW.spec_emit(path=repo.path, title=p["title"], approach="rest",
+                             criteria=p["criteria"], tests=p["tests"], tasks=[],
+                             scope=p["scope"])
+            self.assertIn("task plan", cm.exception.reason)
+            self.assertIsNone(repo.spec(), "refused before any human is asked")
 
     def test_R2_every_criterion_needs_a_task(self):
         with self.assertRaises(ValueError) as cm:

@@ -2,7 +2,8 @@
 §6, §8, §14, §18.2). The IDE talks to the PROJECT'S OWN language servers — never one of its own
 (§8: no LSP implementation, no parser) — and only READS from them.
 
-WHAT IT OFFERS: hover, go-to-definition, find references, document symbols, and the diagnostics a
+WHAT IT OFFERS: hover, go-to-definition, find references, document symbols, the call hierarchy
+(who calls this / what this calls, one level per question — 0.0.28 G), and the diagnostics a
 server publishes (display only). `pyright` / `basedpyright` / `pylsp` for Python,
 `typescript-language-server` for TS/JS, `gopls` for Go, `rust-analyzer` for Rust, and a
 map the USER may extend in `~/.mokata/lsp.json`. A repo's files never choose a user-configured
@@ -53,8 +54,9 @@ from urllib.parse import unquote, urlsplit
 from .. import __version__
 from ..errors import MokataError
 from ..knowledge import cancel as C
-from ..quiet_spawn import detached, hidden, signal_group
-from ..exe_path import _under, path_dirs, which_in
+from ..quiet_spawn import Jobbed, spawn_jobbed
+from ..exe_path import _SHIMS, path_dirs, which_in, win_reserved_name
+from ..fs_identity import refuse_if_inside, require_inside
 from ..repo_paths import name_of, split_path
 
 # ------------------------------------------------------------------------ the method allowlist
@@ -63,6 +65,10 @@ ALLOWED_REQUESTS = frozenset({
     "initialize", "shutdown",
     "textDocument/hover", "textDocument/definition", "textDocument/references",
     "textDocument/documentSymbol",
+    # 0.0.28 G (ID-LSP-CALL-HIERARCHY): three READS. The item a prepare returns (and its opaque
+    # `data`) goes back to the same server inside the same job; it never reaches the page.
+    "textDocument/prepareCallHierarchy", "callHierarchy/incomingCalls",
+    "callHierarchy/outgoingCalls",
 })
 ALLOWED_NOTIFICATIONS = frozenset({
     "initialized", "exit", "textDocument/didOpen", "textDocument/didClose", "$/cancelRequest",
@@ -83,18 +89,29 @@ READ_ONLY = "mokata's LSP bridge is read-only"
 IDLE_S = 600.0            # a server with no question for this long is shut down
 MAX_CRASHES = 3           # restarts within CRASH_WINDOW_S before a human Start is needed
 CRASH_WINDOW_S = 60.0
-#: Per step of a stop: the `shutdown` answer, the exit after `exit`, the leader's death after the
-#: tree kill. A stop is bounded by 3 × this and a kill by 1 × — on POSIX (`killpg`) and on Windows
-#: with the server's Job Object (`WinJob.terminate` does not wait). Only when Windows could not
-#: make the job does the `taskkill /F /T` fallback add one more step (its own timeout): 4 × and 2 ×
-#: there (re-verification L6).
+#: Per step of a stop: the `shutdown` answer, the exit after `exit`. Then the tree is ended through
+#: the process door (`quiet_spawn.Jobbed.end`: the group while the leader is unreaped on POSIX, the
+#: Job Object until it is EMPTY on Windows — bounded by `quiet_spawn.END_BOUND_S`, reported if
+#: not). There is no fallback: a server Windows refuses a job for never starts (0.0.28 D2).
 STOP_GRACE_S = 2.0
 READ_POLL_S = 0.2         # the POSIX reader's select slice (it checks the stop flag between)
 REAP_TICK_S = 5.0         # the reaper's tick: idle shutdown and the trust re-check run this often
 STDERR_KEEP = 4096        # the tail of a server's stderr kept for its crash report
 OPEN_DOCS_MAX = 32        # documents kept open on a server (LRU), bounded by the asker
-REFERENCES_SNIPPET_MAX = 2000   # snippets read for the first N references; the rest are bare
 NO_PROGRESS_GRACE_S = 3.0       # a server that reports no `$/progress` counts as indexed after this
+CALLS_MAX = 2000                # call-hierarchy rows per expansion (all prepared items together)
+CALLS_ITEMS_MAX = 20            # prepared items (overloads) asked about per expansion; more are said
+CALL_LINE_MAX = 10000           # characters of a caller's line kept (snippet, column conversion)
+CALL_LINE_BYTES = CALL_LINE_MAX * 4   # bytes read per line: CALL_LINE_MAX characters at UTF-8's widest
+# The largest frame the reader accepts from a language server. LSP has no paging: a whole
+# references / symbols / call-hierarchy reply is ONE frame, and the biggest real ones (tsserver
+# project-wide references, pyright workspace symbols on a monorepo) are single-digit MB. 32 MiB
+# keeps a 4x+ margin over those while bounding what one buggy or hostile server can make this
+# process hold (the body is copied and parsed, ~3x its size). Over it, the server is ENDED with
+# the reason — a refused frame cannot be skipped, the stream's framing is lost with it.
+FRAME_MAX = 32 * 1024 * 1024
+_POS_MAX = 2 ** 31 - 1          # an LSP position number past this is malformed (uinteger is 32-bit)
+CALL_DIRECTIONS = {"in": "callHierarchy/incomingCalls", "out": "callHierarchy/outgoingCalls"}
 
 # ------------------------------------------------------------------------ the languages
 #: language -> {exts, id (LSP languageId), servers: [(binary, argv-tail, install-line)]}. The
@@ -224,7 +241,7 @@ def _package_bin(modules: str, anchor: str, root: str, name: str, pkg: Optional[
     pkg = pkg or NODE_PACKAGES.get(name)       # `pkg`: a non-server tool (npm, corepack…) by name
     if pkg is None:
         return None, ""
-    if os.path.isdir(modules) and not _under(modules, anchor):
+    if os.path.isdir(modules) and not require_inside(modules, anchor):
         return None, (f"{modules} resolves outside {anchor} ({os.path.realpath(modules)}) — "
                       f"refused")
     pkg_dir = os.path.join(modules, *pkg.split("/"))
@@ -239,7 +256,7 @@ def _package_bin(modules: str, anchor: str, root: str, name: str, pkg: Optional[
         return None, f"{pkg}/package.json names no bin {name!r}"
     script = os.path.realpath(os.path.join(os.path.realpath(pkg_dir),
                                            *split_path(rel)))
-    if not _under(script, modules) or not os.path.isfile(script):
+    if not require_inside(script, modules) or not os.path.isfile(script):
         return None, (f"{pkg}/package.json: bin {rel!r} resolves outside {modules} "
                       f"({script}) — refused")
     node = node_on_path(root, environ)
@@ -253,23 +270,53 @@ def _node_package_bin(root: str, name: str) -> Tuple[Optional[List[str]], str]:
     return _package_bin(os.path.join(root, "node_modules"), root, root, name)
 
 
+def _global_module_dirs(d: str) -> List[Tuple[str, str]]:
+    """`(node_modules dir, containment anchor)` for each global-install layout a PATH entry `d`
+    can be the bin directory of: npm (`<d>/node_modules`), pnpm (`<d>/global/<layout n>/
+    node_modules`, `PNPM_HOME` on PATH) and yarn v1 (`…/Yarn/bin` → `…/Yarn/Data/global/
+    node_modules`)."""
+    out = [(os.path.join(d, "node_modules"), d)]
+    try:
+        layouts = sorted((n for n in os.listdir(os.path.join(d, "global")) if n.isdigit()),
+                         key=int, reverse=True)
+    except OSError:
+        layouts = []
+    out += [(os.path.join(d, "global", n, "node_modules"), d) for n in layouts]
+    parent = os.path.dirname(os.path.normpath(d))
+    if os.path.basename(os.path.normpath(d)).lower() == "bin" \
+            and os.path.basename(parent).lower() == "yarn":
+        out.append((os.path.join(parent, "Data", "global", "node_modules"), parent))
+    return out
+
+
 def _global_node_package_bin(root: str, name: str, pkg: Optional[str] = None,
                              environ: Optional[Dict[str, str]] = None
                              ) -> Tuple[Optional[List[str]], str]:
-    """A GLOBAL npm install the user made, found through PATH without reading its shim: npm's
-    Windows prefix is the PATH directory itself (`%APPDATA%\\npm\\x.cmd` beside
-    `%APPDATA%\\npm\\node_modules\\<pkg>`), so each absolute PATH entry outside the repo is
-    asked for `<entry>/node_modules/<pkg>/package.json`. (On POSIX the global bin is a symlink
-    `which_in` already finds.)"""
+    """A GLOBAL npm / pnpm / yarn v1 install the user made, found through PATH without reading its
+    shim: each absolute PATH entry outside the repo is asked for the package in every global
+    layout it can be the bin directory of (`_global_module_dirs`). (On POSIX the global bin is a
+    symlink `which_in` already finds.)"""
     why = ""
     for d in path_dirs(environ, cwd=root):
-        if _under(d, root):
+        if refuse_if_inside(d, root):
             continue
-        head, w = _package_bin(os.path.join(d, "node_modules"), d, root, name, pkg, environ)
-        if head is not None:
-            return head, ""
-        why = why or w
+        for modules, anchor in _global_module_dirs(d):
+            head, w = _package_bin(modules, anchor, root, name, pkg, environ)
+            if head is not None:
+                return head, ""
+            why = why or w
     return None, why
+
+
+def _shim_only(root: str, name: str) -> Optional[str]:
+    """The `name.cmd`/`.bat`/`.ps1` on the user's PATH when that is all there is of `name` — found
+    to SAY so, never run."""
+    for d in path_dirs(cwd=root):
+        for ext in _SHIMS:
+            cand = os.path.join(d, name + ext)
+            if os.path.isfile(cand):
+                return cand
+    return None
 
 
 def find_server(root: str, language: str) -> Dict[str, Any]:
@@ -301,6 +348,13 @@ def find_server(root: str, language: str) -> Dict[str, Any]:
         if head is not None and pick is None:
             pick = (name, [*head, *tail])
     if pick is None:
+        for name, _tail, _install in spec["servers"]:
+            shim = _shim_only(root, name)
+            if shim is not None:          # found and NOT run, and why — never "not on PATH"
+                note = (f"`{name}` was found only as {shim} — mokata never runs a .cmd/.bat/.ps1 "
+                        f"(cmd.exe / PowerShell would parse the command line); name the server's "
+                        f"real executable in {USER_CONFIG}")
+                break
         return {"found": False, "binary": None, "argv": None, "name": None, "candidates": cands,
                 "note": note or (f"no {language} language server on PATH, in the venv or node_modules"
                                  f" — install one yourself: "
@@ -346,6 +400,10 @@ def from_uri(uri: str, nt: Optional[bool] = None) -> Optional[str]:
     m = re.match(r"^[/\\]?([A-Za-z]):([/\\].*)?$", path)
     if not m:
         return None
+    # A device or an alias Windows would read as another file (`src/CON`, `nul .py`, `COM\xb9`,
+    # `a.py.`, `a.py `, `CONOUT$`) is no file of the repo: CPython 3.13's `_isreservedname`, ported.
+    if any(win_reserved_name(c) for c in re.split(r"[/\\]", m.group(2) or "") if c):
+        return None
     return ntpath.normpath(m.group(1).upper() + ":" + (m.group(2) or "/"))
 
 
@@ -370,173 +428,6 @@ def source_text(path: str) -> str:
     server's positions must match the bytes on disk)."""
     with open(path, "rb") as fh:
         return fh.read().decode("utf-8", "replace")
-
-
-class WinJob:
-    """A Windows Job Object holding the server and everything it starts (re-verification R1): a
-    child inherits its parent's job, so `terminate` reaches the whole tree — ALSO after the
-    leader died, when `taskkill /T` has no live pid left to walk the tree from. The job is made
-    KILL_ON_JOB_CLOSE, so the tree also dies if the IDE process itself dies. `kernel32` is
-    injectable for the tests (no Windows box here). Never raises; `ok` says it holds the server."""
-
-    _KILL_ON_JOB_CLOSE = 0x00002000
-    _EXTENDED_LIMIT_INFORMATION = 9
-
-    def __init__(self, proc: Any, kernel32: Any = None) -> None:
-        self.handle: Any = None
-        self.ok = False
-        try:
-            import ctypes
-            from ctypes import wintypes
-            k32 = kernel32 if kernel32 is not None else ctypes.WinDLL("kernel32", use_last_error=True)
-            self._k32 = k32
-
-            # DWORD is 4 bytes in the Windows ABI; `wintypes.DWORD` is `c_ulong`, which is 8 under
-            # LP64 — fixed-width fields keep the layout (144 bytes on 64-bit) host-independent,
-            # so the test can check it off Windows (verify2 N5).
-            class _Basic(ctypes.Structure):
-                _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64),
-                            ("PerJobUserTimeLimit", ctypes.c_int64),
-                            ("LimitFlags", ctypes.c_uint32),
-                            ("MinimumWorkingSetSize", ctypes.c_size_t),
-                            ("MaximumWorkingSetSize", ctypes.c_size_t),
-                            ("ActiveProcessLimit", ctypes.c_uint32),
-                            ("Affinity", ctypes.c_size_t),
-                            ("PriorityClass", ctypes.c_uint32),
-                            ("SchedulingClass", ctypes.c_uint32)]
-
-            class _Io(ctypes.Structure):
-                _fields_ = [(n, ctypes.c_uint64) for n in (
-                    "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
-                    "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
-
-            class _Extended(ctypes.Structure):
-                _fields_ = [("BasicLimitInformation", _Basic), ("IoInfo", _Io),
-                            ("ProcessMemoryLimit", ctypes.c_size_t),
-                            ("JobMemoryLimit", ctypes.c_size_t),
-                            ("PeakProcessMemoryUsed", ctypes.c_size_t),
-                            ("PeakJobMemoryUsed", ctypes.c_size_t)]
-
-            if kernel32 is None:                 # real prototypes: HANDLEs are pointer-sized
-                k32.CreateJobObjectW.restype = wintypes.HANDLE
-                k32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
-                k32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int,
-                                                        ctypes.c_void_p, wintypes.DWORD]
-                k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
-                k32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
-                k32.CloseHandle.argtypes = [wintypes.HANDLE]
-            job = k32.CreateJobObjectW(None, None)
-            if not job:
-                return
-            self.handle = job
-            info = _Extended()
-            info.BasicLimitInformation.LimitFlags = self._KILL_ON_JOB_CLOSE
-            # Without KILL_ON_JOB_CLOSE the tree would outlive an IDE that dies: a job whose
-            # limits did not take is not the job this class promises — `ok` stays False and the
-            # taskkill fallback is used (verify2 N5).
-            if not k32.SetInformationJobObject(job, self._EXTENDED_LIMIT_INFORMATION,
-                                               ctypes.byref(info), ctypes.sizeof(info)):
-                return
-            self.ok = bool(k32.AssignProcessToJobObject(job, int(proc._handle)))
-        except (OSError, AttributeError, ValueError, TypeError):
-            self.ok = False
-
-    def terminate(self) -> None:
-        """Kill every process in the job, then release it. Idempotent."""
-        job, self.handle = self.handle, None
-        if job is None:
-            return
-        try:
-            if self.ok:
-                self._k32.TerminateJobObject(job, 1)
-            self._k32.CloseHandle(job)
-        except (OSError, AttributeError, ValueError, TypeError):
-            pass
-
-
-def _resume_process(proc: Any) -> None:
-    """Let a process created CREATE_SUSPENDED run: `NtResumeProcess` on its handle (Popen drops
-    the primary thread's handle, so there is no thread to `ResumeThread`). ctypes only. Raises
-    OSError when Windows refuses."""
-    import ctypes
-    from ctypes import wintypes
-    ntdll = ctypes.WinDLL("ntdll")
-    ntdll.NtResumeProcess.argtypes = [wintypes.HANDLE]
-    ntdll.NtResumeProcess.restype = ctypes.c_long
-    status = ntdll.NtResumeProcess(int(proc._handle))
-    if status != 0:
-        raise OSError(f"NtResumeProcess failed: NTSTATUS {status & 0xFFFFFFFF:#x}")
-
-
-def spawn_jobbed(argv: Sequence[str], stdin: Any, nt: Optional[bool] = None,
-                 **popen_kw: Any) -> "tuple[subprocess.Popen, Optional[WinJob]]":
-    """Start `argv` — in its own session / process group, with no console window (`detached()`) —
-    so that it, and everything it ever starts, is in OUR Job Object from its very first
-    instruction. POSIX: a plain Popen (`start_new_session` makes the group); the job is None.
-    Windows: the process is created CREATE_SUSPENDED, assigned to a new KILL_ON_JOB_CLOSE job (no
-    breakaway of any kind is allowed), and only then resumed. Assigning AFTER a running start lost
-    a race (1 in 40 on a real runner): a launcher — a venv's `Scripts\\python.exe`, `pytest.exe`,
-    `pylsp.exe` — starts its real child within milliseconds, and a child that started first is in
-    no job of ours, so `terminate` never reached it.
-    If the job could not be made (`job.ok` False) the process is still resumed and the caller's
-    fallback (`taskkill /F /T` from the live leader, before it exits) is all there is: that
-    fallback cannot reach what a leader left behind AFTER it died. Raises OSError (the process
-    killed first) if it cannot be resumed. `nt` injects the platform for the tests."""
-    is_nt = (os.name == "nt") if nt is None else nt
-    proc = subprocess.Popen(list(argv), stdin=stdin, **popen_kw,
-                            **detached(suspended=is_nt, nt=is_nt))
-    if not is_nt:
-        return proc, None
-    job = WinJob(proc)
-    resumed = False
-    try:
-        _resume_process(proc)
-        resumed = True
-    finally:
-        if not resumed:                         # never leave a suspended process behind
-            job.terminate()
-            try:
-                proc.kill()
-                proc.wait(timeout=STOP_GRACE_S)
-            except (OSError, subprocess.SubprocessError):
-                pass
-    return proc, job
-
-
-def _kill_tree(proc: Any, pgid: Optional[int] = None, job: Optional[WinJob] = None) -> None:
-    """Kill `proc` and everything it started — ALSO after `proc` itself is already dead
-    (re-verification R1: a crashed leader's children survived). POSIX: `killpg(pgid)` with the
-    group id RECORDED AT SPAWN (`start_new_session` makes it the leader's pid; the group outlives
-    the reaped leader while any member lives — `getpgid` on the dead leader would raise and send
-    nothing). Windows: the server's Job Object (`WinJob`), which holds the tree whether or not the
-    leader lives; only if the job could not be made does it fall back to `taskkill /F /T` by
-    absolute path, which needs a live leader to anchor the tree. Bounded: one STOP_GRACE_S wait
-    for the leader (plus one for taskkill in that fallback); never raises."""
-    try:
-        if os.name == "nt":
-            if job is not None and job.ok:
-                job.terminate()
-            elif proc.poll() is None:
-                exe = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32",
-                                   "taskkill.exe")
-                subprocess.run([exe, "/F", "/T", "/PID", str(proc.pid)], stdin=subprocess.DEVNULL,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                               timeout=STOP_GRACE_S, **hidden())
-        else:
-            import signal
-            if pgid is not None:                # None: the group was already killed (verify2 N1)
-                try:
-                    signal_group(pgid, signal.SIGKILL)   # never 0/1/our own group (0.0.27 CI)
-                except (ProcessLookupError, PermissionError, OSError):
-                    pass
-        if proc.poll() is None:
-            proc.kill()
-        proc.wait(timeout=STOP_GRACE_S)
-    except (OSError, subprocess.SubprocessError):
-        pass
-    finally:
-        if job is not None:
-            job.terminate()                     # releases the handle (a no-op after the kill)
 
 
 # ------------------------------------------------------------------------ one server
@@ -569,8 +460,8 @@ class Server:
         self.stopped = threading.Event()
         self._stderr = bytearray()
         self.stopping = False
-        self.pgid: Optional[int] = None
-        self.job: Optional[WinJob] = None
+        self._ended = False                                # the first `_gone` has claimed (W5)
+        self.tree: Optional[Jobbed] = None
         self._stop_readers: Optional[threading.Event] = None
 
     # ---- lifecycle -----------------------------------------------------------------------
@@ -578,12 +469,13 @@ class Server:
         # Its OWN process group / session (verification M1): stopping kills the whole tree
         # (tsserver under typescript-language-server, proc-macro-srv under rust-analyzer, `go`
         # under gopls), not only the direct child. No shell is involved anywhere (M3).
-        # Windows: created suspended, put in the tree's Job Object, THEN resumed (`spawn_jobbed`) —
-        # a launcher's first child is in the job too.
-        self.proc, self.job = spawn_jobbed(
+        # The process door: Windows created suspended, put in the tree's Job Object, THEN resumed
+        # — a launcher's first child is in the job too — or refused (`NO_JOB`, nothing ran); POSIX
+        # its own session, signalled only while the leader is unreaped.
+        self.tree = spawn_jobbed(
             self.argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             cwd=self.root, close_fds=True)   # own session / group, hidden console
-        self.pgid = self.proc.pid if os.name != "nt" else None     # its session's id, kept
+        self.proc = self.tree.proc
         self._stop_readers = threading.Event()
         threading.Thread(target=self._read_loop, daemon=True,
                          name=f"mokata-lsp-{self.language}").start()
@@ -605,6 +497,7 @@ class Server:
                     "hover": {"contentFormat": ["markdown", "plaintext"]},
                     "definition": {"linkSupport": False},
                     "references": {}, "documentSymbol": {"hierarchicalDocumentSymbolSupport": True},
+                    "callHierarchy": {"dynamicRegistration": False},
                     "publishDiagnostics": {"relatedInformation": False},
                     "synchronization": {"didSave": False, "willSave": False}},
             },
@@ -615,20 +508,19 @@ class Server:
 
     @property
     def alive(self) -> bool:
-        return self.proc is not None and self.proc.poll() is None and not self.stopped.is_set()
+        return self.tree is not None and self.tree.poll_exit() is None and not self.stopped.is_set()
 
     def stop(self, why: str = "stopped") -> None:
-        """`shutdown` → `exit` → the process TREE is killed if it lingers. Never blocks past
-        3 × STOP_GRACE_S (4 × on Windows only when its Job Object could not be made — see
-        STOP_GRACE_S; verification H2, L6): no caller — revoke, IDE shutdown, idle reap, a
-        cancelled index job — ever waits on the server's pipes. Pending questions end with
-        ServerGone."""
+        """`shutdown` → `exit` → the process TREE is ended if it lingers. Two STOP_GRACE_S steps,
+        then the door's bounded end (verification H2, L6): no caller — revoke, IDE shutdown, idle
+        reap, a cancelled index job — ever waits on the server's pipes. Pending questions end
+        with ServerGone."""
         self.stopping = True
-        proc = self.proc
-        if proc is None:
+        tree = self.tree
+        if tree is None:
             return
         try:
-            if proc.poll() is None:
+            if tree.poll_exit() is None:
                 try:
                     self.request("shutdown", None, wait=STOP_GRACE_S)
                 except (ServerGone, ServerError, TimeoutError):
@@ -638,7 +530,7 @@ class Server:
                 except ServerGone:
                     pass
                 try:
-                    proc.wait(STOP_GRACE_S)
+                    tree.wait_exit(STOP_GRACE_S)
                 except subprocess.TimeoutExpired:
                     pass
         finally:
@@ -654,11 +546,11 @@ class Server:
         self._gone(why)
 
     def _watch_exit(self) -> None:
-        proc = self.proc
-        if proc is None:
+        tree = self.tree
+        if tree is None:
             return
         try:
-            proc.wait()
+            tree.wait_exit()                  # never reaps: the tree is ended while unreaped
         except OSError:
             return
         self._gone("exited")
@@ -666,20 +558,33 @@ class Server:
     def _gone(self, why: str) -> None:
         """The server is over (stopped, killed or crashed): its whole tree is killed — on the
         crash path too (R1) — pending questions fail with ServerGone at once, the readers are
-        told to stop. Idempotent: the first caller publishes the event, the rest only re-kill."""
+        told to stop. Idempotent: the first caller publishes the event, the rest only re-kill.
+
+        The FIRST CALLER'S REASON is the answer (0.0.28 W5): it is claimed under the lock BEFORE
+        the kill. The kill wakes the exit watcher, whose own `_gone("exited")` used to reach the
+        lock first and answer a frame-cap refusal as "exited (exit -9)" — the reason the reader
+        decided on lost to the signal it sent. A later caller only re-kills; it never fails the
+        questions, and the questions are failed before `stopped` is set, so a waiting `request`
+        never sees `stopped` without its answer."""
         proc = self.proc
-        # verify2 N1: the group is killed ONCE. After that its id is forgotten — once the group
-        # is empty the number can be handed to an unrelated process group, and a later stop /
-        # kill / reap re-sending SIGKILL to it would hit that group instead.
         with self._lock:
-            pgid, self.pgid = self.pgid, None
-        if proc is not None:
-            _kill_tree(proc, pgid, self.job)
+            first = not self._ended
+            self._ended = True
+        # The tree is ended ONCE, through its door handle (verify2 N1; 0.0.28 R3): on POSIX the
+        # group only while the leader is unreaped, then the id is forgotten; on Windows the Job
+        # Object until it is empty. A later stop / kill / reap signals nothing.
+        if self.tree is not None:
+            self.tree.close()                 # end() (idempotent) + release the job handle
+        if not first:
+            return
         with self._lock:
             if proc is not None:
-                self.exit_code = proc.poll()
+                self.exit_code = proc.returncode
             pend, self._pending = self._pending, {}
-            first = not self.stopped.is_set()
+            exit_note = f" (exit {self.exit_code})" if self.exit_code is not None else ""
+            for p in pend.values():
+                p["error"] = ServerGone(f"{self.name} {why}{exit_note}")
+                p["done"].set()
             self.stopped.set()
         if self._stop_readers is not None:
             self._stop_readers.set()
@@ -688,14 +593,9 @@ class Server:
                 self.proc.stdin.close()                   # ours alone: no reader holds it
             except (OSError, ValueError):
                 pass
-        for p in pend.values():
-            exit_note = f" (exit {self.exit_code})" if self.exit_code is not None else ""
-            p["error"] = ServerGone(f"{self.name} {why}{exit_note}")
-            p["done"].set()
-        if first:
-            self.on_event({"kind": "lsp", "what": "stopped" if self.stopping else "crashed",
-                           "language": self.language, "server": self.name,
-                           "exit_code": self.exit_code, "stderr": self.stderr_tail()})
+        self.on_event({"kind": "lsp", "what": "stopped" if self.stopping else "crashed",
+                       "language": self.language, "server": self.name,
+                       "exit_code": self.exit_code, "stderr": self.stderr_tail()})
 
     def stderr_tail(self) -> str:
         return bytes(self._stderr[-STDERR_KEEP:]).decode("utf-8", "replace")
@@ -782,7 +682,7 @@ class Server:
                 except (OSError, ValueError):
                     return
                 if not ready:
-                    if self.proc is not None and self.proc.poll() is not None:
+                    if self.tree is not None and self.tree.poll_exit() is not None:
                         return                        # the process is gone: EOF, pipe or no pipe
                     continue
                 try:
@@ -803,12 +703,16 @@ class Server:
         proc = self.proc
         out = proc.stdout if proc is not None else None
         buf = bytearray()
+        why = "exited"
         try:
             for chunk in (self._chunks(out) if out is not None else ()):
                 buf.extend(chunk)
                 while True:
                     head_end = buf.find(b"\r\n\r\n")
                     if head_end < 0:
+                        if len(buf) > FRAME_MAX:             # a header that never ends
+                            why = (f"sent {len(buf)} bytes with no frame header (over the "
+                                   f"{FRAME_MAX}-byte frame cap)")
                         break
                     length = None
                     for line in bytes(buf[:head_end]).split(b"\r\n"):
@@ -821,6 +725,10 @@ class Server:
                     if length is None:                       # a frame with no length: skip it
                         del buf[:head_end + 4]
                         continue
+                    if length > FRAME_MAX or length < 0:
+                        why = (f"sent a frame of {length} bytes (over the {FRAME_MAX}-byte "
+                               "frame cap)")
+                        break
                     if len(buf) < head_end + 4 + length:
                         break
                     body = bytes(buf[head_end + 4:head_end + 4 + length])
@@ -830,6 +738,8 @@ class Server:
                     except ValueError:
                         continue
                     self._dispatch(msg)
+                if why != "exited":
+                    break
         except (OSError, ValueError):
             pass
         finally:
@@ -838,12 +748,12 @@ class Server:
                     out.close()                               # the reader owns its pipe
             except (OSError, ValueError):
                 pass
-            if self.proc is not None and not self.stopped.is_set():
+            if why == "exited" and self.tree is not None and not self.stopped.is_set():
                 try:
-                    self.proc.wait(STOP_GRACE_S)              # EOF: it exited (or is exiting)
+                    self.tree.wait_exit(STOP_GRACE_S)         # EOF: it exited (or is exiting)
                 except subprocess.TimeoutExpired:
                     pass
-            self._gone("exited")
+            self._gone(why)                                   # an over-cap server is ENDED here
 
     def _drain_stderr(self) -> None:
         proc = self.proc
@@ -1232,13 +1142,19 @@ class _Lines:
         return lines[n0] if 0 <= n0 < len(lines) else ""
 
 
-def location(root: str, loc: Dict[str, Any], lines: _Lines, snippet: bool = True) -> Dict[str, Any]:
+def location(root: str, loc: Any, lines: _Lines, snippet: bool = True) -> Optional[Dict[str, Any]]:
     """One LSP Location / LocationLink -> `{path, line, col, end_line, end_col, snippet, outside,
     abspath}` with 1-based positions and characters (not UTF-16 units). A location OUTSIDE the
     workspace (the stdlib, site-packages, typeshed — or anything a server names, a UNC share
     included) is reported with its path but NEVER read: no snippet, no column conversion
-    (verification L1)."""
+    (verification L1). None for a Location that is malformed — not an object, or a URI
+    `urlsplit` cannot read (verify-G M-3: it RAISED and failed the whole answer); the caller
+    skips it and COUNTS it."""
+    if not isinstance(loc, dict):
+        return None
     uri = loc.get("targetUri") or loc.get("uri") or ""
+    if not _uri_ok(uri):
+        return None
     rng = loc.get("targetSelectionRange") or loc.get("targetRange") or loc.get("range") or {}
     start, end = rng.get("start") or {}, rng.get("end") or {}
     abspath = from_uri(uri) or ""
@@ -1323,9 +1239,203 @@ def diagnostics_of(root: str, srv: Server, abspath: str, lines: _Lines) -> List[
     return out
 
 
+# ------------------------------------------------------------------------ the call hierarchy
+def call_hierarchy_supported(srv: Server) -> bool:
+    """Did the server's `initialize` reply advertise `callHierarchyProvider`? Nothing is asked of a
+    server that did not."""
+    caps = srv.capabilities if isinstance(srv.capabilities, dict) else {}
+    return bool(caps.get("callHierarchyProvider"))
+
+
+def _num_ok(v: Any) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= _POS_MAX
+
+
+def _pos_ok(p: Any) -> bool:
+    return isinstance(p, dict) and _num_ok(p.get("line")) and _num_ok(p.get("character"))
+
+
+def _range_ok(r: Any) -> bool:
+    if not (isinstance(r, dict) and _pos_ok(r.get("start")) and _pos_ok(r.get("end"))):
+        return False
+    s, e = r["start"], r["end"]
+    return (e["line"], e["character"]) >= (s["line"], s["character"])
+
+
+def _uri_ok(uri: Any) -> bool:
+    """A URI string `urlsplit` can read (verify-G M-1: `file://[abc/x` RAISES there, and one such
+    item voided the whole answer). THE one URI check of a call answer; whether a parsed URI is a
+    local file inside the repo is `_call_place`'s question, not this one."""
+    if not isinstance(uri, str):
+        return False
+    try:
+        urlsplit(uri)
+    except ValueError:
+        return False
+    return True
+
+
+def _item_ok(it: Any) -> bool:
+    """A CallHierarchyItem a row can be built from — every field checked for shape: a server is
+    never trusted for it (a malformed one is dropped and COUNTED by the caller)."""
+    if not (isinstance(it, dict) and isinstance(it.get("name"), str) and _uri_ok(it.get("uri"))
+            and _range_ok(it.get("range")) and _range_ok(it.get("selectionRange"))):
+        return False
+    rng, sel = it["range"], it["selectionRange"]
+    inside = ((rng["start"]["line"], rng["start"]["character"])
+              <= (sel["start"]["line"], sel["start"]["character"])
+              and (sel["end"]["line"], sel["end"]["character"])
+              <= (rng["end"]["line"], rng["end"]["character"]))
+    return inside and (it.get("kind") is None or _num_ok(it.get("kind")))
+
+
+class CallLines:
+    """The lines a call answer shows, read BOUNDED: only regular files (a FIFO or device named by a
+    server is never opened), streamed, keeping only the lines asked for — memory is O(rows), not
+    O(file), so a 1M-line caller file costs one pass and its few lines. Lines split on `\n` with a
+    trailing `\r` dropped (the viewer's rule, `usages.viewer_lines`; never `splitlines`, which
+    breaks on form feed and U+2028 where LSP does not), each kept to CALL_LINE_MAX characters."""
+
+    def __init__(self) -> None:
+        self._want: Dict[str, set] = {}
+        self._got: Dict[str, Dict[int, str]] = {}
+
+    def want(self, abspath: str, l0: int) -> None:
+        self._want.setdefault(abspath, set()).add(l0)
+
+    def load(self, checkpoint: Callable[[], None] = lambda: None) -> None:
+        import stat
+        for abspath, wanted in self._want.items():
+            checkpoint()
+            got: Dict[int, str] = {}
+            self._got[abspath] = got
+            try:
+                if not stat.S_ISREG(os.stat(abspath).st_mode):
+                    continue
+                last = max(wanted)
+                with open(abspath, "rb") as fh:
+                    n = 0
+                    while n <= last:
+                        # at most CALL_LINE_BYTES of a line are held: a one-line minified bundle
+                        # is skipped through in pieces, never read whole (verify-G L-3)
+                        raw = fh.readline(CALL_LINE_BYTES)
+                        if not raw:
+                            break
+                        if n in wanted:
+                            got[n] = raw.rstrip(b"\n").rstrip(b"\r").decode(
+                                "utf-8", "replace")[:CALL_LINE_MAX]
+                        while not raw.endswith(b"\n"):
+                            raw = fh.readline(CALL_LINE_BYTES)
+                            if not raw:
+                                break
+                        n += 1
+            except OSError:
+                continue
+
+    def line(self, abspath: str, l0: int) -> Optional[str]:
+        """The line, or None when it was not read (not a regular file, unreadable, past its end)."""
+        return self._got.get(abspath, {}).get(l0)
+
+
+def _call_place(root: str, it: Dict[str, Any]) -> Tuple[str, Optional[str], bool]:
+    """(abspath, repo-relative name or None, outside?) of an item's URI — no file is read here."""
+    abspath = from_uri(it["uri"]) or ""
+    rel, outside = _rel(root, abspath) if abspath else (None, True)
+    return abspath, rel, outside
+
+
+def call_row(root: str, it: Dict[str, Any], lines: CallLines) -> Dict[str, Any]:
+    """One CallHierarchyItem as a row the page may see: name (clipped), kind, path:line:col at its
+    `selectionRange` start (1-based CHARACTERS, converted on the real line), snippet. An item
+    OUTSIDE the workspace is shown (`shown`: its path, or the raw URI for a host/UNC one) and never
+    read. The item itself — its `data` included — is NOT in the row."""
+    abspath, rel, outside = _call_place(root, it)
+    start = it["selectionRange"]["start"]
+    l0, units = start["line"], start["character"]
+    text = lines.line(abspath, l0)        # None for an outside item: `call_edges` never asked for it
+    if text is not None:
+        col = char_col(text, units)
+        exact = not (len(text) >= CALL_LINE_MAX and col > len(text))
+    else:
+        col, exact = units + 1, False
+    detail = it.get("detail")
+    return {"name": it["name"][:300], "kind": SYMBOL_KINDS.get(it.get("kind"), "symbol"),
+            "detail": detail[:200] if isinstance(detail, str) else "",
+            "path": rel or "", "shown": (rel or abspath or it["uri"])[:200], "outside": outside,
+            "line": l0 + 1, "col": col, "col_exact": exact,
+            "snippet": text.strip()[:300] if text else ""}
+
+
+def call_edges(root: str, srv: Server, uri: str, pos: Dict[str, int], direction: str,
+               recheck: Callable[[], bool], checkpoint: Callable[[], None] = lambda: None,
+               cap: int = CALLS_MAX) -> Dict[str, Any]:
+    """`prepareCallHierarchy` at `pos`, then `incomingCalls` (`direction="in"`) or `outgoingCalls`
+    (`"out"`) for each prepared item (overloads: each its own group, at most CALLS_ITEMS_MAX asked).
+    `recheck()` (the host's trust re-read) runs before EVERY request: False -> `{"revoked": True}`
+    and nothing more is sent. Rows: at most `cap` across all groups; each group carries the EXACT
+    count of well-formed entries the server sent (`total`) and how many malformed ones were
+    dropped (`skipped`). Every server value is shape-checked; the items go back to the server
+    untouched and never into the result."""
+    method = CALL_DIRECTIONS[direction]
+    key = "from" if direction == "in" else "to"
+    if not recheck():
+        return {"revoked": True}
+    checkpoint()
+    prep = srv.request("textDocument/prepareCallHierarchy",
+                       {"textDocument": {"uri": uri}, "position": pos})
+    skipped = 0
+    raw = prep if isinstance(prep, list) else [] if prep is None else None
+    if raw is None:
+        skipped, raw = 1, []
+    items = [it for it in raw if _item_ok(it)]
+    skipped += len(raw) - len(items)
+    asked = items[:CALLS_ITEMS_MAX]
+    picked: List[Tuple[Dict[str, Any], List[Tuple[Dict[str, Any], int]], int, int]] = []
+    budget = cap
+    for it in asked:
+        if not recheck():
+            return {"revoked": True}
+        checkpoint()
+        res = srv.request(method, {"item": it})
+        entries = res if isinstance(res, list) else [] if res is None else None
+        g_skipped = 0
+        if entries is None:
+            g_skipped, entries = 1, []
+        good: List[Tuple[Dict[str, Any], int]] = []
+        total = 0
+        for i, e in enumerate(entries):
+            if i % 5000 == 0:
+                checkpoint()
+            if not (isinstance(e, dict) and _item_ok(e.get(key))
+                    and isinstance(e.get("fromRanges"), list)):
+                g_skipped += 1
+                continue
+            total += 1
+            if len(good) < budget:
+                good.append((e[key], sum(1 for r in e["fromRanges"] if _range_ok(r))))
+        budget -= len(good)
+        skipped += g_skipped
+        picked.append((it, good, total, g_skipped))
+    lines = CallLines()
+    for it, good, _t, _s in picked:
+        for x in [it] + [g for g, _n in good]:
+            abspath, _rel_, outside = _call_place(root, x)
+            if not outside:
+                lines.want(abspath, x["selectionRange"]["start"]["line"])
+    lines.load(checkpoint)
+    groups = []
+    for it, good, total, g_skipped in picked:
+        rows = [dict(call_row(root, x, lines), calls=n) for x, n in good]
+        groups.append({"item": call_row(root, it, lines), "rows": rows, "total": total,
+                       "truncated": len(rows) < total, "skipped": g_skipped})
+    return {"groups": groups, "items_named": len(items), "items_asked": len(asked),
+            "skipped": skipped, "callable": bool(items)}
+
+
 __all__ = ["ALLOWED", "ALLOWED_REQUESTS", "ALLOWED_NOTIFICATIONS", "WRITE_METHODS", "READ_ONLY",
            "IDLE_S", "MAX_CRASHES", "CRASH_WINDOW_S", "MethodRefused", "ServerGone",
            "ServerError", "Server", "Host", "languages", "language_of", "language_id",
-           "find_binary", "find_server", "spawn_jobbed", "path_dirs", "which_in", "will_run", "to_uri", "from_uri",
+           "find_binary", "find_server", "path_dirs", "which_in", "will_run", "to_uri", "from_uri",
            "utf16_col", "char_col", "location", "hover_text", "symbols_flat", "diagnostics_of",
-           "source_text"]
+           "source_text", "CALLS_MAX", "CALLS_ITEMS_MAX", "CALL_DIRECTIONS",
+           "call_hierarchy_supported", "call_edges", "call_row", "CallLines"]

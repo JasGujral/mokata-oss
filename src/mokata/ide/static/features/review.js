@@ -112,6 +112,13 @@
                el("span", "dim", `· ${t.tests} test${t.tests === 1 ? "" : "s"}`));
     if (t.never_red) sum.append(el("span", "rv-st-untested", `· ${t.never_red} never seen red`));
     host.append(sum);
+    // the last recorded test run, in the one reader's words (`suite_verdict`, the same words the
+    // gates and the proof route say) — an old record says to re-run the tests (0.0.28 D, verifier L2)
+    const ls = d.last_suite;
+    if (ls && ls.said) {
+      const passed = ls.verdict === "passed";
+      host.append(el("p", "small rv-suite" + (passed ? " dim" : " warn"), ls.said));
+    }
     // ---- command + run controls
     const cmd = d.command || {};
     const bar = el("div", "rv-cmdbar");
@@ -181,11 +188,16 @@
     }
   }
 
+  // A history chip is a letter AND its word (title + aria-label): not colour alone (WCAG 1.4.1).
+  const HIST = { green: ["G", "passed"], red: ["R", "failed"], "not-run": ["N", "did not run"] };
   function historyChips(h) {
     const box = el("span", "rv-hist");
     for (const x of h) {
-      const c = el("span", "rv-h rv-h-" + x.state, x.state === "green" ? "G" : x.state === "red" ? "R" : "E");
-      c.title = `${x.state} · ${x.basis}${x.at ? " · " + ago(x.at) : ""}`;
+      const [letter, word] = HIST[x.state] || ["E", "error"];
+      const c = el("span", "rv-h rv-h-" + x.state, letter);
+      c.title = `${word} · ${x.basis}${x.at ? " · " + ago(x.at) : ""}`;
+      c.setAttribute("aria-label", c.title);
+      c.setAttribute("role", "img");
       box.append(c);
     }
     if (!h.length) box.append(el("span", "dim small", "no run on record"));
@@ -289,7 +301,8 @@
     }
     paintJob();
     if (j.snap && ["done", "failed", "cancelled"].includes(j.snap.state)) {
-      if (j.snap.state === "done") { rv.data = rv.data && Object.assign({}, rv.data); loadTests(); }
+      // a cancelled run recorded what ran too (`on_done`): every final state re-reads the record
+      rv.data = rv.data && Object.assign({}, rv.data); loadTests();
       return;
     }
     setTimeout(() => pollJob(id), 400);
@@ -297,6 +310,22 @@
   if (MK.jobs && MK.jobs.onUpdate) MK.jobs.onUpdate((snap) => {
     if (rv.job && snap && snap.id === rv.job.id) { rv.job.snap = Object.assign({}, rv.job.snap, snap); if (strip) strip.set(rv.job.snap); }
   });
+
+  function runCounts(j) {
+    if (j.result && j.snap && j.snap.state === "done") return { passed: j.result.passed, failed: j.result.failed, notRun: j.result.not_run || 0, why: firstWhy(j.result.tests || j.tests) };
+    const ts = j.tests || [];
+    return { passed: ts.filter((t) => t.state === "green").length, failed: ts.filter((t) => t.state === "red").length,
+             notRun: ts.filter((t) => t.state === "not-run").length, why: firstWhy(ts) };
+  }
+  function firstWhy(ts) { const t = (ts || []).find((x) => x.state === "not-run"); return t ? (t.note || "could not start").replace(/^could not start: /, "") : ""; }
+  function runSummary(j, c) {
+    const st = j.snap && j.snap.state;
+    if (st !== "done" && st !== "cancelled") return "";
+    const parts = `${c.passed} passed · ${c.failed} failed` + (c.notRun > 0 ? ` · ${c.notRun} not run` : "");
+    if (st === "cancelled") return `cancelled — ${parts}`;
+    if (c.passed + c.failed === 0) return `nothing ran — could not start: ${c.why || "no reason given"}`;
+    return `${parts} · ran in ${(j.result && j.result.env) || "the project env"}`;
+  }
 
   function paintJob() {
     const box = MK.$("rv-job");
@@ -316,12 +345,14 @@
       res.append(li);
     }
     box.append(res);
-    if (j.snap && j.snap.state === "done" && j.result) {
-      box.append(el("p", "small rv-job-sum", `${j.result.passed} passed · ${j.result.failed} failed · ran in ${j.result.env || "the project env"}`));
-    }
+    // The run in words (0.0.28 D): what passed, failed and did NOT run — a run where nothing ran
+    // says so, and a cancelled run is "cancelled", never "failed".
+    const counts = runCounts(j);
+    const said = runSummary(j, counts);
+    if (said) box.append(el("p", "small rv-job-sum", said));
     if (j.output) {
       const det = el("details", "rv-output");
-      det.open = !!(j.snap && !["done"].includes(j.snap.state)) || (j.result && j.result.failed > 0);
+      det.open = !!(j.snap && !["done"].includes(j.snap.state)) || counts.failed > 0 || counts.notRun > 0;
       det.append(el("summary", "small", "output" + (j.bytes > j.output.length ? ` (last ${Math.round(j.output.length / 1024)} KB of ${Math.round(j.bytes / 1024)} KB)` : "")));
       const pre = el("pre", "mono rv-out", j.output);
       det.append(pre);

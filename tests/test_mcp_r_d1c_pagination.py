@@ -581,6 +581,11 @@ class TestSchema(unittest.TestCase):
         def _raw(fn, name):
             srv = FastMCP("parity")
             srv.add_tool(fn, name=name)
+            # 0.0.28 I2: build_server() drops pydantic's generated `title` from every schema node
+            # (tools/list budget); the raw FastMCP reference gets the same title-drop so the
+            # comparison still proves "no server-injected input beyond that".
+            for tool in srv._tool_manager.list_tools():
+                MS._drop_titles(tool.parameters)
             return {t.name: t.inputSchema for t in asyncio.run(srv.list_tools())}[name]
 
         built = {t.name: t.inputSchema for t in asyncio.run(MS.build_server().list_tools())}

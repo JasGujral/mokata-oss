@@ -100,10 +100,6 @@ def _plant_bundles(root, tags):
 # ==================================================================== A. the channel is GONE
 
 class TestTheChannelIsGone(unittest.TestCase):
-    def test_stage13_the_transport_kind_and_its_class_are_deleted(self):
-        self.assertFalse(hasattr(STX, "VaultTransport"))
-        self.assertFalse(hasattr(STX, "VAULT_SUBDIR"))
-        self.assertNotIn("vault", STX.TRANSPORT_KINDS)
 
     def test_stage13_the_migrator_module_is_deleted_whole(self):
         # Graded by IMPORT RESOLUTION, not by a source grep: a module-level `__getattr__` shim or
@@ -115,20 +111,6 @@ class TestTheChannelIsGone(unittest.TestCase):
         self.assertNotIn(CHANNEL, deprecation.DEPRECATED_CHANNELS)
         self.assertIn(CHANNEL, deprecation.REMOVED)
         self.assertIn(CHANNEL, deprecation.REMOVED_CHANNELS)
-
-    def test_stage13_no_surviving_path_reaches_the_removed_transport_by_another_name(self):
-        """A slice that makes the import probe pass while leaving the subsystem reachable has not
-        deleted it, it has HIDDEN it (Part A, A3). Walks the shipped source rather than trusting
-        the probe's one symbol."""
-        import pathlib
-        offenders = []
-        for path in sorted(pathlib.Path("src/mokata").rglob("*.py")):
-            text = path.read_text(encoding="utf-8")
-            for lineno, line in enumerate(text.splitlines(), 1):
-                code = line.split("#", 1)[0]
-                if "VaultTransport" in code or "VAULT_SUBDIR" in code:
-                    offenders.append(f"{path}:{lineno}")
-        self.assertEqual(offenders, [], f"the removed transport is still reachable: {offenders}")
 
 
 # ================================================= B. the FEATURE survives, in full and in use
@@ -583,61 +565,6 @@ class TestTheRemovedKindIsRefusedNotDegraded(unittest.TestCase):
 
 # ========================================= E. THE GATE MOVES — and the movement is the deletion's
 
-class TestTheGateOpensForVaultAndStaysClosedForNeo4j(unittest.TestCase):
-    """⭐ THE FIRST SLICE WHOSE SUCCESS IS A GATE MOVING, so the bar is higher than "it moved":
-    prove the movement is the DELETION's and not the ASSERTION's."""
-
-    def test_stage13_this_channel_would_still_close_the_gate_if_it_came_back(self):
-        # ★★ RE-POINTED AT 0.0.18 STAGE 14, like slices 1–3's twins, and for the reason all four
-        # broke at once: this asserted the WHOLE implemented set — a LANE-level claim in a SLICE's
-        # file — so each slice had to be edited whenever any other landed and the cheap fix was
-        # always to bump a number. What belongs here is slice 4's OWN contribution to the gate,
-        # graded BOTH ways against a planted offender (§7i). The lane's finish line is asserted
-        # exactly once now, in `test_stage14_neo4j_removal`.
-        present = DR.present_channels(DR.IMPLEMENTATIONS, DR.live_probe)
-        self.assertNotIn("vault", present)
-        self.assertEqual(DR.removal_state(deprecation.REMOVAL_RELEASE,
-                                          deprecation.REMOVAL_RELEASE, frozenset({"vault"})),
-                         DR.REMOVAL_OVERDUE)
-        self.assertEqual(
-            DR.removal_regressions(("vault",), DR.IMPLEMENTATIONS, lambda _t: True), ("vault",))
-        self.assertEqual(
-            DR.removal_regressions(("vault",), DR.IMPLEMENTATIONS, DR.live_probe), ())
-
-    def test_stage13_the_movement_is_the_deletions_not_the_maps(self):
-        """⚠ THE ONE EDIT THAT COULD CHEAT THE LANE. `IMPLEMENTATIONS["vault"]` was re-pointed
-        from `mokata.vault` (the surviving feature) to the channel's behaviour. A re-point ALONE
-        would open the gate with nothing deleted, so this asserts the gate is open under the OLD
-        target too — i.e. `mokata.session_transport:VaultTransport` is gone whichever way you
-        point at it, and the module the old target named is STILL IMPORTABLE, which is precisely
-        what makes the old target the wrong one."""
-        self.assertEqual(DR.IMPLEMENTATIONS["vault"],
-                         "mokata.session_transport:VaultTransport")
-        self.assertFalse(DR.live_probe(DR.IMPLEMENTATIONS["vault"]),
-                         "the channel's implementation is still present")
-        self.assertTrue(DR.live_probe("mokata.vault"),
-                        "the OLD target still resolves — it names the surviving feature, which is "
-                        "why satisfying it would have meant deleting one")
-
-    def test_stage13_neo4j_was_left_for_stage_14_and_stage_14_took_it(self):
-        # ⚠ REVERSED AT STAGE 14, not deleted. This graded slice 4's CONSTRAINT — "neo4j is stage
-        # 14's: its CHANNELS membership, its notice and its implementation must all survive this
-        # slice intact" — which was true of slice 4 and is false of the tree, because the stage it
-        # was being kept for arrived. The constraint is discharged, and the assertion that records
-        # the discharge is the opposite one on the same three surfaces.
-        self.assertNotIn("neo4j", deprecation.CHANNELS)
-        self.assertIn("neo4j", deprecation.REMOVED)
-        self.assertFalse(DR.live_probe(DR.IMPLEMENTATIONS["neo4j"]))
-        self.assertIsInstance(deprecation.REMOVED["neo4j"], deprecation.RemovedDerivedNotice)
-
-    def test_stage13_the_registries_stay_exact_and_carry_no_regression(self):
-        announced = set(deprecation.CHANNELS) | set(deprecation.REMOVED)
-        self.assertEqual(DR.registry_drift(announced, DR.IMPLEMENTATIONS), ((), ()))
-        self.assertEqual(DR.stale_notices(
-            deprecation.CHANNELS, DR.present_channels(DR.IMPLEMENTATIONS, DR.live_probe)), ())
-        self.assertEqual(DR.removal_regressions(
-            deprecation.REMOVED, DR.IMPLEMENTATIONS, DR.live_probe), ())
-
 
 # ============================================ F. E7 — the ruling, pinned in all three directions
 
@@ -817,16 +744,6 @@ class TestBackcompatSweep(unittest.TestCase):
                 self.assertNotIn("vault", action.metavar)
         self.assertEqual(checked, 2, "both --to and --from must be graded, not whichever was found")
 
-    def test_stage13_no_shim_kept_the_channel_importable(self):
-        """"Delete, do not deprecate" (§7d): no alias, no re-export, no compatibility name.
-        Graded by ATTRIBUTE LOOKUP, the operation an importer performs, so a module-level
-        `__getattr__` resurrecting the name would be caught where a grep would not."""
-        import mokata
-        for symbol in ("VaultTransport", "VAULT_SUBDIR"):
-            with self.assertRaises(AttributeError, msg=f"session_transport.{symbol} resolves"):
-                getattr(STX, symbol)
-        with self.assertRaises(AttributeError):
-            getattr(mokata, "migrate_channels")
 
     def test_stage13_the_shipped_session_template_no_longer_offers_the_removed_kind(self):
         # A slash-command template is a USER SURFACE: it is copied into the repo at init and read

@@ -29,6 +29,7 @@ import hashlib
 import os
 import posixpath
 import re
+import stat
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 _PARAM = re.compile(r"\[.*\]$")
@@ -289,12 +290,13 @@ def _conftest_part(text: Optional[str]) -> str:
 
 def stamp_of(rel: str, text: Optional[str], key: str,
              read: Optional[Callable[[str], Optional[str]]] = None,
-             defs: Optional[Dict[str, Any]] = None) -> Optional[str]:
+             defs: Optional[Dict[str, Any]] = None, real: Optional[str] = None) -> Optional[str]:
     """The stamp of `key` in file `rel` as `text` holds it now — the test's own AST, its scopes'
     non-test code, and (`read` given: how to read a file of the same tree) every conftest.py
     on its path (K4: an autouse fixture added there changes what the test runs). None when it
-    cannot be named. OUT OF REACH, disclosed: code the test imports from other modules, plugins,
-    pytest/ini options, and the code under test."""
+    cannot be named. `real` (the id's `stamp_target`) adds the conftest.py files of the directories
+    the file REALLY lives in (`_conftest_union`). OUT OF REACH, disclosed: code the test imports from
+    other modules, plugins, pytest/ini options, and the code under test."""
     if text is None:
         return None
     if rel.endswith(".py"):
@@ -304,21 +306,102 @@ def stamp_of(rel: str, text: Optional[str], key: str,
         own = file_stamp(text)
     if own is None or read is None:
         return own
-    parts = [own] + [_conftest_part(read(c)) for c in conftests_of(rel)]
+    parts = [own] + [_conftest_part(read(c)) for c in _conftest_union(rel, real)]
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+def _conftest_union(rel: str, real: Optional[str]) -> List[str]:
+    """The conftest.py files of the TYPED path, then those of the REAL path (`stamp_target`) that
+    the typed ones do not already name (by `fold_component` per component) — 0.0.28 E2 (L3): a
+    link `tests/alias.py -> ../other/test_a.py` runs under `other/conftest.py` too. For a path with
+    no link on it the two lists fold equal and the stamp is the one it always was."""
+    typed = conftests_of(rel)
+    if not real or real in TARGET_STATES:
+        return typed
+    seen = {_fold_path(c) for c in typed}
+    return typed + [c for c in conftests_of(real) if _fold_path(c) not in seen]
 
 
 def fs_folds_case(root: str) -> bool:
     """Whether THIS filesystem folds case — probed, never read from git's `core.ignorecase`
-    (K3: a repo can say false on a volume that folds): the repo's own `.git` stat-ed under a
-    flipped case."""
-    real = os.path.join(root, ".git")
-    if not os.path.exists(real):
-        return False
+    (K3: a repo can say false on a volume that folds). 0.0.28 C3: the one probe,
+    `fs_identity.folds_case` (an existing entry's flipped spelling stat-ed as the same file)."""
+    from .fs_identity import folds_case
+    return folds_case(root)
+
+
+# ------------------------------------------------------- the target a proof is bound to (0.0.28 E2)
+
+#: What `stamp_target` answers when there is no repo-relative real file: the path resolves outside
+#: the repository's real root, or it cannot be resolved (dangling link, link loop, not a regular file,
+#: any OSError, a `..` the OS walks through a link differently from the lexical spelling).
+OUTSIDE, UNRESOLVED = "outside", "unresolved"
+TARGET_STATES = (OUTSIDE, UNRESOLVED)
+
+
+def _fold_path(rel: str) -> Tuple[str, ...]:
+    from mokata_emit import fold_component
     try:
-        return os.path.exists(os.path.join(root, ".GIT"))
-    except OSError:
+        return tuple(fold_component(c) for c in rel.split("/"))
+    except (ValueError, TypeError):
+        return tuple(rel.split("/"))
+
+
+def raw_path_of(test_id: str) -> str:
+    """The file part of a test id AS TYPED — separators made `/`, nothing else folded (a `..` is kept:
+    the OS walks it through a link, `normalise_path` folds it lexically). "" for a bare id."""
+    from .repo_paths import as_name
+    p, _segs = _segments(test_id)
+    return str(as_name(p.strip())) if p else ""
+
+
+def stamp_target(root: str, rel: str) -> str:
+    """THE target a recorded outcome is bound to — ONE function for the writer (`test_runs`, when
+    the record is written) and the reader (`ide/proof.py`, at trace): the repo-relative REAL file
+    `rel` opens, spelled as the disk spells it (`fs_identity.disk_rel`), or `OUTSIDE` / `UNRESOLVED`.
+    Never an absolute path: run history leaves the machine in session bundles.
+
+    `rel` is the path as TYPED (`raw_path_of`). It must open a regular file (`os.stat`, links
+    followed); the real path is then found inside the repo's real root by file identity. A typed `..`
+    must name the same file the lexical spelling names, else `UNRESOLVED`."""
+    if not rel:
+        return UNRESOLVED
+    base = os.path.realpath(root)
+    full = rel if os.path.isabs(rel) else os.path.join(base, *rel.split("/"))
+    try:
+        if not stat.S_ISREG(os.stat(full).st_mode):
+            return UNRESOLVED
+        if ".." in rel.split("/"):
+            norm = normalise_path(rel)
+            lexical = norm if os.path.isabs(norm) else os.path.join(base, *norm.split("/"))
+            if not os.path.samefile(full, lexical):
+                return UNRESOLVED
+        real = os.path.realpath(full)
+    except (OSError, ValueError):
+        return UNRESOLVED
+    from .fs_identity import disk_rel
+    got = disk_rel(base, real)
+    if got is None:
+        return OUTSIDE
+    below, tail, _deepest = got
+    if tail or not below:
+        return UNRESOLVED
+    return "/".join(below)
+
+
+def same_target(root: str, a: Optional[str], b: Optional[str]) -> bool:
+    """Do two recorded targets name one file? Exact, or — only where the directory that holds the
+    file folds case (`fs_identity.folds_case`, probed there, never at the root alone) — equal per
+    component by `fold_component`. `OUTSIDE` / `UNRESOLVED` / nothing equal nothing."""
+    if not a or not b or a in TARGET_STATES or b in TARGET_STATES:
         return False
+    if a == b:
+        return True
+    if len(a.split("/")) != len(b.split("/")) or _fold_path(a) != _fold_path(b):
+        return False
+    from .fs_identity import folds_case
+    here = os.path.dirname(os.path.join(os.path.realpath(root), *b.split("/")))
+    return folds_case(here)
 
 
 # ------------------------------------------------------------------ write-time qualification
@@ -435,4 +518,5 @@ def runner_ids(text: str) -> List[str]:
 
 __all__ = ["test_param_of", "test_name_of", "test_qualifier_of", "test_key_of", "test_path_of",
            "test_label_of", "normalise_path", "py_test_defs", "file_stamp", "stamp_of",
-           "qualify_ids", "tracked_ending", "runner_ids", "conftests_of", "fs_folds_case"]
+           "qualify_ids", "tracked_ending", "runner_ids", "conftests_of", "fs_folds_case",
+           "stamp_target", "same_target", "raw_path_of", "OUTSIDE", "UNRESOLVED", "TARGET_STATES"]

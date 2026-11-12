@@ -62,8 +62,28 @@ PLANT = textwrap.dedent("""\
     tdd_state.record(st, run, red=["t_ok", "t_fail"], green=["t_ok"])
     """)
 
-RUNNER = ("import sys\nprint('running', sys.argv[1], flush=True)\n"
+RUNNER = ("import sys, time\nprint('running', sys.argv[1], flush=True)\n"
+          "if 'slow' in sys.argv[1]:\n    time.sleep(3600)\n"
           "sys.exit(1 if 'fail' in sys.argv[1] else 0)\n")
+
+# 0.0.28 D (TEST-RUN-NOT-RUN-LABELS): a run of 500 tests, 100 of which did not run, and a slow test
+# beside `t_ok` under AC-1 so a re-run of AC-1 can be cancelled after its green test.
+BULK = ["t_bulk_%03d" % i for i in range(500)]
+PLANT_BULK = textwrap.dedent("""\
+    import sys
+    sys.path[:0] = [sys.argv[2], sys.argv[3]]
+    root, run = sys.argv[1], sys.argv[4]
+    from mokata.engine.spec import TestRef
+    from mokata.test_runs import record_test_run, seed_ac_map
+    bulk = ["t_bulk_%03d" % i for i in range(500)]
+    seed_ac_map(root, run, [TestRef(name="t_ok", ac_ids=["AC-1"]),
+                            TestRef(name="t_slow", ac_ids=["AC-1"]),
+                            TestRef(name="t_fail", ac_ids=["AC-2"])]
+                + [TestRef(name=t, ac_ids=["AC-3"]) for t in bulk])
+    record_test_run(root, run, passed=True, command="runner.py", source="cli",
+                    results={t: True for t in bulk[100:]},
+                    not_run={t: "could not start: no runner" for t in bulk[:100]})
+    """)
 
 
 def build(base):
@@ -194,6 +214,128 @@ class TheReviewContextWorks(H.IdeFlow):
             self.assertNotIn("probe=", svg, src)
             self.assertNotIn("<foreignObject", svg, src)
             self.assertNotIn("javascript:", svg, src)
+
+
+def build_not_run(base):
+    repo = build(base)
+    tests_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    subprocess.run([sys.executable, "-c", PLANT_BULK, repo, tests_dir, H.SRC, RUN], check=True,
+                   env=H._env(), stdin=subprocess.DEVNULL)
+    return repo
+
+
+STOP_WORDS = textwrap.dedent("""\
+    import json, sys
+    sys.path[:0] = [sys.argv[2]]
+    from mokata.stop_gate import missing_evidence
+    print(json.dumps(missing_evidence(sys.argv[1], sys.argv[3])))
+    """)
+
+
+class NotRunIsSaid(H.IdeFlow):
+    """0.0.28 D `TEST-RUN-NOT-RUN-LABELS`: a test that did not run is said in words (a letter AND
+    its word, not colour alone); a cancelled all-green run is "cancelled" — in the panel and in the
+    Stop gate's words — never FAILED."""
+    FIXTURE = staticmethod(build_not_run)
+
+    def open_proof(self):
+        p = self.page
+        p.evaluate("MK.setMode('proof')")
+        p.wait_for_selector("#rv-acs .rv-ac[data-ac='AC-3']")
+
+    def test_1_a_test_that_did_not_run_is_a_said_chip_never_red(self):
+        p = self.page
+        self.open_proof()
+        tog = "#rv-acs .rv-ac[data-ac='AC-3'] .rv-ac-toggle"
+        if p.get_attribute(tog, "aria-expanded") != "true":
+            p.click(tog)
+        self.until("document.querySelectorAll(\"#rv-acs .rv-ac[data-ac='AC-3'] .rv-test\").length > 0",
+                   "AC-3's tests to draw")
+        rows = p.evaluate("""() => [...document.querySelectorAll("#rv-acs .rv-ac[data-ac='AC-3'] .rv-test")]
+            .map(li => ({id: li.dataset.test, chips: [...li.querySelectorAll('.rv-h')].map(c => ({
+              cls: c.className, text: c.textContent, title: c.title,
+              aria: c.getAttribute('aria-label'), role: c.getAttribute('role')}))}))""")
+        unrun = set(BULK[:100])
+        seen_n = seen_g = 0
+        for r in rows:
+            last = r["chips"][-1]
+            self.assertNotIn("rv-h-red", " ".join(c["cls"] for c in r["chips"]),
+                             "%s is shown red; it passed or did not run" % r["id"])
+            if r["id"] in unrun:
+                seen_n += 1
+                self.assertIn("rv-h-not-run", last["cls"], r)
+                self.assertEqual("N", last["text"])
+                self.assertTrue(last["title"].startswith("did not run"), last)
+                self.assertEqual(last["title"], last["aria"])
+                self.assertEqual("img", last["role"])
+            else:
+                seen_g += 1
+                self.assertIn("rv-h-green", last["cls"], r)
+                self.assertTrue(last["title"].startswith("passed"), last)
+        self.assertGreater(seen_n, 0, "the page drew none of the 100 tests that did not run")
+        self.assertEqual(len(rows), seen_n + seen_g)
+
+    def test_1b_the_panel_says_the_routes_own_words_for_the_last_run(self):
+        """The panel's line is the route's answer, rendered (verifier L1/L2): not-all-ran here."""
+        p = self.page
+        self.open_proof()
+        said = p.evaluate("async () => (await MK.api('/api/review/tests?' + new URLSearchParams({ run: %r })))"
+                          ".last_suite.said" % RUN)
+        self.assertIn("NOT ALL tests ran", said)
+        self.text_until(".rv-suite", said, "the route's words in the panel")
+        self.assertIn("warn", p.get_attribute(".rv-suite", "class"), "a run that is not passed is not dim")
+
+    def test_2_a_run_where_nothing_ran_says_so(self):
+        p = self.page
+        self.open_proof()
+        man = os.path.join(self.repo, ".mokata", "manifest.json")
+        import json
+        with open(man, encoding="utf-8") as fh:
+            data = json.load(fh)
+        keep = data["settings"]["baseline"]["test_command"]
+        data["settings"]["baseline"]["test_command"] = '"%s" runner.py' % os.path.join(
+            self.repo, "no-such-runner")
+        with open(man, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+        try:
+            p.click("#rv-acs .rv-ac[data-ac='AC-2'] .rv-rerun-one")
+            self.text_until("#rv-job .rv-job-sum", "nothing ran", "the not-started run to finish")
+            said = p.text_content("#rv-job .rv-job-sum")
+            self.assertIn("could not start", said)
+            self.assertNotIn("failed", said.replace("0 failed", ""))
+            self.assertTrue(p.evaluate("document.querySelector('#rv-job details.rv-output').open"),
+                            "the output of a run that did not start is shown")
+        finally:
+            data["settings"]["baseline"]["test_command"] = keep
+            with open(man, "w", encoding="utf-8") as fh:
+                json.dump(data, fh)
+
+    def test_3_a_cancelled_all_green_run_is_cancelled_never_failed(self):
+        p = self.page
+        self.open_proof()
+        p.click("#rv-acs .rv-ac[data-ac='AC-1'] .rv-rerun-ac")
+        self.text_until("#rv-job .rv-out", "running t_slow", "the slow test to start after t_ok")
+        self.until("(() => { const b = document.querySelector('#rv-job .job-cancel');"
+                   " return !!b && !b.hidden; })()", "the run's Cancel")
+        p.click("#rv-job .job-cancel")
+        self.text_until("#rv-job .rv-job-sum", "cancelled", "the run to end cancelled")
+        said = p.text_content("#rv-job .rv-job-sum")
+        self.assertTrue(said.startswith("cancelled — 1 passed · 0 failed"), said)
+        self.assertNotIn("FAILED", p.text_content("#rv-job"))
+        out = subprocess.run([sys.executable, "-c", STOP_WORDS, self.repo, H.SRC, RUN],
+                             check=True, env=H._env(), stdin=subprocess.DEVNULL,
+                             capture_output=True, text=True).stdout
+        import json
+        why = json.loads(out)
+        self.assertTrue(any("cancelled" in r for r in why), why)
+        self.assertFalse(any("FAILED" in r for r in why), why)
+        # the panel re-reads the record the cancel wrote: t_ok's LATEST is green (its TDD RED stays
+        # in its history, oldest first — that red is the RED-before-GREEN, not this run)
+        self.until("(() => { const c = [...document.querySelectorAll(\"#rv-acs .rv-test[data-test='t_ok'] .rv-h\")];"
+                   " return c.length && c[c.length - 1].title.includes('re-run here') &&"
+                   " c[c.length - 1].classList.contains('rv-h-green'); })()",
+                   "t_ok's chip from the cancelled run")
+        self.assertEqual(1, p.locator("#rv-acs .rv-test[data-test='t_ok'] .rv-chip.rv-st-green").count())
 
 
 if __name__ == "__main__":

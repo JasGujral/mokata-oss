@@ -159,7 +159,9 @@ class TestConfigWriteSafety(unittest.TestCase):
         import inspect
         src = inspect.getsource(HS._write_json)
         self.assertIn("os.replace", src)
-        self.assertIn("mkstemp", src)
+        # 0.0.28 C: the same-directory exclusive temp is `atomicfile._exclusive_temp` (it also
+        # carries the private door for settings.local.json), no longer `tempfile.mkstemp`.
+        self.assertIn("_exclusive_temp(str(path.parent)", src)
 
     def test_write_leaves_no_temp_files_behind(self):
         with tempfile.TemporaryDirectory() as d:

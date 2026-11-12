@@ -16,7 +16,7 @@ runs the checklist below with the real client and records the result.
 | C2 | starts | the server launched from that entry completes MCP `initialize` over stdio |
 | C3 | tools | `tools/list` returns the tool set this mokata registers, including `status`, `remember` and `recall` (any mismatch is version skew) |
 | C4 | read | the read tool `status` answers without error and reports this mokata's version |
-| C5 | gate | the gated write `remember` will not commit without a human-minted approval. A call with no id comes back `proposed`, a model-typed `approve=true` writes nothing, and a forged proposal id is refused |
+| C5 | gate | the gated write `remember` will not commit without a human-minted approval. A call with no id comes back `proposed`, a model-typed `approve=true` is refused as an invalid argument (there is no such flag) and writes nothing, and a forged proposal id is refused |
 | C6 | memory | the memory round-trip works: propose, then a human runs `mokata approve <id>` in a terminal, then the redeem commits, then `recall` returns the value. Using the same approval a second time is refused |
 
 A client is **certified** only when all six criteria have a recorded `pass`, and each `pass`

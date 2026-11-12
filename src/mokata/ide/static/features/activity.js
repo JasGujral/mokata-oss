@@ -77,16 +77,21 @@
   }
 
   // ------------------------------------------------------------------------- following one job
-  function follow(handle, path, body, opts) {
+  // `token` is the asking request's own (app.js api): leaving names it, so only that ask stops wanting.
+  function follow(handle, path, body, opts, token) {
     const o = opts || {};
     const snap = norm(handle);
     update(snap);
     return new Promise((resolve, reject) => {
-      const f = { id: snap.id, path, body, o, resolve, reject, partialRef: -1, tries: (o._tries || 0) };
+      const f = { id: snap.id, path, body, o, token, resolve, reject, partialRef: -1, tries: (o._tries || 0) };
       const list = A.followers.get(f.id) || [];
       list.push(f);
       A.followers.set(f.id, list);
-      A.retries.set(f.id, () => MK.api(path, body));
+      // The drawer's Retry asks the same question again FOR the view that asked it: its `onJob` sees
+      // the new job and its `onRetry` gets the answer (0.0.28 D — a retried table count used to finish
+      // with nobody listening, and the table kept saying "cancelled" until the file was reopened).
+      A.retries.set(f.id, () => MK.api(path, body, { onJob: o.onJob, onRetry: o.onRetry })
+        .then((r) => { if (o.onRetry) o.onRetry(r); }, () => null));
       if (o.signal) {
         if (o.signal.aborted) { drop(f, true); reject(abortError()); return; }
         o.signal.addEventListener("abort", () => { if (drop(f, true)) reject(abortError()); }, { once: true });
@@ -111,8 +116,8 @@
     const was = alive(f);
     if (list.length) A.followers.set(f.id, list); else A.followers.delete(f.id);
     clearTimeout(f.safety);
-    // A superseded request: this page no longer wants the job (a query nobody wants stops).
-    if (leave && was) MK.api(`/api/jobs/${encodeURIComponent(f.id)}/leave`, { client: MK.clientId }).catch(() => null);
+    // A superseded request: THAT request no longer wants the job (a query no request wants stops).
+    if (leave && was && f.token) MK.api(`/api/jobs/${encodeURIComponent(f.id)}/leave`, { client: MK.clientId, token: f.token }).catch(() => null);
     return was;
   }
   function deliver(f, j) {

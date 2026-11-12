@@ -101,10 +101,9 @@ def working_set(root: str, run_id: str) -> WorkingSet:
                 slug = plan_slug(topic)
         if store.exists(SPEC_PREFIX + run_id):
             spec_key = SPEC_PREFIX + run_id
-        for e in ProgressLog.from_state_dir(state_dir(root)).read_events_backward():
-            if e.get("run_id") == run_id and e.get("type") == STAGE_ENTER:
-                stage = e.get("stage")
-                break
+        e = ProgressLog.from_state_dir(state_dir(root)).latest(run_id, (STAGE_ENTER,))
+        if e is not None:
+            stage = e.get("stage")
     except Exception:  # noqa: BLE001
         readable = False
     touched = [p for p in data.get("touched_files", []) if isinstance(p, str)]

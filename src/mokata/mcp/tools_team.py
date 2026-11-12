@@ -9,12 +9,18 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List
 
 from .. import approval
 from ..govern import AuditLedger
 from .consent import _consent, _policy, _propose, _refused, _require
 from .registry import _surface
+from .tool_annotations import Field
+
+_Path = Annotated[str, Field(
+    description="Repo root the tool operates on (default: the server's working directory).")]
+_ProposalId = Annotated[str, Field(
+    description="Id of a proposal a human approved with `mokata approve <id>`; omit on the first call.")]
 
 
 #: The committed reason BOTH publishers use. One literal, because the success arm below compares
@@ -49,16 +55,24 @@ def publish_status(reason: str, *, committed: bool, in_sync: "tuple",
     return "blocked"
 
 
-def audit_share(path: str = ".", approve: bool = False,
-                confirm: Optional[bool] = None, proposal_id: str = "") -> Dict[str, Any]:
-    """Stage 71 — publish this dev's NEW local audit entries to the team's SHARED log (the team's OWN
-    managed Postgres — NO telemetry, nothing phoned home to mokata/Anthropic). OPT-IN
-    (`settings.audit.shared`) + LOCAL-FIRST. HUMAN-GATED (SI.3): PROPOSE-ONLY — it reports how many
-    entries WOULD publish and writes nothing. A human mints the approval with `mokata approve <id>`;
-    re-calling with that `proposal_id` publishes through the universal WriteGate (kind `send`: a
-    secret is hard-blocked even when approved), APPEND-ONLY + per-actor + namespaced so concurrent
-    teammates never clobber each other. Degrade-clean: sharing off / no driver-or-DSN → a clear
-    message, the log stays LOCAL, no crash. The DSN secret is never stored."""
+# audit_share (Stage 71) — gated (SI.3): propose-only. Publishes this dev's NEW local audit entries to the
+# team's SHARED log (the team's OWN managed Postgres — no telemetry, nothing phoned home to
+# mokata/Anthropic). OPT-IN (`settings.audit.shared`) and LOCAL-FIRST; published through the universal
+# WriteGate (kind `send`: a secret is hard-blocked even when approved); APPEND-ONLY, per-actor and
+# namespaced so concurrent teammates never clobber each other. Degrades clean: sharing off or no
+# driver/DSN -> a clear message, the log stays local. The DSN secret is never stored. No required
+# argument (a share of the whole local log), so it is exempt from the required-parameter rule.
+def audit_share(path: _Path = ".", proposal_id: _ProposalId = "") -> Dict[str, Any]:
+    """Publish your new local audit entries to the team's shared audit log; call it to share governance history.
+
+    Opt-in: off until `mokata config set settings.audit.shared true`. Reports how many entries would
+    publish and writes nothing until a human approves. Append-only, per person; the log goes to the
+    team's own Postgres and nothing is sent to mokata or Anthropic. A secret is blocked even when approved.
+
+    Returns: status "proposed" (available, pending, message), then "committed" with `published`;
+    "in_sync" when nothing is new; "disabled" when sharing is off; "unavailable" with no database
+    driver or DSN; "blocked" when a secret is found.
+    Errors: refused when `proposal_id` is not a live human approval of this exact call."""
     from ..team_audit import pending_share, share_audit, shared_enabled
     surface = _surface(path)
     if not shared_enabled(surface.manifest.data):
@@ -76,8 +90,7 @@ def audit_share(path: str = ".", approve: bool = False,
                         {"available": available, "pending": pending_n, "dsn_env": dsn_env,
                          "message": message},
                         target="team:audit", summary=f"publish {pending_n} audit entr(ies) to the "
-                                                     f"team's shared log",
-                        approve=approve, confirm=confirm)
+                                                     f"team's shared log")
     msgs: List[str] = []
     ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
     res = share_audit(path, surface,                          # human-approved (SI.3)
@@ -90,18 +103,25 @@ def audit_share(path: str = ".", approve: bool = False,
             "message": res.message, "log": msgs}
 
 
-def events_share(path: str = ".", approve: bool = False,
-                 confirm: Optional[bool] = None, proposal_id: str = "") -> Dict[str, Any]:
-    """CM.S5 — publish this dev's NEW local typed EVENTS to the team's shared store (the team's OWN
-    managed Postgres — NO telemetry, nothing phoned home). OPT-IN (`settings.events.shared`) +
-    LOCAL-FIRST. HUMAN-GATED (SI.3): PROPOSE-ONLY — it reports how many events WOULD publish and
-    writes nothing. A human mints the approval with `mokata approve <id>`; re-calling with that
-    `proposal_id` publishes through the universal WriteGate (kind `send`: a secret is hard-blocked
-    even when approved), APPEND-ONLY and idempotent by `(namespace, event_id)`.
+# events_share (CM.S5) — gated (SI.3): propose-only. Publishes this dev's NEW local typed EVENTS to the
+# team's shared store (the team's OWN managed Postgres — no telemetry). OPT-IN (`settings.events.shared`)
+# and LOCAL-FIRST; through the universal WriteGate (kind `send`: a secret is hard-blocked even when
+# approved); APPEND-ONLY and idempotent by `(namespace, event_id)`. The proposal also carries
+# `notify_state`, and that is not decoration: over a transaction-mode pooler a notification is SENT and
+# can never be RECEIVED, so an agent must tell "nobody is listening" from "nothing can listen" (§7g).
+# Degrades clean throughout. No required argument (a share of the whole local trail), so it is exempt
+# from the required-parameter rule.
+def events_share(path: _Path = ".", proposal_id: _ProposalId = "") -> Dict[str, Any]:
+    """Publish your new local typed events to the team's shared event store; call it to share the run trail.
 
-    ⭐ The proposal also carries `notify_state`, and that is not decoration: over a transaction-mode
-    pooler a notification is SENT and can never be RECEIVED, so an agent reading this must be able
-    to tell *"nobody is listening"* from *"nothing can listen"* (§7g). Degrade-clean throughout."""
+    Opt-in: off until `mokata config set settings.events.shared true`. Reports how many events would
+    publish and writes nothing until a human approves. Append-only and idempotent; it goes to the
+    team's own Postgres and nothing is sent to mokata or Anthropic. A secret is blocked even when approved.
+
+    Returns: status "proposed" (available, pending, notify_state, notify_why), then "committed" with
+    published, already_there and remaining; "in_sync" when nothing is new; "disabled" when sharing is
+    off; "unavailable" with no database driver or DSN; "blocked" when a secret is found.
+    Errors: refused when `proposal_id` is not a live human approval of this exact call."""
     from ..team_events import notify_support, pending_publish, publish, resolve_dsn, shared_enabled
     surface = _surface(path)
     data = surface.manifest.data
@@ -122,8 +142,7 @@ def events_share(path: str = ".", approve: bool = False,
                          "notify_state": notify_state, "notify_why": notify_why,
                          "message": message},
                         target="team:events",
-                        summary=f"publish {pending_n} typed event(s) to the team's shared store",
-                        approve=approve, confirm=confirm)
+                        summary=f"publish {pending_n} typed event(s) to the team's shared store")
     msgs: List[str] = []
     ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
     res = publish(path, surface,                              # human-approved (SI.3)

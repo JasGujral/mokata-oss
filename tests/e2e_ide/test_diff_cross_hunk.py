@@ -100,26 +100,38 @@ class ACopyAcrossHunks(H.IdeFlow):
         self.assertNotIn("line 30", lines)
 
     def test_3_a_selection_in_several_ranges_copies_the_same_lines(self):
-        """Firefox gives one range per run between `user-select:none` cells. Chromium keeps one, so
-        the selection is stood in for by an object that answers with two ranges."""
+        """Firefox splits ONE drag into a range per run of selectable cells (around the other side's
+        `user-select:none` cells), and its ranges can stop short inside a cell. What the person dragged
+        over is the union of them: the same drag told as two ranges with a hole in the middle copies
+        the same lines. (Chromium keeps one range, so the split is stood in for here; the real Firefox
+        drag is test_1/test_2 run in Firefox.)"""
         p = self.page
         self.drag("old", "line 5", "line 30")
+        one = p.evaluate("MK.dv.splitSideText()")
         got = p.evaluate("""(() => {
           const text = (td) => { const c = td.cloneNode(true);
               c.querySelectorAll('.dv-sr').forEach(x => x.remove()); return c.textContent.trim(); };
           const cell = (t) => [...document.querySelectorAll("#diff td.tx[data-side='old']")]
               .find(td => text(td) === t);
-          const r1 = document.createRange(); r1.selectNodeContents(cell("line 5"));
-          const r2 = document.createRange(); r2.selectNodeContents(cell("line 30"));
-          const real = window.getSelection();
+          // the drag's whole extent: the FIRST range's start to the LAST range's end (Firefox may
+          // hold a drag as several ranges; range 0 alone is only its first piece)
+          const real = window.getSelection(), first = real.getRangeAt(0),
+                whole = { startContainer: first.startContainer, startOffset: first.startOffset,
+                          endContainer: real.getRangeAt(real.rangeCount - 1).endContainer,
+                          endOffset: real.getRangeAt(real.rangeCount - 1).endOffset };
+          const r1 = document.createRange(); r1.setStart(whole.startContainer, whole.startOffset);
+          r1.setEnd(cell("line 7"), 0);                       // stops at the START of a cell
+          const r2 = document.createRange(); r2.setStart(cell("line 28"), 0);
+          r2.setEnd(whole.endContainer, whole.endOffset);
           const fake = { rangeCount: 2, isCollapsed: false, getRangeAt: (i) => [r1, r2][i],
                          anchorNode: real.anchorNode, anchorOffset: real.anchorOffset,
                          focusNode: real.focusNode, focusOffset: real.focusOffset };
           const saved = window.getSelection;
           window.getSelection = () => fake;
-          try { return MK.dv.splitSideText(); } finally { window.getSelection = saved; }
+          try { return [MK.dv.splitSideText(), MK.dv.selectionCite()]; } finally { window.getSelection = saved; }
         })()""")
-        self.assertEqual("line 5\n\u22ef 24 unchanged lines \u22ef\nline 30", got)
+        self.assertEqual(one, got[0])
+        self.assertEqual("two.txt:5-30", got[1])
 
     def test_4_a_plain_mousedown_elsewhere_ends_the_one_side_rule(self):
         p = self.page

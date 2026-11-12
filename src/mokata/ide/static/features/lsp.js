@@ -9,11 +9,12 @@
 //   * SERVERS — one per language: found / not found (with the install line — never installed by
 //     mokata), Start / Stop, state (indexing with the server's own progress, ready, crashed with
 //     restarts), the count of edits the server asked for and was refused. In Health, under trust.
-//   * ANSWERS — the palette's "Language server: definition / references / hover / symbols /
-//     diagnostics" for the name under the caret, through /api/lsp/*, answered in the Code
-//     inspector's References tab (one key per question stays F12 / ⇧F12). The answer says its SOURCE: the
+//   * ANSWERS — the palette's "Language server: definition / hover / symbols / diagnostics" for
+//     the name under the caret, through /api/lsp/*, answered in the Code inspector's References
+//     tab. References, callers and callees have ONE surface: the Find Usages box (usages.js —
+//     0.0.28 G-Q3 deleted this panel's duplicate references read). The answer says its SOURCE: the
 //     language server, or the graph layer while untrusted / indexing / crashed (labelled). Every
-//     answer carries the mokata edge: references split into tests vs code, the symbol's callers,
+//     answer carries the mokata edge: results split into tests vs code, the symbol's callers,
 //     blast radius and covering tests from the graph with its honesty basis, and the ACs whose
 //     spec anchors name this file; a diagnostic names the symbol and ACs it sits under.
 // SAFETY: every piece of repo or server text goes in through textContent.
@@ -152,7 +153,7 @@
       ul.append(li);
     }
     box.append(ul);
-    box.append(el("p", "small dim", st.read_only + ": the bridge sends only hover, definition, references, symbols; it never sends a rename, a code action, formatting or a command."));
+    box.append(el("p", "small dim", st.read_only + ": the bridge sends only hover, definition, references, symbols and the call hierarchy; it never sends a rename, a code action, formatting or a command."));
   }
 
   async function start(language) {
@@ -263,7 +264,6 @@
     commands: [
       { id: "lsp.open", title: "Language servers: trust and servers (Health)", run: () => { if (MK.openHealth) MK.openHealth("lsp"); } },
       { id: "lsp.definition", title: "Language server: definition of the name at the caret", run: () => ask("definition") },
-      { id: "lsp.references", title: "Language server: references of the name at the caret", run: () => ask("references") },
       { id: "lsp.hover", title: "Language server: hover (type) of the name at the caret", run: () => ask("hover") },
       { id: "lsp.symbols", title: "Language server: document symbols", run: () => ask("symbols") },
       { id: "lsp.diagnostics", title: "Language server: diagnostics for this file", run: () => ask("diagnostics") },

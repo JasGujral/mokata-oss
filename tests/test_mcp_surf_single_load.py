@@ -41,6 +41,7 @@ from mokata.govern.trust import MCP_SURFACE, REFUSED_READ_ONLY     # noqa: E402
 from mokata.init import init_repo                                  # noqa: E402
 from mokata.mcp import consent as C                                # noqa: E402
 from mokata.mcp import tools_write as TW                           # noqa: E402
+from mokata.mcp.validation import ValidationError                  # noqa: E402
 
 
 class _LoadSpy:
@@ -113,7 +114,13 @@ class TestSingleLoadPerCall(unittest.TestCase):
                              (TW.spec_check, {"symbols": "foo"})):
                 with self.subTest(tool=tool.__name__):
                     with _LoadSpy() as spy:
-                        tool(path=d, **kw)
+                        # 0.0.28 I2: `apply_proposal` on a subject with nothing pending now RAISES
+                        # a ValidationError (after resolving the surface); the load count is the
+                        # point of this test, so the raise is expected and tolerated.
+                        try:
+                            tool(path=d, **kw)
+                        except ValidationError:
+                            pass
                     self.assertLessEqual(spy.n, 1,
                                          f"{tool.__name__} must resolve the Surface at most once")
 

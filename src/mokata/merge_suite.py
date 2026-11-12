@@ -21,7 +21,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from .errors import MokataError
-from .knowledge.cancel import Cancelled, checkpoint, report
+from .knowledge.cancel import checkpoint, report
 
 OUTPUT_TAIL = 64 * 1024
 
@@ -47,10 +47,10 @@ def run_full_suite(root: str, target: str, *, environ: Optional[Dict[str, str]] 
     """Run the full suite in the session worktree `target` and record it against the run bound to
     that worktree. Returns `{passed, exit_code, command, tree, output, recorded}`."""
     from .git_safe import Git
-    from .ide.review_context import (_drive, _kill_tree, _manifest, _path_of, ide_actor,
+    from .ide.review_context import (_drive, _env_bins, _manifest, _path_of, ide_actor,
                                      resolve_runner, test_command)
     from .merge_gate import _runs_bound, find_target, tree_stamp
-    from .quiet_spawn import detached
+    from .quiet_spawn import spawn_jobbed
     from .repo_identity import canonical_repo_root
     from . import project_env
     from .test_runs import record_test_run
@@ -73,10 +73,12 @@ def run_full_suite(root: str, target: str, *, environ: Optional[Dict[str, str]] 
     base_env = dict(os.environ if environ is None else environ)
     penv = project_env.resolve(main, project_env.settings_python(man), base_env)
     run_env = project_env.activated(base_env, penv)
-    # The ONE resolver the preflight and the IDE re-run use: a bare name is found on absolute PATH
-    # entries only (never the cwd), on Windows npm/npx/pnpm/yarn run through node and their own JS
-    # entry, and a `.cmd`/`.bat` is never started (cmd.exe would re-parse the arguments).
-    head, why = resolve_runner(main, cmd["argv"][0], _path_of(run_env))
+    # The ONE resolver the preflight and the IDE re-run use: a bare name from the project env, then
+    # absolute PATH entries outside the repo (never the cwd); an explicit relative runner against
+    # the repo root; on Windows only a real .exe/.com (npm/npx/pnpm/yarn through node and their
+    # own JS entry) — a batch file is never started (cmd.exe would re-parse the arguments).
+    head, why = resolve_runner(main, cmd["argv"][0], _path_of(run_env),
+                               project_bins=_env_bins(penv))
     if head is None:
         raise SuiteError(why or "the test command could not be resolved")
     argv = [*head, *cmd["argv"][1:]]
@@ -95,16 +97,25 @@ def run_full_suite(root: str, target: str, *, environ: Optional[Dict[str, str]] 
     checkpoint()
     report(note=f"running `{cmd['text']}` in {wt}")
     try:
-        proc = subprocess.Popen(argv, cwd=wt, env=run_env,  # nosec B603 — argv, no shell
-                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, **detached())
+        # The process door (0.0.28 lane B, `WIN-MERGE-SUITE-NO-JOB`): on Windows the suite is in a
+        # KILL_ON_JOB_CLOSE Job Object before its first instruction, so nothing it starts survives
+        # the run, holds the worktree, or keeps the run alive by writing to the pipe; POSIX its own
+        # session. A job Windows refuses is a SuiteError naming why — nothing ran.
+        proc_tree = spawn_jobbed(argv, cwd=wt, env=run_env,  # nosec B603 — argv, no shell
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT)
     except OSError as exc:
         raise SuiteError(f"the test command could not start: {exc}") from exc
     try:
-        rc = _drive(proc, take, tick)
-    except Cancelled:
-        _kill_tree(proc)
-        raise                                   # a cancelled run records nothing
+        rc = _drive(proc_tree, take, tick)      # a Cancel ends the tree and records nothing
+    finally:
+        proc_tree.close()
+    ended = proc_tree.last_end
+    if ended is not None and not ended.ok:
+        # Reported, never swallowed: a run whose processes may still hold the worktree is not a
+        # result the merge can count.
+        raise SuiteError(f"the suite exited {rc}, but {ended.why}; the run is not counted — end "
+                         f"those processes (or reboot) and run the suite again")
     after = tree_stamp(wt)
     tree = {"scope": "full", "worktree": wt,
             "head_before": before.get("head"), "head_after": after.get("head"),

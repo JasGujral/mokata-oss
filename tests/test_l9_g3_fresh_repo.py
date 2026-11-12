@@ -325,12 +325,6 @@ class TestSeveralCommittedSpecs(unittest.TestCase):
             self.assertEqual({t["name"]: t["ac_ids"] for t in data["tests"]}
                              ["tests/test_calc.py::test_neg"], ["AC-2"])
 
-    def test_L9_audit_spec_has_no_skip_parameter(self):
-        """The shared-id escape hatch is gone: grading is by the spec's own map."""
-        import inspect
-        from mokata.docsync import audit_spec
-        self.assertNotIn("skip_ac_ids", inspect.signature(audit_spec).parameters)
-
 
 HAPPY = "import unittest\nclass T(unittest.TestCase):\n    def test_happy_path(self):\n        'AC-1'\n"
 

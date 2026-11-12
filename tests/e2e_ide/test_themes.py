@@ -160,9 +160,13 @@ class ThemesSwitchLiveAndCostNothing(H.IdeFlow):
             # the graph restyled itself (no redraw by the person)
             self.assertEqual(squash(rgb(t["--text"])), squash(p.evaluate(
                 "%s.nodes().filter(n => n.data('coverage') !== 'untested' && n.data('kind') !== 'cluster')[0].style('color')" % cy)), theme)
-            # the focus ring: real keyboard focus on a top tab
-            self.press("Shift")
+            # the focus ring: REAL keyboard focus on a top tab — Tab onto the next stop, Shift+Tab
+            # back. (0.0.28 D: a lone Shift + focus() was a Chromium assumption — Firefox does not
+            # count a modifier as keyboard use, so after the clicks above :focus-visible stayed off.)
             p.evaluate("document.querySelector('#tab-review').focus()")
+            self.press("Tab")
+            self.press("Shift+Tab")
+            self.assertEqual("tab-review", p.evaluate("document.activeElement.id"), theme)
             self.assertEqual(rgb(t["--focus"]), p.evaluate(
                 "getComputedStyle(document.querySelector('#tab-review')).outlineColor"), theme)
             # the diagram is drawn in this theme's colours
@@ -198,28 +202,42 @@ class ThemesSwitchLiveAndCostNothing(H.IdeFlow):
             self.page.wait_for_timeout(100)
         self.fail("the diagram was not drawn in %s's colours" % theme)
 
+    def os_flips(self, **media):
+        """The OS changes a media setting: the media state flips AND the page's media queries get
+        their `change` event — what a real OS flip delivers. (0.0.28 D: Playwright's Firefox
+        emulation flips `prefers-contrast` with NO change event, measured by lane H; relying on the
+        emulator to send it was a Chromium assumption. The event is delivered the same way in every
+        browser; an extra one in Chromium is a no-op — the page re-resolves from `matches`.)"""
+        self.page.emulate_media(**media)
+        self.page.evaluate("(window.__mqls || []).forEach(m => m.dispatchEvent(new Event('change')))")
+
     def test_3_follow_the_system_switches_live_with_the_os_and_back_off_when_a_theme_is_picked(self):
         p = self.page
+        # keep the page's own MediaQueryLists reachable, so an OS flip can reach the page's listeners
+        p.add_init_script("(() => { const mm = window.matchMedia.bind(window); window.__mqls = [];"
+                          " window.matchMedia = (q) => { const m = mm(q); window.__mqls.push(m); return m; }; })()")
+        p.reload()
+        self.until("!!(window.MK && MK.theme && window.__mqls && window.__mqls.length >= 2)",
+                   "the page's media queries after the reload")
         self.pick("Theme: Follow the system")
         self.until("document.documentElement.dataset.themeChoice === 'system'", "system")
         p.evaluate("window.__keep = 'same page'")
-        p.emulate_media(color_scheme="dark")
+        self.os_flips(color_scheme="dark")
         self.until("document.documentElement.dataset.theme === 'dark'", "dark from the OS")
-        p.emulate_media(color_scheme="light")
+        self.os_flips(color_scheme="light")
         self.until("document.documentElement.dataset.theme === 'light'", "light from the OS, live")
-        p.emulate_media(contrast="more")
+        self.os_flips(contrast="more")
         self.until("document.documentElement.dataset.theme === 'hc-light'", "high contrast from the OS")
-        p.emulate_media(color_scheme="dark")
+        self.os_flips(color_scheme="dark")
         self.until("document.documentElement.dataset.theme === 'hc-dark'", "high contrast dark")
-        p.emulate_media(contrast="no-preference")
+        self.os_flips(contrast="no-preference")
         self.until("document.documentElement.dataset.theme === 'dark'", "back to dark")
         self.assertEqual("same page", p.evaluate("window.__keep"), "following the OS reloaded the page")
         self.pick("Theme: Light")                          # a pick ignores the OS from now on
         self.until("document.documentElement.dataset.theme === 'light'", "light picked")
-        p.emulate_media(color_scheme="dark")
-        p.wait_for_timeout(300)
+        self.os_flips(color_scheme="dark")
         self.assertEqual("light", self.theme(), "the OS flip moved a theme the person picked")
-        p.emulate_media(color_scheme="light")
+        self.os_flips(color_scheme="light")
 
     def test_4_the_pick_is_saved_with_the_workspace_and_is_there_after_a_reload(self):
         p = self.page

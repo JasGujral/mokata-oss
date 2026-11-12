@@ -28,6 +28,12 @@ STATE = """() => ({
   bodyTab: document.body.dataset.tab, labelled: document.getElementById('shell').getAttribute('aria-labelledby') })"""
 
 
+#: test_8's stated premise: search by meaning is NOT installed — the fix line and note a Welcome
+#: row and a Health row carry for it then (`search.status()` "not-installed"), as fixture data.
+MEANING_INSTALL = "python -m pip install 'model2vec>=0.3' 'numpy>=1.24'"
+MEANING_ABSENT = "semantic unavailable — the optional embeddings extra is not installed"
+
+
 class TheThreeScreensAgreeAndReviewEnds(H.IdeFlow):
     FIXTURE = "shop"
 
@@ -39,8 +45,16 @@ class TheThreeScreensAgreeAndReviewEnds(H.IdeFlow):
                                   " : (document.activeElement && document.activeElement.id) || 'NONE'")
 
     def tab_to(self, selector, what, limit=300):
-        """Press Tab until `selector` has focus — proof it is in the keyboard order."""
+        """Press Tab until `selector` has focus — proof it is in the keyboard order — starting from
+        the TOP of the document. (0.0.28 D: starting wherever the last click left the sequential
+        focus point and relying on Tab to wrap past the page's last stop was a Chromium assumption:
+        Chromium wraps back to the top, Firefox hands focus to the browser and the page's
+        activeElement stays on the last stop — measured: 94 presses on #insp-ripple.)"""
         p = self.page
+        p.evaluate("""() => { let s = document.getElementById('__tab-start');
+            if (!s) { s = document.createElement('span'); s.id = '__tab-start'; s.tabIndex = -1;
+                      document.body.prepend(s); }
+            s.focus(); }""")
         for _ in range(limit):
             if p.evaluate("(s) => !!document.activeElement && document.activeElement.matches(s)", selector):
                 return
@@ -289,11 +303,22 @@ class TheThreeScreensAgreeAndReviewEnds(H.IdeFlow):
         shows the failure and Retry. A row that is ONLY the same hint as Get started (search by
         meaning's install line) is printed once, in Get started."""
         p = self.page
-        wel = p.evaluate("fetch('/api/welcome').then((r) => r.json())")
+        # MK.api, not a bare fetch: /api/welcome is a JOB route (`welcome.scan`) — a scan longer
+        # than the 0.3 s sync window answers 202 + a handle, which only the page's own call follows
+        # (a model2vec venv's meaning probe crossed it; a bare fetch read the handle as the answer).
+        wel = p.evaluate("MK.api('/api/welcome')")
         caps = {c["key"]: c for c in wel["capabilities"]}
         caps["graph"].update(state="not-ready", fix="mokata graph build", ready=False)
-        health = p.evaluate("fetch('/api/health').then((r) => r.json())")
+        health = p.evaluate("MK.api('/api/health')")
         rows = {r["key"]: r for r in health["rows"]}
+        # The premise is STATED, as graph's is above (0.0.28 W5): search by meaning not installed,
+        # the same install line on Get started and Health. Read from the live server it was the
+        # host's — a venv with model2vec (any `mokata[full]` contributor) answered "installed,
+        # unbuilt", Welcome and Health then carried different hints, and this row redded there.
+        caps["meaning"].update(state="not-ready", ready=False, fix=MEANING_INSTALL,
+                               detail=MEANING_ABSENT, action="", action_label="")
+        rows["search"].update(state="missing", fix=MEANING_INSTALL, detail=MEANING_ABSENT,
+                              action="", action_label="")
         self.assertEqual(caps["meaning"]["fix"], rows["search"]["fix"],
                          "the fixture's own duplicate hint: search by meaning is not installed")
         rows["graph"].update(state="degraded", fix="mokata graph build",

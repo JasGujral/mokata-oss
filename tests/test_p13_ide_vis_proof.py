@@ -1391,6 +1391,9 @@ class RoundSixOneTestOneProof(unittest.TestCase):
         self.assertEqual("unparsed", _t(tr, "test:tests/ext.py::test_a")["state"],
                          "a link leaving the repo keeps its own spelling and reads unparsed")
         self.assertNotEqual("proven", _ac(tr, "AC-3")["status"])
+        # 0.0.28 E2: the record itself says where it ran, and the screen says why it cannot prove
+        self.assertEqual("outside", TR.read_test_record(self.d, "r1")["tests"]["tests/ext.py::test_a"]["target"])
+        self.assertIn("outside the repository", _t(tr, "test:tests/ext.py::test_a")["tdd_note"])
 
     # -- K2: the unconfigured rootdir twin -----------------------------------------------------
     def test_K2_a_rootdir_relative_id_with_a_root_twin_and_no_config_is_ambiguous(self):

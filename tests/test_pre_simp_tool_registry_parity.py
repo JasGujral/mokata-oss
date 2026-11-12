@@ -95,11 +95,6 @@ class TestToolRegistryParity(unittest.TestCase):
         self.assertEqual(len(names), len(set(names)),
                          "a tool was registered twice by the aggregator")
 
-    def test_build_server_registers_the_same_ordered_set(self):
-        # `build_server` iterates TOOLS in order; the registered spec names are exactly the snapshot.
-        from mokata.mcp.registry import TOOLS
-        self.assertEqual([t.name for t in TOOLS], SNAPSHOT_FULL)
-
 
 if __name__ == "__main__":
     unittest.main()

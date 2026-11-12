@@ -206,9 +206,6 @@ class TestTheScriptsObeyTheRules(unittest.TestCase):
                          "the retry case refuses at step 0 — that IS the defect, restored")
         self.assertTrue(arms["ELSEWHERE"], "a tag on a different commit must refuse")
 
-    def test_n1_the_preflight_no_longer_refuses_on_the_bare_existence_of_the_tag(self):
-        for _n, line in code_lines(self.release):
-            self.assertNotIn("already exists locally — bump the version", line)
 
     # --- N4: the false reason is gone, and the state is ASKED for ---------------------------
     def test_n4_no_live_code_explains_a_failure_as_a_pr_that_may_already_exist(self):

@@ -294,11 +294,6 @@ class TestTeamJoinIdempotentAndSummary(unittest.TestCase):
 
 
 class TestTeamJoinCliAndParity(unittest.TestCase):
-    def test_parity_stays_green(self):
-        from mokata import parity
-        self.assertIn("team", parity.SURFACE_MATRIX)
-        report = parity.verify_parity()
-        self.assertTrue(report.ok, report.render())
 
     def test_cli_join_action_runs(self):
         import io

@@ -811,7 +811,12 @@ class TestTheFloorDidNotMove(unittest.TestCase):
                                   for f in scan(text=text, path=TARGET, ignores=None)])
 
     def test_the_signature_set_is_unchanged(self):
-        self.assertEqual(len(secrets._SIGNATURES), 16)
+        # 0.0.28 REDACT-MANGLED-KEY: the private-key PATTERN left `_SIGNATURES` (15, was 16) for
+        # the one key detector `_scan_key_material`, which the same signature layer still runs.
+        self.assertEqual(len(secrets._SIGNATURES), 15)
+        self.assertNotIn("private-key", [k for k, _ in secrets._SIGNATURES])
+        self.assertIn("private-key", [f.kind for f in secrets._scan_signatures(
+            "-" * 5 + "".join(map(chr, (66, 69, 71, 73, 78))) + " RSA PRIVATE KEY" + "-" * 5)])
 
     def test_the_known_shape_floor_is_unchanged(self):
         self.assertEqual([n for n, _ in secrets._KNOWN_SHAPES],

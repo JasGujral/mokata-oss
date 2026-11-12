@@ -57,14 +57,6 @@ class ThePaletteRunsCommandsAndJumps(H.IdeFlow):
         self.press("Enter")
         self.until("MK.nav.line === 2", "line 2")
 
-    def test_5_the_removed_openers_open_nothing(self):
-        """UX-SIMPLIFY #21: ⌘⇧P and ⌘G were deleted — one palette, opened by ⌘K (or ⌘P)."""
-        p = self.page
-        for keys in ("Control+Shift+P", "Control+G"):
-            self.press(keys)
-            p.wait_for_timeout(300)
-            self.assertTrue(p.evaluate("document.getElementById('qo').hidden"), keys + " opened the palette")
-
 
 class TabsOpenCloseAndReopen(H.IdeFlow):
     FIXTURE = "shop"

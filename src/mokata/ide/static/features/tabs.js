@@ -377,7 +377,18 @@
              collapsed: Object.keys(collapsed).filter((d) => collapsed[d] === true).slice(-MAX_DIRS),
              run: (row && row.run) || null, theme: MK.theme.choice(), single_keys: MK.singleKeysOn() };
   }
+  // 0.0.28 D — a screen the person picks BEFORE the restore runs is theirs: the restore must not put
+  // the saved screen back over it. The first screen saved is the one the page booted on; any other
+  // screen asked for before the restore began is the person moving (the restore's own moves happen
+  // with `ui.restoring` set and do not count).
+  let bootMode = null, movedEarly = false;
+  function noteEarlyMove() {
+    if (ui.restored || ui.restoring) return;
+    if (bootMode === null) bootMode = ui.mode;
+    else if (ui.mode !== bootMode) movedEarly = true;
+  }
   function save(now) {
+    noteEarlyMove();
     // never overwrite before restore — but a move made meanwhile (`g a` before the saved workspace
     // answered) is OWED a save once the restore is done; dropping it lost the person's screen on
     // the next reload (INTEG-FIX2: Welcome took the reload instead).
@@ -446,7 +457,10 @@
     try {
       const t = activeTab();
       // a saved view id, or a screen id (`?screen=sessions` from `mokata watch --open`)
-      if (t && (w.mode === "review" || w.mode === "navigate" || !w.mode)) {
+      if (movedEarly) {
+        // the person picked a screen while the saved one was loading: theirs stays, and the owed
+        // save below writes it (it used to be overwritten by the saved screen whenever one existed)
+      } else if (t && (w.mode === "review" || w.mode === "navigate" || !w.mode)) {
         await activate(t.key);
       } else if (w.mode && MK.resolveView(w.mode)) {
         MK.setMode(w.mode);

@@ -39,9 +39,9 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from ..knowledge.cancel import cancelled, checkpoint, kill_on_cancel, report
-from ..exe_path import path_dirs, which_in
-from ..quiet_spawn import hidden
-from .lsp import spawn_jobbed
+from ..exe_path import path_dirs, which_in, win_name, win_refusal, win_runnable
+from ..fs_identity import refuse_if_inside
+from ..quiet_spawn import hidden, spawn_jobbed
 from .server import BadRequest
 
 #: ACs per page and tests per AC when the page does not say (paging, not a cap: `page` walks all).
@@ -74,9 +74,20 @@ def _criteria(spec: Any) -> List[Dict[str, Any]]:
     return [{"id": c.id, "text": c.text, "kind": c.kind} for c in spec.criteria]
 
 
+def suite_sets(suite: Optional[Dict[str, Any]]) -> Tuple[frozenset, frozenset, frozenset]:
+    """(tests, failed, not_run) of the last suite as sets — built once per panel, so colouring each
+    test is O(1). A record with no verdict (pre-0.0.28) gives nothing: it is unreadable, not a red."""
+    from ..test_runs import UNREADABLE_SUITE, suite_verdict
+    if not suite or suite_verdict(suite)[0] == UNREADABLE_SUITE:
+        return frozenset(), frozenset(), frozenset()
+    return (frozenset(suite.get("tests") or ()), frozenset(suite.get("failed") or ()),
+            frozenset(suite.get("not_run") or ()))
+
+
 def test_history(tid: str, red: set, green: set, suite: Optional[Dict[str, Any]],
                  reruns: Dict[str, List[Dict[str, Any]]],
-                 suite_ids: Optional[frozenset] = None) -> Tuple[str, List[Dict[str, Any]], bool]:
+                 sets: Optional[Tuple[frozenset, frozenset, frozenset]] = None
+                 ) -> Tuple[str, List[Dict[str, Any]], bool]:
     """(latest status, history oldest-first, never_red) for one test id from the run's evidence.
 
     The TDD record holds a SET of ids recorded RED and a set recorded GREEN — the order between
@@ -88,14 +99,16 @@ def test_history(tid: str, red: set, green: set, suite: Optional[Dict[str, Any]]
     if tid in green:
         hist.append({"state": "green", "basis": "tdd record"})
     latest = hist[-1]["state"] if hist else "unrun"
-    if suite_ids is None and suite:
-        suite_ids = frozenset(suite.get("tests") or ())
-    if suite and tid in suite_ids:
-        st = "green" if suite.get("passed") else "red"
+    tests, failed, not_run = suite_sets(suite) if sets is None else sets
+    # 0.0.28 D — a test is coloured by ITS OWN recorded outcome (the run's `failed` / `not_run`
+    # lists), never by the run's verdict: a green test in a cancelled or partial run stays green.
+    st = ("red" if tid in failed else "not-run" if tid in not_run
+          else "green" if tid in tests else None)
+    if st is not None:
         if st != latest:
             hist.append({"state": st, "basis": "last suite run", "at": suite.get("at"),
                          "source": suite.get("source") or "cli"})
-            latest = st
+            latest = st if st != "not-run" else latest      # not running is not an outcome
         elif hist:
             hist[-1].update(at=suite.get("at"), source=suite.get("source") or "cli")
     for r in reruns.get(tid, ()):
@@ -146,7 +159,7 @@ def tests_panel(root: str, run_id: str, *, page: Any = "", per: Any = "", ac: st
         red, green = set(), set()
     reruns = reruns or {}
     suite = rec["last_suite"]
-    sids = frozenset((suite or {}).get("tests") or ())       # one set: membership is O(1)
+    sids = suite_sets(suite)                  # sets, built once: membership is O(1)
     approval = approval_of(store, spec)
     base = {"sample": False, "run": rid, "approval": approval, "command": command or {},
             "last_suite": suite, "rerun_note": RERUN_NOTE}
@@ -232,7 +245,7 @@ def run_tests_of(root: str, run_id: str,
     by_ac = {c.id: mapped_tests(rec, c.id) for c in spec.criteria}
     ids = {t for v in by_ac.values() for t in v}
     suite = rec["last_suite"]
-    sids = frozenset((suite or {}).get("tests") or ())
+    sids = suite_sets(suite)
     latest = {t: test_history(t, red, green, suite, reruns or {}, sids)[0] for t in ids}
     return {"run": rid, "by_ac": by_ac, "latest": latest}
 
@@ -292,42 +305,102 @@ def _shim_in(dirs: List[str], name: str) -> Optional[str]:
     return None
 
 
+def _is_bare(name: str, nt: bool) -> bool:
+    if nt:
+        return not any(c in name for c in "/\\") and not (len(name) > 1 and name[1] == ":")
+    return os.path.basename(name) == name and not os.path.isabs(name)
+
+
 def resolve_runner(root: str, name: str, path_var: Optional[str],
-                   nt: Optional[bool] = None) -> Tuple[Optional[List[str]], Optional[str]]:
+                   nt: Optional[bool] = None, project_bins: Iterable[str] = ()
+                   ) -> Tuple[Optional[List[str]], Optional[str]]:
     """`(argv head, None)` when `name` can be started WITHOUT a shell, else `(None, why)` — a why
-    that is true and says what to do. A bare name is found by the product's finder (absolute PATH
-    entries, never the repo); on Windows, where npm/npx/pnpm/yarn are `.cmd` shims, the head is
-    `[node.exe, <the tool's own JS entry>]` found as the LSP finder finds node servers. A `.cmd`/
-    `.bat` is never run (cmd.exe would parse the test id and the repo's files). An explicit path is
-    used as written, unless it is such a shim."""
+    that is true and says what to do. The ONE resolver of the preflight, the IDE re-run and the
+    gated merge's suite run (0.0.28 lane B, rules R4/R5):
+
+      * The test command comes from the repo's committed manifest; running tests runs the repo's
+        code; the human's click or merge approval is the gate. There is NO workspace-trust gate
+        here (coordinator ruling), and the runner is never taken from the cwd.
+      * A BARE name is found first in the project env's own bin dirs (`project_bins` — a repo
+        venv is where `pytest` legitimately lives), then on absolute PATH entries with every hit
+        inside the repo skipped; a skipped in-repo hit that was the only one is NAMED.
+      * An EXPLICIT relative runner (`./gradlew`, `tools/pytest.exe`) is joined to `root` and made
+        absolute before anything else: CreateProcess resolves a relative image against the
+        PARENT's cwd, not the child's.
+      * Windows is an ALLOW-list (`exe_path.win_runnable`): only a name that, read as Win32 reads
+        it, ends `.exe`/`.com` — or has no extension and `name.exe`/`.com` exists — is started.
+        No batch file is ever started (cmd.exe would re-parse the arguments, and its rc 1 would
+        read as a RED). npm/npx/pnpm/yarn, which are `.cmd` shims there, run as
+        `[node.exe, <the tool's own JS entry>]`; names are case-folded (`NPM`, `npm.CMD`)."""
     from .lsp import _global_node_package_bin
     nt = (os.name == "nt") if nt is None else nt
-    bare = os.path.basename(name) == name and not os.path.isabs(name)
-    if not bare:
-        if nt and name.lower().endswith((".cmd", ".bat")):
-            return None, _shim_why(name, name, None)
-        return [name], None
+    bad = win_refusal(name) if nt else None
+    if bad is not None and bad[0] not in ("batch", "script"):
+        return None, bad[1]
+    if not _is_bare(name, nt):
+        full = name if os.path.isabs(name) or (nt and name[1:3] in (":\\", ":/")) \
+            else os.path.normpath(os.path.join(root, name))
+        if not nt:
+            return [full], None
+        if bad is not None and bad[0] == "batch":
+            return None, _shim_why(name, full, None)
+        spawn, why = win_runnable(full)
+        return ([spawn], None) if spawn else (None, why)
+    bins = [d for d in project_bins if os.path.isdir(d)]
     dirs = path_dirs({"PATH": path_var or ""}, cwd=root)
-    exe = which_in(name, dirs, nt=nt)
-    if exe:
-        return [exe], None
+    n, key = (win_name(name), win_name(name).lower()) if nt else (name, name)
+    shim_named = bad is not None                       # `npm.cmd`, `run.bat `: the tool is `npm`
+    if shim_named:
+        key = os.path.splitext(key)[0]
+    planted = None
+    if not shim_named:
+        exe = which_in(n, bins, nt=nt) if bins else None
+        if exe is None:
+            exe = which_in(n, dirs, nt=nt, refuse_under=root)
+        if exe:
+            return [exe], None
+        hit = which_in(n, dirs, nt=nt)
+        if hit and refuse_if_inside(hit, root):
+            planted = hit
     if not nt:
-        return None, _not_found(name)
-    shim = _shim_in(dirs, name)
+        return None, _not_found(name, planted=planted)
+    shim = _shim_in(dirs, key)
+    # "corepack is enabled" is evidence only from a pnpm/yarn shim OUTSIDE the repo and outside the
+    # project env: the env's `Scripts` is first on this PATH, and a repo that commits
+    # `.venv/Scripts/pnpm.cmd` must not switch corepack on (it would download whatever the repo's
+    # `packageManager` names, with no prompt).
+    enabled = _shim_in([d for d in dirs if not refuse_if_inside(d, root)
+                        and not any(refuse_if_inside(d, b) for b in bins)], key)
     env = {"PATH": path_var or ""}
     tried = ""
-    for pkg in JS_RUNNERS.get(name, ()):
-        head, w = _global_node_package_bin(root, name, pkg, env)
+    for pkg in JS_RUNNERS.get(key, ()):
+        if pkg == "corepack" and enabled is None:
+            continue
+        head, w = _global_node_package_bin(root, key, pkg, env)
         if head is not None:
             return head, None
         tried = tried or w
-    if shim is None:
-        return None, _not_found(name)
-    return None, _shim_why(name, shim, name in JS_RUNNERS, tried)
+    if shim is None and not shim_named:
+        return None, _not_found(name, key, planted)
+    return None, _shim_why(name, shim or name, key in JS_RUNNERS, tried)
 
 
-def _not_found(name: str) -> str:
-    return f"`{name}` is not an executable on the project's PATH"
+def _not_found(name: str, how_key: Optional[str] = None, planted: Optional[str] = None) -> str:
+    base = f"`{name}` is not an executable on the project's PATH"
+    if planted:
+        base += (f" — the only `{name}` found is {planted}, inside the repository but outside the "
+                 f"project's own environment, and a bare runner name is never answered by a file "
+                 f"the repo placed on PATH; name it explicitly (its path relative to the repo) in "
+                 f"`settings.baseline.test_command`, or install it in the project env")
+    if how_key in ("pnpm", "yarn"):
+        base += (f" — install it (`npm install -g {how_key}`) or enable Node's bundled copy with "
+                 f"`corepack enable {how_key}`, then reopen the panel")
+    return base
+
+
+def _env_bins(penv: Any) -> List[str]:
+    """The project's own Python environment's executable directories (none when there is none)."""
+    return list(penv.bin_dirs) if penv is not None else []
 
 
 def _shim_why(name: str, shim: str, js: Optional[bool], tried: str = "") -> str:
@@ -354,7 +427,7 @@ def test_command(root: str, nt: Optional[bool] = None) -> Dict[str, Any]:
     if problem:
         return {"configured": False, "text": "", "argv": [], "runnable": False,
                 "note": f"the manifest cannot be read, so the test command is unknown — {problem}"}
-    cmd = baseline_command(man)
+    cmd = (baseline_command(man) or "").strip()      # a trailing newline is not shell syntax
     if not cmd:
         return {"configured": False, "text": "", "argv": [], "runnable": False,
                 "note": "no test command set — set `settings.baseline.test_command` "
@@ -380,7 +453,7 @@ def test_command(root: str, nt: Optional[bool] = None) -> Dict[str, Any]:
     # project whose env a tool could still supply — only what is certain is refused.
     penv = project_env.resolve(root, project_env.settings_python(man), penv_env, ask_tools=False)
     run_env = project_env.activated(penv_env, penv)
-    head, why = resolve_runner(root, argv[0], _path_of(run_env), nt)
+    head, why = resolve_runner(root, argv[0], _path_of(run_env), nt, _env_bins(penv))
     if head is None and why == _not_found(argv[0]) and penv is None and (
             os.path.exists(os.path.join(root, "pyproject.toml"))
             or os.path.exists(os.path.join(root, "Pipfile"))) and any(
@@ -426,10 +499,11 @@ def record_rerun(root: str, run_id: str, command: str, results: List[Dict[str, A
                  complete: bool) -> Dict[str, Any]:
     """Write an IDE re-run into the run's test record (`test_runs.record_test_run`, the record the
     Stop gate reads) with its provenance — ruled 2026-10-28: it counts as evidence and is always
-    told apart from an agent run. Each test RED or GREEN by its own exit; the run "passed" only
-    when every test passed AND the run completed (a cancelled run never reads as passing).
-    A test that never RAN (`not-run`: the runner could not start) is not an outcome — never RED,
-    never in the record; a job in which nothing ran records nothing."""
+    told apart from an agent run. Each test RED or GREEN by its own exit; the run's verdict
+    (`test_runs.verdict_of`) is failed / not-all-ran / cancelled / passed — a cancelled or partial
+    run never reads as passing, and never as FAILED. A test that never RAN (`not-run`: the runner
+    could not start) is not an outcome — never RED, never GREEN — and is named in the record's
+    `not_run`; a job in which nothing ran records nothing."""
     from ..test_runs import record_test_run
     ran = [r for r in results if r["state"] in ("green", "red")]
     if not ran:                  # nothing ran (could not start): there is no outcome to record
@@ -437,10 +511,12 @@ def record_rerun(root: str, run_id: str, command: str, results: List[Dict[str, A
     outcome = {r["id"]: r["state"] == "green" for r in ran}
     codes = [r.get("rc") for r in ran]
     bad = next((c for c in codes if c != 0), 0)
-    return record_test_run(root, run_id, passed=complete and all(outcome.values())
-                           and len(ran) == len(results),
+    skipped = {r["id"]: r.get("note") or "could not start" for r in results
+               if r["state"] == "not-run"}
+    return record_test_run(root, run_id, passed=all(outcome.values()),
                            command=command, results=outcome, source="ide",
-                           actor=ide_actor(), exit_code=bad if isinstance(bad, int) else -1)
+                           actor=ide_actor(), exit_code=bad if isinstance(bad, int) else -1,
+                           not_run=skipped, complete=complete)
 
 
 def check_test_ids(ids: Iterable[Any]) -> List[str]:
@@ -461,36 +537,6 @@ _POLL_S = 0.1
 #: After the runner has exited and its group was ended, output is drained until the pipe has been
 #: quiet this long — a bound on draining a dead run's pipe, never on the run itself.
 _DRAIN_IDLE_S = 1.0
-
-
-def _kill_tree(proc: Any, leftovers_only: bool = False, job: Any = None) -> None:
-    """End the runner's whole tree. POSIX: SIGKILL to its process group (its pid, as it leads a
-    new session). Windows: the runner's Job Object (`lsp.spawn_jobbed`: the runner is created suspended, put in the job, then resumed) — it holds the
-    tree whether or not the runner still lives, so what a test left behind after the runner
-    exited is ended too (`taskkill /T` needs a LIVE root to walk from, so it reaches nothing then:
-    the leftover held the project directory open and could not be deleted). Only when no job could
-    be made does it fall back to `taskkill /F /T` (`crg_resolve._end_tree`) for a live runner.
-    `leftovers_only`: the runner has already exited — end what it left in its group. Never
-    raises."""
-    if os.name == "nt":
-        if job is not None and job.ok:
-            job.terminate()
-        elif not leftovers_only:
-            from ..crg_resolve import _end_tree
-            _end_tree(proc)
-        return
-    import signal
-    from ..quiet_spawn import signal_group
-    try:
-        signal_group(proc.pid, signal.SIGKILL)          # never 0/1/our own group (0.0.27 CI)
-    except (ProcessLookupError, PermissionError, OSError):
-        pass
-    if not leftovers_only:
-        try:
-            proc.kill()
-            proc.wait()
-        except OSError:
-            pass
 
 
 def _pump(stream: Any, pipe: "queue.Queue[Optional[bytes]]") -> None:
@@ -530,7 +576,7 @@ def run_tests(root: str, argv: List[str], ids: List[str],
     # a BARE name is found only by the finder — and when it finds nothing the run does not start
     # (handing the bare name to Popen would let the OS search `.` or a relative PATH entry,
     # which is the repo).
-    head, not_found = resolve_runner(root, argv[0], path_var)
+    head, not_found = resolve_runner(root, argv[0], path_var, project_bins=_env_bins(penv))
     argv = [*(head or [argv[0]]), *argv[1:]]
     out = {"tail": bytearray(), "bytes": 0}
     results: List[Dict[str, Any]] = []
@@ -554,13 +600,14 @@ def run_tests(root: str, argv: List[str], ids: List[str],
             take(f"$ {' '.join(argv)} {tid}\n".encode("utf-8"))
             emit(f"running {tid}")
             try:
-                # Windows: suspended, into the tree's Job Object, then resumed — a launcher's
-                # first child (venv python.exe, pytest.exe) is in the job from its first instruction.
+                # The process door: Windows suspended, into the tree's Job Object, then resumed (a
+                # launcher's first child is in the job from its first instruction) — or refused
+                # with NO_JOB, which is a not-run, never a RED; POSIX its own session.
                 if not_found:
                     raise OSError(not_found)
-                proc, job = spawn_jobbed([*argv, tid], cwd=root, env=run_env,  # nosec B603 argv
-                                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                         stderr=subprocess.STDOUT)
+                tree = spawn_jobbed([*argv, tid], cwd=root, env=run_env,  # nosec B603 argv
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT)
             except OSError as exc:
                 results.append({"id": tid, "state": "not-run", "rc": None,
                                 "seconds": 0.0,
@@ -570,13 +617,15 @@ def run_tests(root: str, argv: List[str], ids: List[str],
                 emit(f"{tid}: could not start")
                 continue
             try:
-                rc = _drive(proc, take, lambda: emit(f"running {tid}"), job)
+                rc = _drive(tree, take, lambda: emit(f"running {tid}"))
             finally:
-                if job is not None:
-                    job.terminate()         # releases the handle; a no-op once the tree is ended
+                tree.close()                # ends anything left (as KILL_ON_JOB_CLOSE would)
             st = "green" if rc == 0 else "red"
-            results.append({"id": tid, "state": st, "rc": rc,
-                            "seconds": round(time.time() - t0, 2)})
+            row = {"id": tid, "state": st, "rc": rc, "seconds": round(time.time() - t0, 2)}
+            ended = tree.last_end
+            if ended is not None and not ended.ok:      # reported, never swallowed (R3)
+                row["note"] = ended.why[:300]
+            results.append(row)
             if on_test:
                 on_test(tid, st, time.time())
             emit(f"{tid}: {st}")
@@ -588,25 +637,50 @@ def run_tests(root: str, argv: List[str], ids: List[str],
             "output": out["tail"].decode("utf-8", "replace"), "output_bytes": out["bytes"],
             "passed": sum(1 for r in results if r["state"] == "green"),
             "failed": sum(1 for r in results if r["state"] == "red"),
-            "not_run": sum(1 for r in results if r["state"] == "not-run")}
+            "not_run": sum(1 for r in results if r["state"] == "not-run"),
+            # the run's one word and its reason, from the one rule (`test_runs.verdict_of`)
+            **_verdict_words(results, complete)}
 
 
-def _drive(proc: Any, take: Callable[[bytes], None], tick: Callable[[], None],
-           job: Any = None) -> int:
+def _verdict_words(results: List[Dict[str, Any]], complete: bool) -> Dict[str, str]:
+    from ..test_runs import _reason, verdict_of
+    failed = [r["id"] for r in results if r["state"] == "red"]
+    skipped = {r["id"]: r.get("note") or "could not start" for r in results
+               if r["state"] == "not-run"}
+    v = verdict_of(len(failed), len(skipped), complete)
+    return {"verdict": v, "reason": _reason(v, failed, skipped, None)}
+
+
+def _drive(tree: Any, take: Callable[[bytes], None], tick: Callable[[], None]) -> int:
     """Read one runner's output until its pipe ends, watching the cancel flag between reads (the
-    read is on its own thread, so a Cancel never waits on it). Returns the runner's exit code;
-    raises `Cancelled` — after ending the runner's whole tree — when the job is cancelled."""
+    read is on its own thread, so a Cancel never waits on it). `tree` is the door's `Jobbed`: its
+    exit is seen WITHOUT reaping and its tree is ended only through it, so the group id can never
+    be someone else's by the time it is signalled. Returns the runner's exit code; raises
+    `Cancelled` — after ending the runner's whole tree — when the job is cancelled."""
+    proc = tree.proc
     pipe: "queue.Queue[Optional[bytes]]" = queue.Queue()
     reader = threading.Thread(target=_pump, args=(proc.stdout, pipe), daemon=True,
                               name="mokata-test-output")
     reader.start()
     rc: Optional[int] = None
     idle, last = 0, 0.0
+
+    def stop_if_cancelled() -> None:
+        if cancelled():
+            tree.end()
+            checkpoint()                           # raises Cancelled: the job ends NOW
+
+    def finished(code: int) -> int:
+        # The runner has exited. What it left in its group / job (a server a test started, a
+        # worker) is ended too, ONCE, while the leader is still unreaped — so the pipe reaches EOF
+        # and the lane is free; anything that escaped the group cannot hold the job: the dead
+        # run's pipe is drained until quiet.
+        tree.end(leftovers_only=True)
+        return proc.returncode if proc.returncode is not None else code
+
     try:
         while True:
-            if cancelled():
-                _kill_tree(proc, job=job)
-                checkpoint()                       # raises Cancelled: the job ends NOW
+            stop_if_cancelled()
             try:
                 chunk = pipe.get(timeout=_POLL_S)
             except queue.Empty:
@@ -620,22 +694,24 @@ def _drive(proc: Any, take: Callable[[bytes], None], tick: Callable[[], None],
                     last = time.time()
                     tick()
                 continue
-            if rc is None and proc.poll() is not None:
-                # The runner has exited. What it left in its group (a server a test started, a
-                # worker) is ended too, so the pipe reaches EOF and the lane is free; anything that
-                # escaped the group cannot hold the job: the dead run's pipe is drained until quiet.
-                rc = proc.returncode
-                _kill_tree(proc, leftovers_only=True, job=job)
-            elif rc is not None:
+            if rc is None:
+                code = tree.poll_exit()
+                if code is not None:
+                    rc = finished(code)
+            else:
                 idle += 1
                 if idle * _POLL_S >= _DRAIN_IDLE_S:
                     break
-        rc = proc.wait() if rc is None else rc
-        _kill_tree(proc, leftovers_only=True, job=job)      # nothing a test started outlives its run
+        while rc is None:                          # EOF before exit: wait, still cancellable
+            stop_if_cancelled()
+            try:
+                rc = finished(tree.wait_exit(_POLL_S))
+            except subprocess.TimeoutExpired:
+                pass
         return rc
     finally:
-        if proc.poll() is None:                    # an exception mid-read: never leave it running
-            _kill_tree(proc, job=job)
+        if tree.last_end is None:                  # an exception mid-read: never leave it running
+            tree.end()
         reader.join(_DRAIN_IDLE_S)                 # the tree is dead: its pipe ends at once
         if not reader.is_alive() and proc.stdout is not None:
             proc.stdout.close()

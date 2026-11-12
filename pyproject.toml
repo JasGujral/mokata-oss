@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mokata"
-version = "0.0.27"
+version = "0.0.28"
 description = "The memory + seatbelt for your AI coding agent. Spec-driven TDD for Claude Code — knowledge-aware, human-gated, local-first."
 readme = "README.md"
 # PY-FLOOR-3.12 (0.0.26 L12, Jas 2026-10-22: "we can force mokata to support 3.12 and onwards").

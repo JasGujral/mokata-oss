@@ -600,20 +600,5 @@ class TestLockedDecisionsAlreadyLanded(unittest.TestCase):
         assert_acyclic()                           # raises on any cycle / diamond
 
 
-# ===================================================================== (6) GROWTH-DEAD
-class TestGrowthIsGone(unittest.TestCase):
-    def test_the_dead_growth_module_is_deleted(self):
-        """D3: `RetainOnSuccess`/`FormulaProposal`/`apply_formula_proposal` were public exports
-        with zero production callers for three releases. The retrieval half stays."""
-        with self.assertRaises(ImportError):
-            __import__("mokata.memory.growth")
-        import mokata.memory as memory
-        for gone in ("RetainOnSuccess", "FormulaProposal", "apply_formula_proposal",
-                     "assert_growable", "GROWABLE_KINDS"):
-            self.assertNotIn(gone, memory.__all__)
-            self.assertFalse(hasattr(memory, gone))
-        self.assertTrue(hasattr(memory, "make_formula"), "the LIVE formula half must survive")
-
-
 if __name__ == "__main__":
     unittest.main()

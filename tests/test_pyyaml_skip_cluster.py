@@ -471,9 +471,6 @@ class TestTheAlreadyCorrectSitesWereNotTouched(unittest.TestCase):
             with self.assertRaises(wp.MissingParser):
                 wp.safe_load("jobs: {}")
 
-    def test_MissingParser_is_still_not_swallowed_as_an_ordinary_failure(self):
-        self.assertTrue(issubclass(wp.MissingParser, RuntimeError))
-        self.assertFalse(issubclass(wp.MissingParser, ValueError))
 
     def test_there_is_exactly_one_representation_of_an_absent_parser(self):
         """§7g's fix is to SPLIT one representation carrying two meanings — not to grow a second

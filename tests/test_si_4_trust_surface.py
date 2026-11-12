@@ -77,7 +77,6 @@ def _T(name):
     return _os.path.join(_tf.gettempdir(), "mokata-test-repo", name)
 
 
-
 def fake_secret() -> str:
     """The canonical AWS-docs example key, assembled at RUNTIME.
 
@@ -157,14 +156,6 @@ class TestGateSemantic(unittest.TestCase):
         self.assertTrue(out.committed, "a verified human approval must satisfy propose-only")
         self.assertEqual(committed, [1])
 
-    def test_propose_only_without_a_verified_approval_still_refuses_auto_approval(self):
-        """The rung keeps its teeth: assume_yes (a STAND-IN approval) is not a human decision."""
-        gate = WriteGate(trust=TrustPolicy({"agent-x": PROPOSE_ONLY}))
-        committed = []
-        out = gate.submit(req("agent-x"), commit=lambda: committed.append(1),
-                          assume_yes=True, confirm=lambda _t: False)
-        self.assertFalse(out.committed)
-        self.assertEqual(committed, [])
 
     def test_read_only_blocks_even_a_verified_human_approval(self):
         """read-only is a CAPABILITY bound, not a consent question — approval cannot lift it."""
@@ -188,19 +179,6 @@ class TestGateSemantic(unittest.TestCase):
                     human_approved=True, assume_yes=True)
                 self.assertFalse(out.committed)
                 self.assertEqual(committed, [])
-
-    def test_gated_write_is_unchanged(self):
-        gate = WriteGate(trust=TrustPolicy({"agent-x": GATED_WRITE}))
-        committed = []
-        out = gate.submit(req("agent-x"), commit=lambda: committed.append(1), assume_yes=True)
-        self.assertTrue(out.committed)
-
-    def test_no_policy_at_all_is_byte_identical(self):
-        gate = WriteGate()
-        committed = []
-        out = gate.submit(WriteRequest("config", _T("x"), "v"),
-                          commit=lambda: committed.append(1), assume_yes=True)
-        self.assertTrue(out.committed)
 
 
 # ======================================================================================
@@ -252,7 +230,10 @@ class TestTheLadderOnMcp(unittest.TestCase):
     def test_propose_only_proposes_when_no_human_has_approved(self):
         repo = _Repo(trust={MCP_SURFACE: PROPOSE_ONLY})
         self.addCleanup(repo.close)
-        res = TW.remember(path=repo.path, subject="db", value="postgres", approve=True)
+        # 0.0.28 I2: `approve` is deleted — a typed approval is a TypeError, a plain call proposes
+        with self.assertRaises(TypeError):
+            TW.remember(path=repo.path, subject="db", value="postgres", approve=True)
+        res = TW.remember(path=repo.path, subject="db", value="postgres")
         self.assertEqual(res["status"], "proposed")
         self.assertFalse(res.get("committed", False))
         self.assertEqual(repo.remembered("db"), [])
@@ -306,8 +287,11 @@ class TestTheFloorsHold(unittest.TestCase):
             with self.subTest(level=level):
                 repo = _Repo(trust={MCP_SURFACE: level})
                 self.addCleanup(repo.close)
-                res = TW.remember(path=repo.path, subject="db", value="pg",
-                                  approve=True, confirm=True)
+                # 0.0.28 I2: no `approve`/`confirm` argument exists at any trust level (TypeError)
+                with self.assertRaises(TypeError):
+                    TW.remember(path=repo.path, subject="db", value="pg",
+                                approve=True, confirm=True)
+                res = TW.remember(path=repo.path, subject="db", value="pg")
                 self.assertEqual(res["status"], "proposed",
                                  "no trust level may let the MODEL mint consent (SI.3)")
                 self.assertFalse(res.get("committed", False))

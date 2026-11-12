@@ -115,13 +115,15 @@ def _ask_tool(argv, root: str, environ: Optional[Mapping[str, str]] = None) -> O
     exe = which_in(argv[0], path_dirs({"PATH": path}, cwd=root), refuse_under=root)
     if not exe:
         return None
+    from .quiet_spawn import run_jobbed
     try:
-        proc = subprocess.run([exe, *argv[1:]], cwd=root, capture_output=True, text=True,
-                              stdin=subprocess.DEVNULL, timeout=TOOL_TIMEOUT_SECONDS)
+        # Through the process door (0.0.28 lane B): `poetry.exe` / `pipenv.exe` are launchers, so
+        # on a timeout the whole tree is ended and no grandchild holding a pipe can hang this.
+        rc, stdout, _err = run_jobbed([exe, *argv[1:]], cwd=root, timeout=TOOL_TIMEOUT_SECONDS)
     except (OSError, subprocess.SubprocessError):
         return None
-    out = (proc.stdout or "").strip().splitlines()
-    if proc.returncode != 0 or not out:
+    out = (stdout or "").strip().splitlines()
+    if rc != 0 or not out:
         return None
     candidate = out[-1].strip()
     return candidate if os.path.isdir(candidate) else None

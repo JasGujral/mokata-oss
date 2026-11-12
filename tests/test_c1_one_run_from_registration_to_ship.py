@@ -127,6 +127,7 @@ class BLifeFuTheHarnessHasParity(unittest.TestCase):
 
     def test_the_mcp_twins_say_what_the_cli_says(self):
         from mokata.mcp.tools_read import progress_mark, run_finish
+        from mokata.mcp.validation import ValidationError
         with tempfile.TemporaryDirectory() as d:
             _repo_with_runs(d, "r1")
             marked = progress_mark(path=d, stage="ship")
@@ -135,8 +136,14 @@ class BLifeFuTheHarnessHasParity(unittest.TestCase):
             done = run_finish(path=d, landing="discarded")
             self.assertTrue(done["recorded"], done)
             self.assertEqual("mokata progress: run r1 finished (discarded).", done["message"])
-            self.assertFalse(run_finish(path=d, landing="")["recorded"])
-            self.assertFalse(progress_mark(path=d, stage="nowhere")["recorded"])
+            # 0.0.28 I2: a caller fault (empty `landing`, unknown `stage`) is RAISED as a
+            # ValidationError on a direct call, not returned as `recorded: False`.
+            with self.assertRaises(ValidationError) as cm:
+                run_finish(path=d, landing="")
+            self.assertEqual("landing", cm.exception.field)
+            with self.assertRaises(ValidationError) as cm:
+                progress_mark(path=d, stage="nowhere")
+            self.assertEqual("stage", cm.exception.field)
 
     def test_the_mcp_mark_refuses_an_ambiguous_run_like_the_cli(self):
         from mokata.mcp.tools_read import progress_mark

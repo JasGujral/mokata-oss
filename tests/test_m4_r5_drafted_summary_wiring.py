@@ -384,15 +384,18 @@ class TestTheMcpSurface(unittest.TestCase):
             self.assertNotIn("A drafted summary.", values)
 
     def test_the_model_cannot_approve_its_own_draft(self):
-        """SI.3 — `approve=True` is accepted for schema stability but commits nothing."""
+        """SI.3 — there is no `approve`/`confirm` argument at all; a model cannot pass one."""
         from mokata.mcp.tools_memory import consolidate
         with tempfile.TemporaryDirectory() as d:
             _repo_with_turns(d)
-            resp = consolidate(path=d, session="sess-alpha", value="Self-approved.",
-                               approve=True, confirm=True)
+            # 0.0.28 I2: `approve`/`confirm` are DELETED (were "accepted but demoted"), so a direct
+            # call raises TypeError (over MCP: refused invalid_input) and nothing is written.
+            for flags in (dict(approve=True), dict(confirm=True), dict(approve=True, confirm=True)):
+                with self.assertRaises(TypeError):
+                    consolidate(path=d, session="sess-alpha", value="Self-approved.", **flags)
+            resp = consolidate(path=d, session="sess-alpha", value="Self-approved.")
             self.assertEqual(resp.get("status"), "proposed",
-                             "`approve=True` is accepted for schema stability but DEMOTED — it "
-                             "must still come back as a proposal, never a commit")
+                             "a plain call must come back as a proposal, never a commit")
             values = [i.value for i in _store(d).backend.all()]
             self.assertNotIn("Self-approved.", values,
                              "there must be no argument a model can pass that reaches a write")
@@ -401,11 +404,20 @@ class TestTheMcpSurface(unittest.TestCase):
         from mokata.mcp.tools_memory import consolidate
         with tempfile.TemporaryDirectory() as d:
             _repo_with_turns(d)
-            self.assertEqual(consolidate(path=d, session="sess-alpha")["status"], "error")
-            self.assertEqual(consolidate(path=d, value="x")["status"], "error")
-            unknown = consolidate(path=d, session="nope", value="x")
-            self.assertEqual(unknown["status"], "error")
-            self.assertIn("no summarize proposal", unknown["message"])
+            # 0.0.28 I2: `session`/`value` are required keyword-only (omitting one is a TypeError),
+            # and caller faults are RAISED as ValidationError instead of returned as "error".
+            with self.assertRaises(TypeError):
+                consolidate(path=d, session="sess-alpha")
+            with self.assertRaises(TypeError):
+                consolidate(path=d, value="x")
+            from mokata.mcp.validation import ValidationError
+            with self.assertRaises(ValidationError) as cm:
+                consolidate(path=d, session="sess-alpha", value="  ")
+            self.assertEqual(cm.exception.field, "value")
+            with self.assertRaises(ValidationError) as cm:
+                consolidate(path=d, session="nope", value="x")
+            self.assertEqual(cm.exception.field, "session")
+            self.assertIn("no summarize proposal", cm.exception.reason)
 
 
 class TestTheDegradeContractSurvives(unittest.TestCase):

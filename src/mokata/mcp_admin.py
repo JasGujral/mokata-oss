@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from . import __version__
+from . import __version__, quiet_spawn
 from .bounded_io import read_bounded, read_line_bounded
 from .harness_paths import (MCP_APPROVE_TOOL_ASK, MCP_SERVER_NAME,
                             MCP_TOOL_PERMISSION, claude_mcp_config_path,
@@ -102,20 +102,20 @@ _INIT_REQUEST = {
 }
 
 
-def _terminate(proc: subprocess.Popen) -> None:
+def _terminate(tree: "quiet_spawn.Jobbed") -> None:
+    """End the whole tree through the door (the only kill), THEN close our ends of the pipes.
+
+    The order is the fix (0.0.28 I1): a timed-out bounded read leaves its reader thread blocked in
+    `read()` holding the stream's lock, and a grandchild that inherited the server's stdout keeps
+    that read from ever seeing EOF. Closing the stream first then blocked on the lock forever — a
+    `mokata mcp status` that never returned. Ending the tree first gives the reader its EOF."""
+    tree.close()
+    proc = tree.proc
     for stream in (proc.stdin, proc.stdout, proc.stderr):
         try:
             if stream is not None:
                 stream.close()
-        except Exception:
-            pass
-    try:
-        proc.terminate()
-        proc.wait(timeout=2)
-    except Exception:
-        try:
-            proc.kill()
-        except Exception:
+        except OSError:
             pass
 
 
@@ -126,9 +126,10 @@ def handshake(command: str, args: Optional[List[str]] = None,
     exception escapes."""
     argv = [command] + list(args or [])
     try:
-        proc = subprocess.Popen(
-            argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, text=True)
+        # 0.0.28 I1 — through the process door: the server under test is a TREE (uvx → python),
+        # and every exit path below ends all of it (`_terminate` → `Jobbed.close`).
+        tree = quiet_spawn.spawn_jobbed(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE, text=True)
     except FileNotFoundError:
         return HandshakeResult(
             False, "command_not_found",
@@ -138,6 +139,7 @@ def handshake(command: str, args: Optional[List[str]] = None,
         return HandshakeResult(
             False, "error", f"could not launch '{command}': {exc}",
             "check the registered command in your .mcp.json (`mokata mcp install` to repair)")
+    proc = tree.proc
 
     try:
         proc.stdin.write(json.dumps(_INIT_REQUEST) + "\n")
@@ -153,7 +155,7 @@ def handshake(command: str, args: Optional[List[str]] = None,
     # into the same death-classification block below that `holder.get("line") or ""` fed before.
     read = read_line_bounded(proc.stdout, timeout)
     if read.timed_out:
-        _terminate(proc)
+        _terminate(tree)
         return HandshakeResult(
             False, "timeout",
             f"no MCP initialize response within {timeout:.0f}s",
@@ -164,8 +166,8 @@ def handshake(command: str, args: Optional[List[str]] = None,
         # stdout closed with no response: the server died. Classify from its stderr —
         # read it BEFORE terminating (terminate closes the pipe).
         try:
-            proc.wait(timeout=2)
-        except Exception:
+            tree.wait_exit(2)
+        except subprocess.TimeoutExpired:
             pass
         # A1 (0.0.19) — BOUNDED, for the same reason the read above is. `wait(timeout=2)` is
         # best-effort: when it expires the process is still alive and still holding stderr open,
@@ -174,7 +176,7 @@ def handshake(command: str, args: Optional[List[str]] = None,
         # which is precisely when a hang is least welcome. Non-hanging behaviour is unchanged:
         # a dead process EOFs immediately and yields exactly the same text.
         err = (read_bounded(proc.stderr.read, 2.0).text or "").strip()
-        _terminate(proc)
+        _terminate(tree)
         if "No module named 'mcp'" in err or "MCP SDK is not installed" in err:
             return HandshakeResult(
                 False, "sdk_absent",
@@ -186,7 +188,7 @@ def handshake(command: str, args: Optional[List[str]] = None,
             "the server exited without an MCP response" + (f": {tail}" if tail else ""),
             "run `mokata mcp start` to see the server's own error output")
 
-    _terminate(proc)
+    _terminate(tree)
     try:
         msg = json.loads(line)
     except json.JSONDecodeError:
@@ -452,18 +454,20 @@ def _probe_version(command: str, args: Optional[List[str]],
     The env is scrubbed of secrets; the child needs none to print a version."""
     argv = [command] + list(args or []) + ["--version"]
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
-                              env=_scrubbed_env())
+        # 0.0.28 I1 — through the process door: an empty stdin (`MCP-STDIN-INHERITED`: under the MCP
+        # server the caller's input is the JSON-RPC stream), temp-file output no grandchild can
+        # hold open, and the whole tree ended on timeout.
+        rc, out, err = quiet_spawn.run_jobbed(argv, timeout=timeout, env=_scrubbed_env())
     except subprocess.TimeoutExpired:
         return ("timeout", None, f"no --version reply within {timeout:.0f}s")
     except FileNotFoundError:
         return ("probe_failed", None, f"the registered command '{command}' was not found")
     except OSError as exc:
         return ("probe_failed", None, f"could not launch '{command}': {exc}")
-    if proc.returncode != 0:
-        tail = [ln for ln in (proc.stderr or "").strip().splitlines() if ln.strip()]
-        return ("probe_failed", None, tail[-1] if tail else f"exited {proc.returncode}")
-    ver = _parse_version(proc.stdout)
+    if rc != 0:
+        tail = [ln for ln in (err or "").strip().splitlines() if ln.strip()]
+        return ("probe_failed", None, tail[-1] if tail else f"exited {rc}")
+    ver = _parse_version(out)
     if not ver:
         return ("probe_failed", None, "answered --version with no parseable version")
     return ("ok", ver, "")
@@ -653,3 +657,135 @@ def parity_lines(root: str = ".", home: Optional[str] = None, *,
     except Exception as exc:                 # informational path — never raise
         return [f"mokata-mcp: version-parity check skipped ({exc})."]
     return lines
+
+
+# ======================================================================================
+# 0.0.28 I2 — `mokata mcp docs`: the MCP tool reference, RENDERED from the live server
+# ======================================================================================
+# `docs/reference/mcp-tools.md` is this render, byte for byte (tests/test_i2_mcp_docs_derived).
+# One source: the registry's tools as the server builds them (the same docstrings and input schemas
+# `tools/list` sends), plus each tool's CLI twin from `parity.SURFACE_MATRIX`. A hand-written tool
+# reference drifted from the schemas the first time either changed; a render cannot.
+
+_DOCS_HEAD = """\
+# Reference: MCP tools
+
+<!-- GENERATED by `mokata mcp docs` from the live tool schemas. Do not edit by hand:
+     regenerate with `mokata mcp docs > docs/reference/mcp-tools.md`. -->
+
+Every tool below is what the mokata MCP server advertises in `tools/list`: the same description,
+the same parameters. A parameter marked **required** must be sent; every other one has the
+default shown. A closed set of values is listed under *Allowed*; any other value is refused.
+
+## How a call can come back
+
+- **A result.** The tool's own fields, as its *Returns* line describes.
+- **`refused` with `reason_code: "invalid_input"`.** The call itself was wrong: an argument name
+  the tool does not have (`did_you_mean` and `accepted` name the right ones), a required argument
+  missing, a value outside its allowed set, or a boolean given as anything but `true`/`false`.
+  `field` names the argument and `retry_with` gives the corrected call's shape. Nothing ran. The
+  value you sent is never echoed back.
+- **`refused` with `reason_code: "not-initialized"`.** mokata is not set up in that repo. The
+  refusal's `remedyCommand` is `mokata init`; run it in the repo root, then call again.
+- **`error`.** A real fault on mokata's side, with a hint naming its fix.
+
+Arrays and objects may be sent as a JSON string of the same value; integers and numbers as their
+decimal text; booleans as `"true"`/`"false"`.
+
+## Gated writes: the consent flow
+
+A tool marked *write* never writes on its first call. It returns `status: "proposed"` with a
+`proposal_id` and a preview, and nothing is written. A human approves it in their own terminal
+with `mokata approve <id>`; the tool is then called again with the same arguments plus that
+`proposal_id`, and the write happens once. There is no argument a model can set to approve its
+own write.
+
+## First start under the plugin
+
+Installed as the Claude Code plugin, the server starts through `uvx` with the pinned
+`mokata[full]` release, so the very first start downloads it and can take a minute. Until it
+answers, Claude Code shows the server as connecting. `mokata doctor --plugin` checks the route,
+including whether the pinned release resolves.
+
+"""
+
+
+def _doc_type(prop: dict, defs: dict) -> str:
+    """A short, human type for one schema property."""
+    ref = prop.get("$ref")
+    if isinstance(ref, str):
+        return ref.split("/")[-1]
+    if "anyOf" in prop:
+        kinds = [_doc_type(a, defs) for a in prop["anyOf"] if a.get("type") != "null"]
+        return " or ".join(kinds) or "null"
+    if "enum" in prop:
+        return "string"
+    t = prop.get("type", "any")
+    if t == "array":
+        return f"array of {_doc_type(prop.get('items') or {}, defs)}"
+    return str(t)
+
+
+def _doc_enum(prop: dict, defs: dict) -> List[str]:
+    for alt in prop.get("anyOf") or [prop]:
+        ref = alt.get("$ref")
+        alt = defs.get(ref.split("/")[-1], {}) if isinstance(ref, str) else alt
+        if "enum" in alt:
+            return [str(v) for v in alt["enum"]]
+    return []
+
+
+def _doc_cell(text: str) -> str:
+    return " ".join(str(text).split()).replace("|", "\\|")
+
+
+def _doc_example(name: str, schema: dict) -> str:
+    props = schema.get("properties") or {}
+    defs = schema.get("$defs") or {}
+    args = {}
+    for req in schema.get("required") or []:
+        allowed = _doc_enum(props.get(req, {}), defs)
+        typ = _doc_type(props.get(req, {}), defs)
+        args[req] = allowed[0] if allowed else f"<{typ}>"
+    return f"{name}({json.dumps(args, ensure_ascii=False)})"
+
+
+def _cli_twins() -> dict:
+    from .parity import SURFACE_MATRIX
+    twins: dict = {}
+    for command, surface in sorted(SURFACE_MATRIX.items()):
+        for tool in surface.mcp:
+            twins.setdefault(tool, []).append(f"mokata {command}")
+    return twins
+
+
+def render_tool_docs() -> str:
+    """The MCP tool reference as Markdown — `docs/reference/mcp-tools.md` is exactly this."""
+    from .mcp.registry import TOOLS
+    from .mcp.server import build_server
+    kinds = {t.name: t.kind for t in TOOLS}
+    tools = sorted(build_server()._tool_manager.list_tools(), key=lambda t: t.name)
+    twins = _cli_twins()
+    out = [_DOCS_HEAD, "## Tools", ""]
+    out.append(", ".join(f"[`{t.name}`](#{t.name.replace('_', '-')})" for t in tools))
+    out.append("")
+    for t in tools:
+        schema = t.parameters or {}
+        props = schema.get("properties") or {}
+        defs = schema.get("$defs") or {}
+        required = set(schema.get("required") or [])
+        out += [f"### {t.name.replace('_', '-')}", "",
+                f"`{t.name}` · {kinds.get(t.name, 'read')}"
+                + (f" · CLI twin: {', '.join(f'`{c}`' for c in twins[t.name])}"
+                   if t.name in twins else ""), ""]
+        out += [line.rstrip() for line in t.description.strip().splitlines()]
+        out += ["", "| Parameter | Type | Required | Default | Allowed | Meaning |",
+                "|---|---|---|---|---|---|"]
+        for pname, prop in props.items():
+            default = "" if pname in required else json.dumps(prop.get("default"),
+                                                                ensure_ascii=False)
+            out.append("| " + " | ".join(_doc_cell(c) for c in (
+                f"`{pname}`", _doc_type(prop, defs), "yes" if pname in required else "",
+                default, ", ".join(_doc_enum(prop, defs)), prop.get("description", ""))) + " |")
+        out += ["", "Example: `" + _doc_example(t.name, schema).replace("`", "'") + "`", ""]
+    return "\n".join(out).rstrip("\n") + "\n"

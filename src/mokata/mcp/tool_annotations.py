@@ -15,9 +15,32 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 from __future__ import annotations
 
-from typing import Dict
+import inspect
+
+from typing import Any, Dict
 
 READ = "read"
+
+# ======================================================================================
+# 0.0.28 I2 — parameter schema metadata (what `tools/list` tells a model about each argument)
+# ======================================================================================
+# Every tool parameter is `Annotated[T, Field(description=…)]`, closed sets are `Literal[…]` (which
+# FastMCP emits as `enum`), and array items are `TypedDict`s — so a first call made from
+# `tools/list` alone is right. `Field` is pydantic's (pydantic ships with the MCP SDK); in a stripped
+# environment without it the tool functions must still import and run (they are pure and SDK-free),
+# so `Field` then degrades to inert metadata that nothing reads. `TypedDict` and `NotRequired`
+# are the stdlib's (the floor is 3.12, where pydantic accepts `typing.TypedDict`).
+try:
+    from pydantic import Field as Field  # noqa: F401  (re-exported for the tool modules)
+except ImportError:                       # pragma: no cover - a stripped env: no schema is built
+    def Field(*_a: Any, description: str = "", **_k: Any) -> Any:  # type: ignore[misc]
+        return description
+from typing import NotRequired, TypedDict  # noqa: F401,E402  (re-exported for the tool modules)
+
+#: Tools of kind `read` that nonetheless APPEND evidence (the progress/review event log, the session
+#: snapshot). They are not gated writes — nothing is proposed and nothing is destroyed — but they are
+#: not read-only either, so a client is told `readOnlyHint:false, destructiveHint:false`.
+APPEND_ONLY_TOOLS = frozenset({"review_record", "progress_mark", "run_finish", "session_save"})
 WRITE = "write"
 APPROVE = "approve"
 
@@ -111,6 +134,8 @@ def annotations_for(kind: str, name: str) -> Dict[str, bool]:
     An unknown `kind` raises: a NEW kind must be classified here, never silently mis-annotated (a
     drift backstop mirroring the OPEN_WORLD_TOOLS drift-guard)."""
     open_world = name in OPEN_WORLD_TOOLS
+    if kind == READ and name in APPEND_ONLY_TOOLS:
+        return {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": open_world}
     if kind == READ:
         return {"readOnlyHint": True, "openWorldHint": open_world}
     if kind in (WRITE, APPROVE):
@@ -139,23 +164,10 @@ def annotations_for(kind: str, name: str) -> Dict[str, bool]:
 # actually waiting on me?" from the terminal, out-of-band, with no MCP call involved.
 _WRITE_OUTCOMES = """
 
-OUTCOMES — three, and they are NOT interchangeable:
-  (a) a result with status "proposed" and an `awaiting` head — mokata is WAITING ON A HUMAN.
-      Nothing was written and nothing is wrong. Relay the `awaiting` head to the user VERBATIM
-      (it carries the proposal id and the exact command), then STOP and wait. Do not retry, and
-      do not look for another way to make the write happen — there isn't one, by design.
-  (b) NO result, an empty result, or a permission/denial error — the HUMAN DECLINED this call at
-      the harness permission prompt. This is a person saying NO; it is NOT a stuck server and NOT
-      something to retry. Say so plainly, and confirm from the terminal with `mokata approve
-      --list` (out-of-band — it needs no MCP call and works when this boundary does not).
-  (c) a result with status "error" / "degraded" — a genuine fault, in mokata's own voice, naming
-      the stuck resource and its fix. Every mokata tool returns one of these rather than hanging,
-      so silence is never mokata's answer — silence means (b).
-  (d) status "running" — the work is still going (never cut). Re-call with EXACTLY the same
-      arguments to join it and get its result; it never runs twice. Do not redo it via the CLI.
-
-NEVER report a wait as a failure, and never report a decline as a hang. If you cannot tell which
-you got, run `mokata approve --list` and say what it shows."""
+Outcomes: "proposed" is WAITING ON A HUMAN — nothing written; relay the `awaiting` head verbatim, \
+stop, and re-call with `proposal_id` after they approve. No result or a permission denial is HUMAN \
+DECLINED — do not retry (`mokata approve --list` confirms). "error"/"degraded" — a real fault, with \
+its fix. "running" — re-call with the same arguments to join it."""
 
 
 def description_for(kind: str, name: str, doc: str) -> str:
@@ -170,7 +182,9 @@ def description_for(kind: str, name: str, doc: str) -> str:
     write gate, and have no third outcome to distinguish. `approve` is included — it is the one
     tool deliberately kept in `permissions.ask`, so it is the MOST likely of all of them to come
     back as outcome (b)."""
-    text = (doc or "").strip()
+    # 0.0.28 I2: dedented (`inspect.cleandoc`) — a docstring's source indentation is bytes a
+    # model reads as nothing, and some tool docstrings are indented while others are not.
+    text = inspect.cleandoc(doc or "")
     if kind == READ:
         return text
     return f"{text}{_WRITE_OUTCOMES}"

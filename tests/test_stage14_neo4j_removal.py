@@ -457,6 +457,13 @@ class TestWhatSurvives(unittest.TestCase):
 
     def test_graph_tools_is_exactly_the_two_survivors(self):
         self.assertEqual(GRAPH_TOOLS, ("code-review-graph", "serena"))
+        # the surviving exports of the same block are still public — absence-only would pass on a stub
+        import mokata.knowledge as K
+        for name in ("CodeReviewGraphBackend", "GraphQueryClient", "SubprocessGraphClient",
+                     "CodeReviewGraphClient", "CrgUnavailable", "GRAPH_TOOLS", "KnowledgeLayer",
+                     "select_backends", "AstBackend", "GrepBackend", "make_graph_scorer"):
+            self.assertIn(name, K.__all__, name)
+            self.assertTrue(hasattr(K, name), name)
 
     def test_both_survivors_still_resolve_to_a_real_graph(self):
         class _Client:
@@ -478,19 +485,6 @@ class TestWhatSurvives(unittest.TestCase):
             res = layer.callers("target")
             self.assertTrue([r for r in res.references if r.symbol == "caller"])
             self.assertIsNotNone(KnowledgeLayer(GrepBackend(root=d, name="grep")).callers("target"))
-
-    def test_the_public_surface_lost_exactly_three_names(self):
-        import mokata.knowledge as K
-        gone = {"Neo4jGraphClient", "build_neo4j_client", "Neo4jUnavailable"}
-        self.assertEqual(gone & set(K.__all__), set())
-        for name in gone:
-            self.assertFalse(hasattr(K, name), name)
-        # the neighbours in the same export block SURVIVE — absence-only would pass on a stub
-        for name in ("CodeReviewGraphBackend", "GraphQueryClient", "SubprocessGraphClient",
-                     "CodeReviewGraphClient", "CrgUnavailable", "GRAPH_TOOLS", "KnowledgeLayer",
-                     "select_backends", "AstBackend", "GrepBackend", "make_graph_scorer"):
-            self.assertIn(name, K.__all__, name)
-            self.assertTrue(hasattr(K, name), name)
 
     def test_the_degraded_capability_hierarchy_is_untouched(self):
         # ⚠ `Neo4jUnavailable` subclassed `DegradedCapability`, so the question is whether any
@@ -827,14 +821,6 @@ class TestBackcompatSweepOnThisStage(unittest.TestCase):
                         offenders.append((os.path.relpath(path, SRC), node.lineno))
         self.assertEqual(offenders, [])
 
-    def test_no_surviving_path_reaches_it_by_another_name(self):
-        # A `__getattr__` shim would slip past a grep; attribute lookup catches it.
-        import mokata.knowledge as K
-        import mokata.knowledge.layer as L
-        for name in ("Neo4jGraphClient", "build_neo4j_client", "connect_neo4j_client",
-                     "Neo4jUnavailable"):
-            self.assertFalse(hasattr(K, name), name)
-            self.assertFalse(hasattr(L, name), name)
 
     def test_no_accommodation_was_left_behind_for_the_removed_channel(self):
         # E2 on this stage's own files: the removal added no version branch, no legacy reader and

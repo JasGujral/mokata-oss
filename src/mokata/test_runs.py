@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from .state import StateStore
 from .tdd_state import state_dir
@@ -47,6 +47,55 @@ def _map(raw: Any) -> Dict[str, List[str]]:
             if isinstance(k, str) and isinstance(v, list) and _ids(v)}
 
 
+#: 0.0.28 D (`TEST-RUN-NOT-RUN-LABELS`, ruling D-Q1) — a test run is EXACTLY ONE of these, stored as
+#: `last_suite.verdict` (it replaced the `passed` bool: a bool cannot say "cancelled" or "not all
+#: ran", and every reader that tested it said "FAILED" for both).
+PASSED, FAILED, CANCELLED, NOT_ALL_RAN = "passed", "failed", "cancelled", "not-all-ran"
+VERDICTS = (PASSED, FAILED, CANCELLED, NOT_ALL_RAN)
+#: What a record without a verdict is: written before 0.0.28 (or damaged). Refused loudly — data the
+#: user owns is never shimmed (CLAUDE.md, pre-1.0).
+UNREADABLE_SUITE = "unreadable"
+OLD_RECORD = ("the last recorded test run cannot be read (it has no verdict: it was recorded before "
+              "mokata 0.0.28, or the record is damaged) — re-run the tests")
+
+
+def verdict_of(failed: int, not_run: int, complete: bool) -> str:
+    """The rule, in its order: any red -> failed; else any test that did not run -> not-all-ran;
+    else a run that did not finish -> cancelled; else passed."""
+    if failed:
+        return FAILED
+    if not_run:
+        return NOT_ALL_RAN
+    if not complete:
+        return CANCELLED
+    return PASSED
+
+
+def suite_verdict(suite: Any) -> Tuple[str, str]:
+    """THE one reader of a recorded test run: `(verdict, words)`. Every consumer (the Stop gate, the
+    merge gate, the review panel, the proof route) says these words and tests no bool. A record
+    with no verdict reads `unreadable` with the instruction to re-run the tests."""
+    v = suite.get("verdict") if isinstance(suite, dict) else None
+    if v not in VERDICTS:
+        return UNREADABLE_SUITE, OLD_RECORD
+    why = suite.get("reason") if isinstance(suite.get("reason"), str) else ""
+    if v == PASSED:
+        return v, "the last recorded test run passed"
+    if v == FAILED:
+        return v, "the last recorded test run FAILED" + (f": {why}" if why else "")
+    if v == CANCELLED:
+        return v, ("the last recorded test run was CANCELLED before it finished"
+                   + (f" ({why})" if why else "") + " — re-run the tests")
+    return v, "NOT ALL tests ran in the last recorded test run" + (f": {why}" if why else "")
+
+
+def _suite(raw: Any) -> Optional[Dict[str, Any]]:
+    """The stored suite as readers see it: with `said` — the one reader's words — beside it."""
+    if not isinstance(raw, dict):
+        return None
+    return {**raw, "said": suite_verdict(raw)[1]}
+
+
 def read_test_record(root: str, run_id: Optional[str]) -> Dict[str, Any]:
     """`{"last_suite": {...} | None, "ac_tests": {AC: [ids]}, "planned": {AC: [ids]}}` — ONE
     lock-free read; an absent or unreadable record reads as empty (and the gate that reads it then
@@ -58,8 +107,7 @@ def read_test_record(root: str, run_id: Optional[str]) -> Dict[str, Any]:
         except Exception:  # noqa: BLE001 — a hook read never raises; empty IS no evidence
             data = None
     data = data if isinstance(data, dict) else {}
-    suite = data.get("last_suite")
-    return {"last_suite": suite if isinstance(suite, dict) else None,
+    return {"last_suite": _suite(data.get("last_suite")),
             "ac_tests": _map(data.get("ac_tests")), "planned": _map(data.get("planned")),
             "tests": _history(data.get("tests")), "qualified": _qualified(data.get("qualified"))}
 
@@ -78,7 +126,10 @@ def read_test_record_strict(root: str, run_id: str) -> Any:
     if not isinstance(data, dict):
         return StrictRead(UNREADABLE, reason="is not a test record (wrong shape)", path=got.path)
     suite = data.get("last_suite")
-    return StrictRead(OK, {"last_suite": suite if isinstance(suite, dict) else None,
+    if isinstance(suite, dict) and suite_verdict(suite)[0] == UNREADABLE_SUITE:
+        # a run recorded before the verdict existed: refused loudly, with what to do (D-Q1)
+        return StrictRead(UNREADABLE, reason=OLD_RECORD, path=got.path)
+    return StrictRead(OK, {"last_suite": _suite(suite),
                            "ac_tests": _map(data.get("ac_tests")),
                            "planned": _map(data.get("planned")),
                            "tests": _history(data.get("tests")),
@@ -112,7 +163,11 @@ def _history(raw: Any) -> Dict[str, Dict[str, Any]]:
                   "first": v.get("first") if v.get("first") in ("red", "green") else None,
                   # the test's content stamp at its latest outcome (`test_ids.py_test_defs`): a
                   # proof does not outlive an edit to the test (P13 round 6, J4)
-                  "stamp": v.get("stamp") if isinstance(v.get("stamp"), str) else None}
+                  "stamp": v.get("stamp") if isinstance(v.get("stamp"), str) else None,
+                  # 0.0.28 E2: the repo-relative REAL file each outcome ran against
+                  # (`test_ids.stamp_target`), in clear; absent on a record from before 0.0.28,
+                  # which then never proves ("re-run it red, then green")
+                  **{k: v[k] for k in TARGET_KEYS if isinstance(v.get(k), str)}}
     return out
 
 
@@ -120,15 +175,28 @@ def _t(v: Any) -> Optional[float]:
     return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
 
+#: 0.0.28 E2 — the file the latest RED ran against, the latest GREEN, and the latest outcome.
+TARGET_KEYS = ("red_target", "green_target", "target")
+
+
 def _advance(hist: Dict[str, Dict[str, Any]], ids: Iterable[str], passed: bool,
-             at: float, stamps: Optional[Dict[str, Optional[str]]] = None
-             ) -> Dict[str, Dict[str, Any]]:
+             at: float, stamps: Optional[Dict[str, Optional[str]]] = None,
+             targets: Optional[Dict[str, str]] = None) -> Dict[str, Dict[str, Any]]:
     """One recorded outcome for each test id, folded into the per-test history (with the test's
-    content stamp at that moment, when it could be read)."""
+    content stamp at that moment, when it could be read, and — 0.0.28 E2 — the file it ran against:
+    `target`, and `green_target` / `red_target` for this outcome's side). A target is written on
+    EVERY outcome; one that cannot be told is DELETED, never carried over from an earlier outcome."""
+    side = "green_target" if passed else "red_target"
     for tid in ids:
         h = dict(hist.get(tid) or {})
         if stamps is not None and tid in stamps:
             h["stamp"] = stamps[tid]
+        got = (targets or {}).get(tid)
+        if isinstance(got, str) and got:
+            h["target"] = h[side] = got
+        else:
+            h.pop("target", None)
+            h.pop(side, None)
         if h.get("first") is None and h.get("last_at") is None:
             h["first"] = "green" if passed else "red"
         if passed:
@@ -205,10 +273,19 @@ def _note_qualified(cur: Dict[str, List[str]], full: Dict[str, str]) -> Dict[str
 
 def stamps_of(root: str, ids: Iterable[str]) -> Dict[str, Optional[str]]:
     """Each full id's content stamp as the tree holds it NOW — the test, the non-test code of its
-    scopes and the conftest.py files on its path (`test_ids.stamp_of`); None: no file, no such
-    test. Each file read once."""
-    from .test_ids import stamp_of, test_key_of, test_path_of
+    scopes and the conftest.py files on its path and its real path (`test_ids.stamp_of`); None: no
+    file, no such test. Each file read once."""
+    return _stamps_and_targets(root, ids)[0]
+
+
+def _stamps_and_targets(root: str, ids: Iterable[str]
+                        ) -> Tuple[Dict[str, Optional[str]], Dict[str, str]]:
+    """`(stamps, targets)` of each id that names a file: its stamp (`stamps_of`) and the file it
+    opens NOW (`test_ids.stamp_target` of the id's path as typed) — what a recorded outcome binds."""
+    from .test_ids import (TARGET_STATES, raw_path_of, stamp_of, stamp_target, test_key_of,
+                           test_path_of)
     out: Dict[str, Optional[str]] = {}
+    targets: Dict[str, str] = {}
     texts: Dict[str, Optional[str]] = {}
 
     def read(rel: str) -> Optional[str]:
@@ -223,8 +300,10 @@ def stamps_of(root: str, ids: Iterable[str]) -> Dict[str, Optional[str]]:
     for tid in ids:
         p = test_path_of(tid)
         if p:
-            out[tid] = stamp_of(p, read(p), test_key_of(tid), read=read)
-    return out
+            targets[tid] = tgt = stamp_target(root, raw_path_of(tid))
+            out[tid] = stamp_of(p, read(p), test_key_of(tid), read=read,
+                                real=None if tgt in TARGET_STATES else tgt)
+    return out, targets
 
 
 def record_test_run(root: str, run_id: str, *, passed: bool, command: str = "",
@@ -233,7 +312,9 @@ def record_test_run(root: str, run_id: str, *, passed: bool, command: str = "",
                     source: str = "cli", actor: str = "",
                     exit_code: Optional[int] = None,
                     reported: Iterable[str] = (),
-                    tree: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                    tree: Optional[Dict[str, Any]] = None,
+                    not_run: Optional[Dict[str, str]] = None,
+                    complete: bool = True) -> Dict[str, Any]:
     """Record one test run for `run_id`: the last suite run, the named tests RED (failed) or GREEN
     (passed) in the TDD record, and any AC→test pairs. Returns the stored `last_suite`.
 
@@ -242,7 +323,12 @@ def record_test_run(root: str, run_id: str, *, passed: bool, command: str = "",
     are the run's provenance and are stored with it. `reported` is what the TEST RUNNER itself
     said it ran (its full ids, `test_ids.runner_ids`): the only thing a bare name is ever
     qualified against (K1). `tree` (P21) is where the run happened as git said it — the worktree,
-    its head and cleanliness before and after, and the scope — stored with the run, never derived."""
+    its head and cleanliness before and after, and the scope — stored with the run, never derived.
+
+    0.0.28 D: the run's `verdict` (`verdict_of`) replaces the old `passed` bool. `passed` is the
+    runner's own word for the run (exit 0); `not_run` ({test: why}) names tests that never ran (not an
+    outcome: never RED, never GREEN); `complete=False` is a run that was cancelled part-way. Stored
+    with `reason` (unless passed) and the `failed` / `not_run` id lists."""
     if not run_id:
         raise ValueError("no run to record the test run against — name it with --run")
     if source not in SOURCES:
@@ -272,7 +358,14 @@ def record_test_run(root: str, run_id: str, *, passed: bool, command: str = "",
     elif ids:
         record(store, run_id, **({"green": typed_too(ids)} if passed else {"red": typed_too(ids)}))
     when = time.time() if at is None else at
-    suite = {"at": when, "passed": bool(passed),
+    # each test's own outcome when the run says it (`results`); otherwise the run's own word
+    failed = _ids(t for t, v in results.items() if not v) if results else ([] if passed else ids)
+    skipped = {t.strip()[:ID_CHARS]: (w or "")[:300] for t, w in (not_run or {}).items()
+               if isinstance(t, str) and t.strip()}
+    verdict = FAILED if not passed and not failed else verdict_of(len(failed), len(skipped),
+                                                                 complete)
+    suite = {"at": when, "verdict": verdict, "reason": _reason(verdict, failed, skipped, exit_code),
+             "failed": failed, "not_run": sorted(skipped),
              "command": (command or "").strip()[:ID_CHARS], "tests": ids,
              "source": source, "actor": (actor or "")[:ID_CHARS],
              "exit_code": exit_code if isinstance(exit_code, int) else None}
@@ -291,16 +384,34 @@ def record_test_run(root: str, run_id: str, *, passed: bool, command: str = "",
                 "tests": _fold(_history(cur.get("tests"))),
                 "qualified": _note_qualified(_qualified(cur.get("qualified")), full)}
 
-    stamps = stamps_of(root, ids)
+    stamps, targets = _stamps_and_targets(root, ids)
 
     def _fold(hist: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         hist = _advance(hist, [t for t in ids if outcomes.get(t, bool(passed))], True, when,
-                        stamps)
+                        stamps, targets)
         return _advance(hist, [t for t in ids if not outcomes.get(t, bool(passed))], False, when,
-                        stamps)
+                        stamps, targets)
 
     store.update(key(run_id), _mutate, default=None)
     return suite
+
+
+def _reason(verdict: str, failed: List[str], not_run: Dict[str, str],
+            exit_code: Optional[int]) -> str:
+    """Why a run is not `passed`, in words ("" when it is)."""
+    if verdict == PASSED:
+        return ""
+    if verdict == FAILED:
+        if failed:
+            return f"{len(failed)} test(s) failed: " + ", ".join(failed[:5]) + \
+                (f" and {len(failed) - 5} more" if len(failed) > 5 else "")
+        return "the test command failed" + (f" (exit {exit_code})" if isinstance(exit_code, int)
+                                            else "")
+    if verdict == NOT_ALL_RAN:
+        first = next(iter(sorted(not_run.items())), ("", ""))
+        return (f"{len(not_run)} test(s) did not run" + (f" — {first[0]}: {first[1]}" if first[1]
+                                                         else ""))
+    return "the run was cancelled before every test had run"
 
 
 def record_outcome(store: StateStore, run_id: str, tests: Iterable[str], *, passed: bool,
@@ -318,16 +429,18 @@ def record_outcome(store: StateStore, run_id: str, tests: Iterable[str], *, pass
     from .tdd_state import root_of_state_dir
     root = root_of_state_dir(getattr(store, "root", "") or "")
     stamps: Dict[str, Optional[str]] = {}
+    targets: Dict[str, str] = {}
     full: Dict[str, str] = {}
     if root:
         full = full_ids(root, run_id, ids)
         ids = _ids(full.get(t, t) for t in ids)
-        stamps = stamps_of(root, ids)
+        stamps, targets = _stamps_and_targets(root, ids)
 
     def _mutate(cur: Any) -> Dict[str, Any]:
         cur = dict(cur) if isinstance(cur, dict) else {}
         cur.update(run_id=run_id,
-                   tests=_advance(_history(cur.get("tests")), ids, passed, when, stamps),
+                   tests=_advance(_history(cur.get("tests")), ids, passed, when, stamps,
+                                     targets),
                    qualified=_note_qualified(_qualified(cur.get("qualified")), full))
         return cur
 
@@ -362,5 +475,6 @@ def mapped_tests(record: Dict[str, Any], ac: str) -> List[str]:
     return _ids(record["ac_tests"].get(ac, []) + record["planned"].get(ac, []))
 
 
-__all__ = ["SOURCES", "TEST_RUNS_PREFIX", "key", "read_test_record", "read_test_record_strict", "parse_ac_pairs", "record_test_run",
-           "record_outcome", "seed_ac_map", "mapped_tests", "full_ids", "stamps_of"]
+__all__ = ["SOURCES", "TEST_RUNS_PREFIX", "VERDICTS", "PASSED", "FAILED", "CANCELLED", "NOT_ALL_RAN",
+           "UNREADABLE_SUITE", "OLD_RECORD", "verdict_of", "suite_verdict", "key", "read_test_record", "read_test_record_strict", "parse_ac_pairs", "record_test_run",
+           "record_outcome", "seed_ac_map", "mapped_tests", "full_ids", "stamps_of", "TARGET_KEYS"]

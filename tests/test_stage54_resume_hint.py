@@ -1,10 +1,13 @@
-"""Stage 54 — proactive resume surfacing in the SessionStart briefing.
+"""Stage 54 — proactive resume surfacing in the SessionStart briefing, on ONE derivation (0.0.28 F).
 
-On SessionStart, if there's a resumable run (a session with a passed gate) and/or an
-in-progress brainstorm, the briefing says so in ONE line (max two) — so reopening a repo
-TELLS you there's something to pick up. Composes the existing primitives
-(progress.list_sessions + brainstorm.restore_brainstorm_progress) read-only; degrade-clean;
-within the 2k briefing budget; absent (no noise) when there's nothing to resume.
+When you reopen a repo with a run mid-flight, the briefing says what that run owes next in ONE
+line — the primary hint of `hints.derive` (what `mokata suggest` says), its command, for its run.
+Nothing is said when there is nothing owed (no run, a finished run); an unreadable store is said as
+unknown. The line fits the briefing budget and building it writes nothing.
+
+Rewritten, not shimmed, by 0.0.28 F: the old two hand-written lines (`Resume: pipeline at …`,
+`Resume: in-progress brainstorm …`) were a second derivation that could name a different command
+than `mokata suggest` on the same state. They are gone.
 """
 
 import os
@@ -13,19 +16,10 @@ import unittest
 
 from _support import sample_manifest_data  # noqa: F401  (path fix side-effect)
 
-from mokata.bootstrap import (
-    BOOTSTRAP_TOKEN_BUDGET,
-    build_bootstrap,
-    build_resume_hint,
-)
-from mokata.brainstorm import (
-    Approach,
-    BrainstormSession,
-    save_brainstorm_progress,
-)
+from mokata import hints as H
+from mokata.bootstrap import BOOTSTRAP_TOKEN_BUDGET, build_bootstrap
 from mokata.config import Surface
 from mokata.govern import PipelineCheckpoint
-from mokata.memory import MemoryStore
 
 
 def _repo(d, profile="standard"):
@@ -34,135 +28,82 @@ def _repo(d, profile="standard"):
     return Surface.load(d)
 
 
-def _in_progress_session(topic="slugify"):
-    s = BrainstormSession(topic)
-    s.ask("unicode or ascii-only?")
-    s.answer("ascii-only")
-    s.propose_approaches([
-        Approach("regex", "strip via regex", pros=["tiny"], cons=["edge cases"]),
-        Approach("library", "use a slug lib", pros=["robust"], cons=["a dependency"]),
-    ])
-    return s  # deliberately NOT approved — mid-stream
+def _state_snapshot(root):
+    out = {}
+    for dp, _dn, fns in os.walk(os.path.join(root, ".mokata")):
+        for fn in fns:
+            if fn.endswith("-shm"):         # SQLite's shared-memory index: every reader maps it
+                continue
+            p = os.path.join(dp, fn)
+            with open(p, "rb") as fh:
+                out[p] = fh.read()
+    return out
 
 
 class TestResumeHint(unittest.TestCase):
-    # ----------------------------------------------------------- resumable run
-    def test_resumable_run_surfaces_in_briefing(self):
+
+    def test_a_run_mid_flight_is_named_with_the_command_suggest_gives(self):
         with tempfile.TemporaryDirectory() as d:
+            d = os.path.realpath(d)
             surface = _repo(d)
-            cp = PipelineCheckpoint(surface.state, "run-a")
-            cp.mark_passed("brainstorm")
-            cp.mark_passed("analysis")
-
-            hint = build_resume_hint(surface)
-            self.assertIsNotNone(hint)
-            self.assertIn("Resume:", hint)
-            self.assertIn("strawman", hint)          # the phase resume continues at
-            self.assertIn("analysis", hint)          # the last passed gate
-            self.assertIn("mokata resume", hint)
-
+            PipelineCheckpoint(surface.state, "run-a").ensure_registered()
+            want = H.primary(H.derive(d))["command"]
             text = build_bootstrap(surface).text
-            self.assertIn("Resume:", text)
-            self.assertIn("strawman", text)
-            self.assertIn("mokata resume", text)
+            self.assertIn("Next step for run run-a", text)
+            self.assertIn(f"`{want}`", text)
+            self.assertNotIn("Resume:", text)
 
-    # ----------------------------------------------------- in-progress brainstorm
-    def test_in_progress_brainstorm_surfaces_in_briefing(self):
+    def test_nothing_owed_says_nothing(self):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
-            save_brainstorm_progress(_in_progress_session("auth-refactor"), surface.state)
+            self.assertNotIn("Next step", build_bootstrap(surface).text)
 
-            hint = build_resume_hint(surface)
-            self.assertIsNotNone(hint)
-            self.assertIn("brainstorm", hint.lower())
-            self.assertIn("/brainstorm", hint)
-            self.assertIn("auth-refactor", hint)     # the topic, for actionability
-
-            text = build_bootstrap(surface).text
-            self.assertIn("/brainstorm", text)
-            self.assertIn("auth-refactor", text)
-
-    def test_both_present_surfaces_both_compactly(self):
-        with tempfile.TemporaryDirectory() as d:
-            surface = _repo(d)
-            PipelineCheckpoint(surface.state, "run-a").mark_passed("brainstorm")
-            save_brainstorm_progress(_in_progress_session(), surface.state)
-
-            hint = build_resume_hint(surface)
-            self.assertIsNotNone(hint)
-            lines = hint.splitlines()
-            self.assertEqual(len(lines), 2)          # both, still ≤ 2 short lines
-            self.assertTrue(any("mokata resume" in ln for ln in lines))
-            self.assertTrue(any("/brainstorm" in ln for ln in lines))
-
-    # ------------------------------------------------------------- no noise
-    def test_nothing_to_resume_no_hint(self):
-        with tempfile.TemporaryDirectory() as d:
-            surface = _repo(d)
-            self.assertIsNone(build_resume_hint(surface))
-            self.assertNotIn("Resume:", build_bootstrap(surface).text)
-
-    def test_complete_run_is_not_resumable(self):
+    def test_a_finished_run_says_nothing(self):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             cp = PipelineCheckpoint(surface.state, "run-c")
-            from mokata.brainstorm import PIPELINE_PHASES
-            for phase in PIPELINE_PHASES:
-                cp.mark_passed(phase)                # fully complete -> nothing to resume
-            self.assertIsNone(build_resume_hint(surface))
+            cp.ensure_registered()
+            surface.state.update("pipeline_run__run-c",
+                                 lambda cur: dict(cur, completed_at="2026-11-01T00:00:00Z"),
+                                 default={})
+            self.assertEqual("none", H.derive(d)["status"])
+            self.assertNotIn("Next step", build_bootstrap(surface).text)
 
-    def test_fresh_run_with_no_passed_gate_is_not_resumable(self):
-        # A persisted checkpoint with nothing passed yet — no progress to pick up, no noise.
+    def test_building_the_line_writes_nothing(self):
+        # the line's derivation is a pure read; the rest of the briefing (the session registry, the
+        # memory store) is not this line's and is not measured here
+        from mokata.bootstrap import resume_line
         with tempfile.TemporaryDirectory() as d:
-            surface = _repo(d)
-            surface.state.write("pipeline_run__fresh", {"run_id": "fresh", "passed": []})
-            self.assertIsNone(build_resume_hint(surface))
-
-    # ------------------------------------------------------- read-only + deterministic
-    def test_building_hint_is_read_only_and_deterministic(self):
-        with tempfile.TemporaryDirectory() as d:
+            d = os.path.realpath(d)
             surface = _repo(d, profile="full")
-            cp = PipelineCheckpoint(surface.state, "run-z")
-            cp.mark_passed("brainstorm")
-            save_brainstorm_progress(_in_progress_session(), surface.state)
+            PipelineCheckpoint(surface.state, "run-z").ensure_registered()
+            before = _state_snapshot(d)
+            first = resume_line(H.derive(d, rules=H.PIPELINE_ONLY))
+            second = resume_line(H.derive(d, rules=H.PIPELINE_ONLY))
+            self.assertEqual(before, _state_snapshot(d))
+            self.assertEqual(first, second)
+            strip = lambda t: [ln for ln in t.splitlines() if "Next step" in ln]  # noqa: E731
+            self.assertEqual([first], strip(build_bootstrap(surface).text))
 
-            before_reads = MemoryStore.from_surface(Surface.load(d)).stats.reads
-            before_cp = surface.state.read("pipeline_run__run-z")
-            before_bp = surface.state.read("brainstorm_progress")
-
-            first = build_resume_hint(surface)
-            second = build_resume_hint(surface)
-
-            self.assertEqual(first, second)          # deterministic
-            after_reads = MemoryStore.from_surface(Surface.load(d)).stats.reads
-            self.assertEqual(after_reads, before_reads)                      # no read bumped
-            self.assertEqual(surface.state.read("pipeline_run__run-z"), before_cp)  # unchanged
-            self.assertEqual(surface.state.read("brainstorm_progress"), before_bp)  # unchanged
-
-    def test_corrupt_brainstorm_checkpoint_degrades_clean(self):
+    def test_an_unreadable_store_is_said_as_unknown(self):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
-            # Write a garbage brainstorm-progress file: must not raise, must not surface.
-            path = surface.state.path("brainstorm_progress")
-            os.makedirs(os.path.dirname(path), exist_ok=True)
+            PipelineCheckpoint(surface.state, "run-u").ensure_registered()
+            path = surface.state.path("pipeline_run__run-u")
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write("{ not valid json")
-            self.assertIsNone(build_resume_hint(surface))      # no error, no hint
-            # and the briefing still builds cleanly
+            text = build_bootstrap(surface).text
+            self.assertIn("mokata: next step unknown — ", text)
             self.assertTrue(build_bootstrap(surface).within_budget)
 
-    # --------------------------------------------------------------- frugal
-    def test_briefing_with_hint_stays_within_budget(self):
+    def test_briefing_with_the_line_stays_within_budget(self):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d, profile="full")
-            cp = PipelineCheckpoint(surface.state, "run-a")
-            cp.mark_passed("brainstorm")
-            cp.mark_passed("analysis")
-            save_brainstorm_progress(_in_progress_session(), surface.state)
+            PipelineCheckpoint(surface.state, "run-a").ensure_registered()
             result = build_bootstrap(surface)
             self.assertTrue(result.within_budget)
             self.assertLessEqual(result.token_estimate, BOOTSTRAP_TOKEN_BUDGET)
-            self.assertIn("Resume:", result.text)              # hint present AND fits
+            self.assertIn("Next step for run run-a", result.text)
 
 
 if __name__ == "__main__":

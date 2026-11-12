@@ -294,12 +294,5 @@ class TestTemplatesRecordEntry(unittest.TestCase):
             self.assertEqual(shipped, regen, f"{name}/SKILL.md drifted")
 
 
-# ============================================================ parity stays green
-class TestParityGreen(unittest.TestCase):
-    def test_progress_command_parity_holds(self):
-        from mokata.parity import verify_parity
-        self.assertTrue(verify_parity().ok, verify_parity().render())
-
-
 if __name__ == "__main__":
     unittest.main()

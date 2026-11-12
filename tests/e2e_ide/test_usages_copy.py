@@ -19,8 +19,7 @@ class CopyRefContextAndUsages(H.IdeFlow):
         super(CopyRefContextAndUsages, cls).setUpClass()
         if cls.no_browser:
             return
-        cls.page.context.grant_permissions(["clipboard-read", "clipboard-write"],
-                                           origin=cls.server.url.split("/?")[0].rstrip("/"))
+        H.grant_clipboard(cls.page, cls.server.url.split("/?")[0].rstrip("/"))
 
     def clip(self):
         return self.page.evaluate("navigator.clipboard.readText()")
@@ -37,7 +36,8 @@ class CopyRefContextAndUsages(H.IdeFlow):
         self.row(6).click(button="right")
         menu = p.locator(".p4-menu")
         menu.wait_for()
-        self.assertEqual(["Copy with Context…", "Find Usages"],
+        # 0.0.28 G (coordinator ruling): the call hierarchy joins the menu after Find Usages
+        self.assertEqual(["Copy with Context…", "Find Usages", "Find Callers", "Find Callees"],
                          menu.locator("button").all_text_contents())
         menu.locator("button", has_text="Copy with Context").click()
         self.assertEqual(0, p.locator(".p4-menu").count(), "the menu stayed open")

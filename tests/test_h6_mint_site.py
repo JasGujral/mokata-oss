@@ -135,6 +135,16 @@ class RidesTheGate(_Base):
     # declined write touches `audit/ledger.jsonl`, its `.count`, and the event database — and
     # nothing else. No memory item, no state key, no file the write named.
     _AUDIT_SURFACES = (".mokata/temp_local/audit", ".mokata/temp_local/events")
+    # ➕ 0.0.28 W5 (`LOCAL-FULL-VENV`): a SQLite `-shm` is not a write either — it is the WAL's
+    # shared-memory INDEX, which every READER updates (its read mark) and which holds no row. SQLite
+    # deletes it when the last connection closes, so on most builds it is in neither snapshot; on
+    # Apple's system libsqlite3 (`SQLITE_FCNTL_PERSIST_WAL` on by default — every pyenv / Command
+    # Line Tools Python on macOS) it stays, and a declined write that only READ `memory.db` changed
+    # its bytes. Skipped by NAME, and only that one: the memory store's own `-shm` (any other
+    # `-shm` a declined write left would be another database it opened — still caught), and the
+    # `-wal` beside it carries committed frames and stays pinned, so a declined write that wrote a
+    # row is still caught. The name is checked against the store's real path below.
+    _NOT_DATA = (".mokata/temp_local/memory/memory.db-shm",)
 
     def _snapshot(self):
         out = {}
@@ -142,7 +152,7 @@ class RidesTheGate(_Base):
             for fn in filenames:
                 ab = os.path.join(dirpath, fn)
                 rel = _support.posix_rel(ab, self.root)
-                if rel.startswith(self._AUDIT_SURFACES):
+                if rel.startswith(self._AUDIT_SURFACES) or rel in self._NOT_DATA:
                     continue
                 try:
                     with open(ab, "rb") as fh:
@@ -150,6 +160,10 @@ class RidesTheGate(_Base):
                 except OSError:
                     out[rel] = b"<unreadable>"
         return out
+
+    def test_the_one_skipped_file_is_the_memory_stores_own_shm(self):
+        self.assertEqual(self._NOT_DATA,
+                         (_support.posix_rel(self.store().backend.path + "-shm", self.root),))
 
     def test_a_declined_write_mints_nothing(self):
         store = self.store()

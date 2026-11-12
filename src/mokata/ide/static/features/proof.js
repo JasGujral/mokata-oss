@@ -223,7 +223,7 @@
     const facts = el("p", "pf-facts",
       `${t.page.total_acs} AC(s) · ${t.page.total_tests} test(s) · ${t.page.total_code} changed definition(s) · ` +
       `${t.files.length} file(s) · graph: ${t.graph.basis}${t.graph.backend ? " (" + t.graph.backend + ")" : ""}` +
-      (t.record.last_suite ? ` · last suite ${t.record.last_suite.passed ? "passed" : "FAILED"} (${t.record.last_suite.command || "?"})` : " · no suite run recorded"));
+      (t.record.last_suite ? ` · ${t.record.last_suite.said || "the last test run cannot be read — re-run the tests"} (${t.record.last_suite.command || "?"})` : " · no suite run recorded"));
     summaryEl.append(facts);
     const chips = el("div", "pf-chips");
     chip(chips, `${r.untested_acs.length} untested AC`, r.untested_acs.length ? "bad" : "ok");
@@ -410,7 +410,13 @@
         noteEl = el("p", "pf-note", "");
         noteEl.setAttribute("role", "status");
         pickEl = el("div", "pf-pick");
-        pick.append(sum, noteEl, pickEl);
+        // 0.0.28 E2: what "proven" is bound to, and what it cannot see (note E §3f)
+        const help = el("p", "pf-note pf-help",
+          "A proof is bound to the file it ran against: its red, its green and its content stamp must be of one " +
+          "real file in this repository. A re-pointed link, a file swapped for a link, or a link that leaves the " +
+          "repository never proves, and the test says which files. Not seen: a hard link or a bind mount (the same " +
+          "bytes under two names), and anything that changed while the test ran.");
+        pick.append(sum, help, noteEl, pickEl);
         view.append(pick);
         summaryEl = el("div", "pf-summary");
         riskEl = el("div", "pf-risk");

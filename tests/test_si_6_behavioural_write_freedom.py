@@ -423,6 +423,7 @@ REFUSED = {
     ("explain/safedir.py", "SafeDir.unlink"): "writes — 0.0.27 P46: the explainer store's visible count-based prune removes generated files under temp_local/reviews/ by purpose, so it cannot be bound as write-free",
     ("briefing_cache.py", "store"): "writes — 0.0.26 O12b: the briefing's background-refreshed answers under temp_local/briefing/ are its whole purpose, so it cannot be bound as write-free",
     ("briefing_cache.py", "derived"): "writes — 0.0.26 O12b: caching the memory-derived briefing lines under temp_local/briefing/ is its purpose, so it cannot be bound as write-free",
+    ("briefing_cache.py", "store_resume"): "writes — 0.0.28 F: storing the per-session next-step answer under temp_local/briefing/ is its purpose, so it cannot be bound as write-free",
     ("briefing_cache.py", "_acquire"): "writes — 0.0.26 O12b: the briefing refresher's lock file is its purpose, so it cannot be bound as write-free",
     ("briefing_cache.py", "_release"): "writes — 0.0.26 O12b: removing the briefing refresher's own lock file is its purpose, so it cannot be bound as write-free",
     ("knowledge/structure_cache.py", "store"): "writes — 0.0.26 O12: the briefing's cached structure line under temp_local/briefing/ is its whole purpose, so it cannot be bound as write-free",
@@ -613,6 +614,14 @@ REFUSED = {
     ("atomicfile.py", "atomic_write_text"): "writes — it IS the write primitive, no target of its own",
     ("atomicfile.py", "_replace"): "writes — the primitive's own rename (Windows retry), no target "
                                    "of its own",
+    ("winacl.py", "make_private_dir"): "writes — 0.0.28 C: the owner-only mkdir primitive, no target "
+                                       "of its own",
+    ("winacl.py", "_staged_create"): "writes — 0.0.28 C: macOS stage dir + link, the private-create "
+                                     "primitive's own mechanism",
+    ("winacl.py", "_unlink"): "writes — 0.0.28 C: removes the file this module just failed to make "
+                              "private (nothing left behind)",
+    ("cli_commands/diagnostics.py", "privacy_lines"): "writes — 0.0.28 C: `doctor --fix` re-creates "
+                                                      "a WEAK private-set record born private, same bytes",
     ("cli_commands/knowledge.py", "cmd_ci_check"): "writes — the CI PR-comment body at --comment-file",
     ("governance_view.py", "write_governance_dashboard"): "writes — derived HTML under temp_local/",
     ("extras_install.py", "record_extra_decline"): "writes — the user's standing decline in ~/.mokata",

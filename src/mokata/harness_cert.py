@@ -444,9 +444,13 @@ def _c5(cl: StdioMcpClient, root: str, subject: str) -> CriterionResult:
         r1 = cl.call("remember", dict(args))
         if r1.get("committed") or r1.get("status") != "proposed":
             bad.append(f"no-id call -> {r1.get('status')}")
+        # 0.0.28 I2: the `approve` flag is DELETED, so "a model cannot self-approve" is now "a
+        # call carrying `approve` is refused as a bad argument, and nothing is written".
         r2 = cl.call("remember", dict(args, approve=True))
-        if r2.get("committed"):
-            bad.append("model-typed approve=true committed")
+        if r2.get("committed") or r2.get("status") != "refused" \
+                or r2.get("reason_code") != "invalid_input":
+            bad.append(f"model-typed approve=true -> {r2.get('status')} "
+                       f"({r2.get('reason_code')})")
         r3 = cl.call("remember", dict(args, proposal_id="p-forged000000"))
         if r3.get("committed") or r3.get("status") != "refused":
             bad.append(f"forged id -> {r3.get('status')}")
@@ -454,8 +458,8 @@ def _c5(cl: StdioMcpClient, root: str, subject: str) -> CriterionResult:
             bad.append("the value is in memory")
         if bad:
             return CriterionResult("C5", FAIL, "gate leaked: " + "; ".join(bad))
-        return CriterionResult("C5", PASS, "proposed / not committed on approve=true / forged id "
-                               f"refused ({r3.get('reason_code')}); nothing written")
+        return CriterionResult("C5", PASS, "proposed / approve=true refused (invalid_input) / "
+                               f"forged id refused ({r3.get('reason_code')}); nothing written")
     return _guard("C5", run)
 
 
@@ -504,8 +508,9 @@ def checklist(client: str) -> str:
         ("C4", "Ask the agent to call the mokata `status` tool. It answers with mokata's version "
                "and profile."),
         ("C5", "Ask the agent to `remember` subject `cert-probe` = `c5`. It must come back "
-               "`proposed`/awaiting approval and NOTHING is written (`mokata memory list` or a "
-               "`recall` shows no `c5`). Ask it to retry with approve=true: still not committed."),
+               "`proposed`/awaiting approval and NOTHING is written (a `recall` of `cert-probe` "
+               "shows no `c5`). Ask it to retry with approve=true: `refused` as an invalid "
+               "argument (there is no such flag), and still nothing is written."),
         ("C6", "Run the `mokata approve <id>` it printed IN YOUR TERMINAL. Ask the agent to re-call "
                "`remember` with that proposal_id: `committed`. Ask it to `recall` `cert-probe`: the "
                "value comes back. Ask it to re-call with the same id: refused (used)."),

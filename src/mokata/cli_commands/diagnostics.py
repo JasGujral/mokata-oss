@@ -40,6 +40,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                   "plugin's SessionStart hook has not run on this machine; pass --plugin-root.")
         for line in rep.lines(ascii_only=not _color_enabled()):
             print(line)
+        unresolved = _pin_does_not_resolve(root, rep)
+        if unresolved:
+            print(unresolved)
         return 0 if (rep.ok and root) else 1
     surface = _load_surface(args.path)
     report = diagnose(surface)
@@ -77,6 +80,11 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     trust_line = ide_trust.status_line(args.path)
     if trust_line:
         print(trust_line)
+    # 0.0.28 C1 — the private set's verdicts (informational: never changes doctor's ok/exit). A file
+    # on a volume that cannot hold privacy is SAID, never claimed private; `--fix` re-protects OUR weak
+    # files with their exact bytes and never touches one someone else owns.
+    for line in privacy_lines(args.path, fix=getattr(args, "fix", False)):
+        print(line)
     # B-VER — the version-parity finding (parity + scope/plugin shadow), the SAME shared reporter
     # `mokata mcp status` uses. Informational: doctor's ok/exit stays derived from `report.ok`,
     # never from parity. This is the MCP-server version axis — a DIFFERENT axis than DB.S1's shared
@@ -141,6 +149,42 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 0 if report.ok else 1
 
 
+#: How long the plugin-route doctor waits for `uvx` to answer whether the pin resolves. It is a
+#: network resolve (not the full install): long enough for a slow index, never forever.
+PIN_PROBE_TIMEOUT_SECONDS = 120.0
+
+
+def _pin_does_not_resolve(root, rep) -> "str | None":
+    """0.0.28 I1 (`PLUGIN-PIN-BEFORE-PUBLISH`, H8). When the plugin route has no pinned environment
+    yet, ask uv whether the plugin's pin RESOLVES at all — the field failure was `No solution found …
+    no version of mokata[full]==0.0.27`: the plugin pinned a version PyPI did not have yet, and the
+    server never started. Returns the doctor line naming that cause and its fix, or None (healthy,
+    not checkable, or failing for another reason uv's own error names).
+
+    Runs only when "package resolved" failed, so a healthy doctor does no network read."""
+    import subprocess
+    from .. import quiet_spawn
+    from ..legibility import _color_enabled
+    from ..plugin_runtime import UV_PYTHON, _manifest_pin, _plugin_manifest, find_uvx
+    if not root or any(c.ok for c in rep.checks if c.label == "package resolved"):
+        return None
+    pin = _manifest_pin(_plugin_manifest(root))
+    uvx = find_uvx()
+    if not pin or not uvx:
+        return None
+    argv = [uvx, "--python", UV_PYTHON, "--from", pin, "mokata-mcp", "--version"]
+    try:
+        # Through the process door: uvx is a tree (uv → python), ended whole on timeout.
+        rc, _out, err = quiet_spawn.run_jobbed(argv, timeout=PIN_PROBE_TIMEOUT_SECONDS)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if rc != 0 and ("No solution found" in err or "no version of" in err):
+        return (f"  {'!!' if not _color_enabled() else '✗'} pinned `{pin}` does not resolve on "
+                f"the package index — the plugin was published before its release reached PyPI\n"
+                f"      fix: update the plugin, or wait for the release to reach PyPI")
+    return None
+
+
 def cmd_baseline(args: argparse.Namespace) -> int:
     # Stage 34B — report the test suite green/red at baseline; degrade-clean if no command
     # is known (mokata never guesses a test framework). Read-only diagnostic.
@@ -155,7 +199,8 @@ def cmd_baseline(args: argparse.Namespace) -> int:
     cmd = baseline_command(manifest, override=args.cmd)
     result = baseline_status(cmd, cwd=args.path, settings_python=settings_python(manifest))
     print(result.render())
-    # green/unknown don't hard-block (unknown degrades clean); only red is non-zero.
+    # green and unknown exit 0 (unknown = no command, degrades clean); red AND not-run exit 1 —
+    # a suite the door could not run (no job, no runner) proves nothing, so it is not a pass.
     return 0 if result.ok else 1
 
 
@@ -197,6 +242,70 @@ def cmd_config(args: argparse.Namespace) -> int:
         return 1
 
 
+def private_set_files(root: str) -> "list":
+    """The private set's files that exist for `root` (0.0.28 C1): the IDE server and bridge records, the
+    workspace-trust record, and every `.claude/settings.local.json` mokata baked a hook token into —
+    the repo's own and each copy Claude Code made into a session worktree (`.worktreeinclude`)."""
+    import glob
+    import os
+    from .. import winacl
+    from ..ide import bus, server, trust
+    out = [p for p in (server.record_path(root), bus.bridge_path(root), trust.record_path(root))
+           if os.path.isfile(p)]
+    claude = os.path.join(root, ".claude")
+    for p in [os.path.join(claude, "settings.local.json")] + sorted(
+            glob.glob(os.path.join(glob.escape(claude), "worktrees", "*", ".claude",
+                                   "settings.local.json"))):
+        got = winacl.read_record(p)                     # a regular file only, never blocking on a FIFO
+        if got is not None and got[1] is not None and \
+                bus.HOOK_HEADER in got[1].decode("utf-8", "replace").lower():
+            out.append(p)
+    return out
+
+
+def privacy_lines(root: str, fix: bool = False) -> "list":
+    """`mokata doctor`'s file-privacy section: one line per private-set file with its verdict, read by
+    `winacl.read_record` (never inferred): ONE open, no FIFO wait, and the verdict and the bytes `--fix`
+    rewrites come from the SAME handle, so a file swapped in after the verdict is never what gets
+    re-protected. `fix=True` rewrites each WEAK file that is OURS through the private door with its exact
+    bytes (token, port, trust decision kept: the baked gate still authenticates). A file owned by someone
+    else is named and never touched; there is no delete remedy."""
+    import os
+    from .. import fs_identity, winacl
+    from ..atomicfile import atomic_write_text
+    files = private_set_files(root)
+    lines = []
+    if files:
+        lines += ["", "File privacy (tokens and workspace trust):"]
+    for p in files:
+        got = winacl.read_record(p, ask=True)
+        if got is None:
+            lines.append(f"  {p}: REFUSED — not a regular file this user can open; never trusted and "
+                         f"never changed")
+            continue
+        v, raw = got
+        if v.private:
+            lines.append(f"  {p}: private")
+        elif not v.owner_is_me:
+            lines.append(f"  {p}: FOREIGN — not yours, never trusted and never changed ({v.reason})")
+        elif not v.holds:
+            lines.append(f"  {p}: NOT private — {winacl.NO_ACCESS_CONTROL}")
+        elif fix:
+            try:
+                if raw is None:
+                    raise OSError("it is larger than a record can be")
+                atomic_write_text(p, raw.decode("utf-8"), newline="", private=True)
+                lines.append(f"  {p}: was WEAK ({v.reason}); re-protected, bytes unchanged")
+            except (OSError, UnicodeDecodeError) as exc:
+                lines.append(f"  {p}: WEAK ({v.reason}); could not re-protect: {exc}")
+        else:
+            lines.append(f"  {p}: WEAK ({v.reason}) — `mokata doctor --fix` re-protects it")
+    if not fs_identity.identity_known(root):
+        lines.append(f"  {os.path.realpath(root)}: this volume gives the repository folder no file "
+                     f"identity — whether a path is inside it is decided by its spelling alone")
+    return lines
+
+
 def register(sub, common):
     p_doc = sub.add_parser(
         "doctor", parents=[common],
@@ -217,6 +326,9 @@ def register(sub, common):
     p_doc.add_argument("--matrix", action="store_true",
                        help="also print the full capability coverage matrix "
                             "(pass/degraded/fail); read-only, does not change the exit code")
+    p_doc.add_argument("--fix", action="store_true",
+                       help="re-protect mokata's own token and trust files that became readable by "
+                            "others (exact bytes kept); a file someone else owns is never touched")
     p_doc.set_defaults(func=cmd_doctor)
 
     p_base = sub.add_parser(

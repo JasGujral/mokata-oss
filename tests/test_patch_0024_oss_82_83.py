@@ -7,7 +7,8 @@
 * #82 item 3 — `mokata gate override` in an agent's shell (CLAUDECODE=1) refuses up front and names
   `--yes`, instead of asking a question nobody can answer (Windows shells report a TTY there).
 * #82 item 4 — `spec_emit` with `proposal_id` ALONE redeems the approved proposal; the content hash
-  still proves it is exactly what the human approved, and a tampered copy is refused.
+  still proves it is exactly what the human approved, and a tampered copy is refused. (0.0.28 round 3
+  ruling: kept. The four spec fields are required only when no `proposal_id` is given.)
 * #82 item 5 / #83 — the "local state persist degraded" path on Windows was `os.replace` losing to a
   concurrent reader; the retry is 0.0.23's `ATOMIC-REPLACE-WINDOWS` (test_cut_0023_windows_legs).
 
@@ -129,7 +130,11 @@ class TheOverrideRefusesUpFrontInAnAgentShell(unittest.TestCase):
 
 
 class SpecEmitRedeemsWithTheIdAlone(unittest.TestCase):
-    """Reuses the real round-trip harness from test_si_dev_0_spec_emit."""
+    """Reuses the real round-trip harness from test_si_dev_0_spec_emit.
+
+    0.0.28 round 3 (coordinator ruling under Jas's delegation): the shipped 0.0.24 behaviour stays.
+    Forcing a model to re-send a thousands-of-tokens payload byte-for-byte is the fail-then-fix loop
+    lane I exists to remove; the saved copy IS what the human approved, so P2 holds."""
 
     def setUp(self):
         import test_si_dev_0_spec_emit as H
@@ -165,18 +170,43 @@ class SpecEmitRedeemsWithTheIdAlone(unittest.TestCase):
             res = call_planned(TW.spec_emit, path=repo.path, proposal_id=pid)
             self.assertFalse(res.get("committed"), res)
 
-    def test_an_unknown_id_says_what_to_send(self):
-        from mokata.mcp import tools_write as TW
+    def test_drifted_content_with_the_id_is_refused_as_content_changed(self):
+        from mokata import approval
         with self.H._Repo() as repo:
-            res = call_planned(TW.spec_emit, path=repo.path, proposal_id="nope")
-            self.assertEqual(res["status"], "error")
-            self.assertIn("title + criteria + tests", res["hint"])
+            TW, pid = self._propose_and_approve(repo)
+            drifted = dict(self.H._args(repo.path), title="a title the human never approved")
+            res = call_planned(TW.spec_emit, **dict(drifted, proposal_id=pid))
+            self.assertFalse(res.get("committed"), res)
+            self.assertEqual(approval.REFUSED_CONTENT_CHANGED, res.get("reason_code"), res)
 
     def test_the_full_payload_still_works(self):
         with self.H._Repo() as repo:
             TW, pid = self._propose_and_approve(repo)
             res = call_planned(TW.spec_emit, **dict(self.H._args(repo.path), proposal_id=pid))
             self.assertTrue(res.get("committed"), res)
+
+    def test_an_unknown_id_alone_is_refused_naming_what_to_send(self):
+        # 0.0.28 I2: a caller fault is a `ValidationError` (the front door's `refused`), not a
+        # hand-built `status:"error"`; the reason still names what to send.
+        from mokata.mcp import tools_write as TW
+        from mokata.mcp.validation import ValidationError
+        with self.H._Repo() as repo:
+            with self.assertRaises(ValidationError) as cm:
+                call_planned(TW.spec_emit, path=repo.path, proposal_id="nope")
+            self.assertEqual("proposal_id", cm.exception.field)
+            for name in ("title", "criteria", "tests", "tasks"):
+                self.assertIn(name, cm.exception.reason)
+
+    def test_no_id_and_missing_fields_is_a_strict_refusal_naming_them(self):
+        from mokata.mcp import tools_write as TW
+        from mokata.mcp.validation import ValidationError
+        with self.H._Repo() as repo:
+            with self.assertRaises(ValidationError) as cm:
+                TW.spec_emit(path=repo.path, title="only a title")
+            self.assertEqual("criteria", cm.exception.field)
+            for name in ("criteria", "tests", "tasks"):
+                self.assertIn(name, cm.exception.reason)
+            self.assertEqual({"criteria", "tests", "tasks"}, set(cm.exception.retry_with))
 
 
 class ADegradedSaveNamesItsCause(unittest.TestCase):

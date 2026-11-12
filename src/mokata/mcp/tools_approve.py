@@ -45,11 +45,12 @@ Stdlib-only; SDK-free. Copyright 2026 MoStack. Licensed under the Apache License
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Annotated, Any, Dict, Optional
 
 from .. import approval
 from ..govern import AuditLedger
 from .registry import _mokata_dir, _tool
+from .tool_annotations import Field
 
 __all__ = ["approve"]
 
@@ -102,19 +103,27 @@ def _refused(code: str, p: Optional[approval.Proposal] = None) -> Dict[str, Any]
     return out
 
 
+# Provenance (developers): AP-MCP (0.0.14) — the in-chat approval tool, DEFAULT-OFF and opt-in. A
+# deliberate, ledgered override of the SI.3 "no in-harness approve surface" decision (doc 85 §5 D26
+# amendment). `proposal_id` is the ONLY input: no boolean, no batch, no approve-all. It reuses
+# `approval.approve` verbatim (single-use, content-hash-bound, session-scoped, clock-expiry) and
+# records `actor="chat-relayed"`. `setup` writes a `permissions.ask` entry so Claude Code prompts the
+# human on every call. Its `kind` is "approve", not "write", so the write-tool sweeps skip it.
 @_tool("approve", "approve")
-def approve(path: str = ".", proposal_id: str = "") -> Dict[str, Any]:
-    """Approve ONE existing, human-shown durable-write proposal in-flow — the AP-MCP opt-in
-    (doc 85 §5 D26 amendment). DEFAULT-OFF: until a human enables `settings.approvals.in_chat`
-    (itself a gated config write), this tool REFUSES and names the terminal path. This is NOT a
-    boolean gate: `proposal_id` is the ONLY input — there is no `approve=true`, no batch, no
-    approve-all, no env auto-approve. It performs the SAME act as `mokata approve <id>`
-    (actor=`chat-relayed`, distinguishable in the audit ledger), reuses every SI.3 invariant
-    verbatim (single-use, content-hash-bound, session-scoped, clock-expiry), and NEVER creates,
-    modifies, or redeems a proposal. The result echoes mokata's OWN full render of the proposal
-    plus the ledger entry id, so the transcript carries what was actually approved. Even with the
-    `mcp__mokata__*` grant present, `setup` wires an explicit prompt on this tool — the human is
-    asked on every call."""
+def approve(
+        path: Annotated[str, Field(
+            description="Repo root the proposal belongs to (default: the server's working directory).")] = ".",
+        *,
+        proposal_id: Annotated[str, Field(
+            description="Id of ONE proposal a human has seen, from a write tool's `proposed` result.")],
+        ) -> Dict[str, Any]:
+    """Approve one proposed write that the human has just been shown, without leaving the chat.
+
+    Off by default: it refuses until a human turns on `settings.approvals.in_chat` with `mokata config set settings.approvals.in_chat true`. It approves exactly the proposal named, never creates or redeems one, and the result echoes the full proposal so the transcript shows what was approved. Re-call the original tool with the same `proposal_id` to commit.
+
+    Returns: `approved` with the proposal `render` and `ledger_seq`, `disabled` while the setting is off, or `refused` with a `reason_code`.
+    Errors: refused when the proposal is unknown, already used or expired.
+    """
     if not _in_chat_enabled(path):
         return _disabled(path)
 

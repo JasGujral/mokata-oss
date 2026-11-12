@@ -204,17 +204,6 @@ class TestNoRuntimeDDLGuard(unittest.TestCase):
         self.assertIn(("teamdb.py", None), found)
         self.assertIn(("memory/backends.py", "SQLiteBackend"), found)
 
-    def test_the_deleted_mirrors_are_gone(self):
-        # the hand-mirrored schema copies the D1 row says to delete: no runtime backend may
-        # carry its own copy of the shared schema any more.
-        from mokata import session_transport, team_audit
-        from mokata.memory import backends, vector
-        for cls in (backends.PostgresBackend, vector.PgVectorBackend,
-                    session_transport.PostgresTransport, team_audit.SharedAuditLog):
-            self.assertFalse(hasattr(cls, "_setup_sql"),
-                             f"{cls.__name__} still hand-mirrors the schema (_setup_sql)")
-            self.assertFalse(hasattr(cls, "_create_sql"),
-                             f"{cls.__name__} still hand-mirrors the schema (_create_sql)")
 
     def test_connect_psycopg_cannot_carry_ddl(self):
         # the vehicle itself is gone: the `setup_sql` parameter that used to smuggle DDL onto

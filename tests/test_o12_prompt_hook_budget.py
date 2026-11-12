@@ -421,8 +421,9 @@ _FAKE_GRAPH = "#!/bin/sh\n# a code graph that takes seconds to answer anything\n
 @unittest.skipUnless(os.name == "posix", "the fake graph tool is a POSIX shell script")
 @unittest.skipUnless(sqlite_disk_ok(), "sandbox cannot back an on-disk SQLite DB")
 class TheR_O12_PromptHookMeetsItsBudgetOnA1MLineRepo(unittest.TestCase):
-    """HOOK-BUDGET's method (`test_hb_hook_budget`): a fresh `python -m mokata_emit` per prompt,
-    two warm-ups, the bare-interpreter floor interleaved and divided out (`perf.interpreter_factor`),
+    """HOOK-BUDGET's method (`test_hb_hook_budget`): a fresh hook process per prompt through
+    the plugin's launcher (`_support.plugin_route_hook`: Claude Code's `PYTHONDONTWRITEBYTECODE=1`
+    set, as in production — 0.0.28 W5), two warm-ups, the bare-interpreter floor interleaved and divided out (`perf.interpreter_factor`),
     `perf.relax_factor()` for shared CI runners, and up to three batches (a real regression misses
     all three). Asserted on p50 against the `context` kind's ruled 150 ms (U14)."""
 
@@ -458,15 +459,17 @@ class TheR_O12_PromptHookMeetsItsBudgetOnA1MLineRepo(unittest.TestCase):
         cls._t.cleanup()
 
     def _batch(self):
-        env = dict(os.environ, PYTHONPATH=SRC, PATH=self.bin + os.pathsep + os.environ["PATH"],
-                   CLAUDE_PROJECT_DIR=self.d)
+        argv, env = _support.plugin_route_hook(
+            "user-prompt-submit",
+            env=dict(os.environ, PYTHONPATH=SRC, PATH=self.bin + os.pathsep + os.environ["PATH"],
+                     CLAUDE_PROJECT_DIR=self.d),
+            home=os.path.join(os.path.realpath(self._t.name), "home"))
         xs, floor, outs = [], [], []
         for i in range(self.N + 2):
             body = json.dumps({"session_id": f"S-{i}-{time.time_ns()}", "cwd": self.d,
                                "hook_event_name": "UserPromptSubmit", "prompt": PROMPT})
             t0 = time.perf_counter()
-            p = subprocess.run([sys.executable, "-m", "mokata_emit", "user-prompt-submit"],
-                               input=body, cwd=self.d, env=env, text=True, encoding="utf-8",
+            p = subprocess.run(argv, input=body, cwd=self.d, env=env, text=True, encoding="utf-8",
                                capture_output=True, timeout=60, **hidden())
             t1 = time.perf_counter()
             subprocess.run([sys.executable, "-c", "pass"], stdin=subprocess.DEVNULL,

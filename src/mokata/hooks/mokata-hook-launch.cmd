@@ -35,6 +35,15 @@ for /f "tokens=2 delims==" %%v in ('findstr /b /c:"__version__" "%MOKATA_SRC_DIR
 if defined MOKATA_VER set "MOKATA_VER=%MOKATA_VER: =%"
 if defined MOKATA_VER set "MOKATA_VER=%MOKATA_VER:"=%"
 
+rem BYTECODE (0.0.28 W5, verifier M1) - the sh launcher's rule, same reasons: the hook's Python
+rem caches its bytecode in mokata's per-user cache (%XDG_CACHE_HOME%, else %USERPROFILE%\.cache,
+rem then mokata\pycache - `branch_protection.default_cache_dir`'s base), never beside the sources,
+rem and an inherited PYTHONDONTWRITEBYTECODE is dropped for it. No cache to name: left alone.
+set "MOKATA_CACHE=%XDG_CACHE_HOME%"
+if not defined MOKATA_CACHE if defined USERPROFILE set "MOKATA_CACHE=%USERPROFILE%\.cache"
+if defined MOKATA_CACHE set "PYTHONPYCACHEPREFIX=%MOKATA_CACHE%\mokata\pycache"
+if defined MOKATA_CACHE set "PYTHONDONTWRITEBYTECODE="
+
 rem 0 — an explicit override wins.
 if not defined MOKATA_HOOK goto :try_pinned
 if not exist "%MOKATA_HOOK%" goto :try_pinned

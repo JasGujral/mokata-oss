@@ -266,8 +266,10 @@ class TestMcpIsGated(_Base):
             first = T.worktree_remove(path=d, target=wt)
             self.assertEqual("proposed", first["status"])
             self.assertTrue(_has_wt(d, wt), "a proposal removes nothing")
-            typed = T.worktree_remove(path=d, target=wt, approve=True)
-            self.assertEqual("proposed", typed["status"], "approve=true is not consent")
+            # 0.0.28 I2: `approve` no longer exists, so "approve=true is not consent" is structural:
+            # a direct call raises TypeError (over MCP it is refused invalid_input).
+            with self.assertRaises(TypeError):
+                T.worktree_remove(path=d, target=wt, approve=True)
             self.assertTrue(_has_wt(d, wt))
             self._mint(d, first["proposal_id"])
             done = T.worktree_remove(path=d, target=wt, proposal_id=first["proposal_id"])
@@ -283,7 +285,9 @@ class TestMcpIsGated(_Base):
             out = T.worktree_remove(path=d, target=wt)
             self.assertEqual("refused", out["status"])
             self.assertIn("not merged", out["message"])
-            self.assertEqual("error", T.worktree_remove(path=d)["status"])
+            # 0.0.28 I2: `target` is required keyword-only — omitting it is a TypeError
+            with self.assertRaises(TypeError):
+                T.worktree_remove(path=d)
 
     def test_worktree_clean_proposes_and_a_changed_plan_cannot_redeem(self):
         from mokata.mcp import tools_worktree as T

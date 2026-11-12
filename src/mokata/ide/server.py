@@ -37,6 +37,13 @@ import traceback
 from typing import Any, Callable, Dict, List, Optional
 
 from ..errors import MokataError
+# Imported here, in the main thread, before the server can take a request - not left to the first
+# handler that needs one. Each of these packages' `__init__` imports its own submodules, and every
+# handler runs on a worker thread: CPython takes a module's lock BEFORE it imports the parent, so a
+# thread importing `events.schema` while another imports `events` is a lock cycle the importer
+# breaks by raising `_DeadlockError` - a 500 on the first requests after start (0.0.28 D, the Linux
+# Firefox full-suite red). The set is derived: `tests/test_ide_import_lock_inversion.py`.
+from .. import engine as _engine, events as _events, mcp as _mcp  # noqa: F401
 from ..knowledge.query import BUDGET_DEFAULT, BUDGET_FULL
 from .bus import HOOK_HEADER
 from .gate_door import GATE_PATH as _GATE_PATH
@@ -123,6 +130,7 @@ def crashed(where: str, exc: BaseException) -> Any:
 # comes back at once. Cancel really stops the work (checkpoints in the walks, subprocess kill);
 # a query job nobody watches any more is cancelled; index builds keep running. No deadline.
 CLIENT_HEADER = "x-mokata-client"   # the page's id: its SSE stream is what keeps its jobs wanted
+REQUEST_HEADER = "x-mokata-request"  # one page request's token: which ask wants a job (0.0.28 D)
 SHUTDOWN_GRACE_SECS = 2.0       # how long a SIGTERM/SIGINT waits for open requests before closing
 SWITCH_INTERVAL_SECS = 0.001   # the GIL hand-off interval while serving (see `serve`)
 MAX_SYNC_MS = 2000              # the longest sync window a page may ask for (`?sync_ms=`)
@@ -134,24 +142,27 @@ def record_path(root: str) -> str:
 
 
 def read_record(root: str) -> Optional[Dict[str, Any]]:
-    try:
-        with open(record_path(root), encoding="utf-8") as fh:
-            d = json.load(fh)
-        return d if isinstance(d, dict) else None
-    except (OSError, ValueError):
+    """The server record — only if it is OURS and still private (0.0.28 C1: a record planted by another
+    account, or left readable by others, is refused, never adopted; `mokata doctor` names it)."""
+    from ..winacl import read_private
+    raw = read_private(record_path(root))
+    if raw is None:
         return None
+    try:
+        d = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    return d if isinstance(d, dict) else None
 
 
 def _write_record(root: str, data: Dict[str, Any]) -> None:
+    """The record holds the server TOKEN: written through the private door (born owner-only)."""
+    from ..atomicfile import atomic_write_text
     from .statedir import note_repo
     path = record_path(root)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     note_repo(root)                  # P29 — a user-level state dir names the repo it belongs to
-    tmp = path + f".tmp-{os.getpid()}"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        json.dump(data, fh)
-    os.replace(tmp, path)
+    atomic_write_text(path, json.dumps(data), private=True)
 
 
 def _remove_record(root: str, pid: int) -> None:
@@ -412,7 +423,14 @@ def build_app(state: AppState, features: Optional[List[Any]] = None):
                 return PlainTextResponse("not paired — open the link `mokata ide` printed",
                                          status_code=401)
             state.last_seen = time.time()
-            return await handler(request)
+            # 0.0.28 D — the request's own token: a job started while serving it is wanted by THIS
+            # request (a superseded one leaves only its own want). Set for this request's task only.
+            from . import jobs as J
+            mark = J.REQUEST.set((request.headers.get(REQUEST_HEADER) or "")[:64])
+            try:
+                return await handler(request)
+            finally:
+                J.REQUEST.reset(mark)
         return wrapped
 
     async def pair(request: Request):
@@ -1103,12 +1121,19 @@ def build_app(state: AppState, features: Optional[List[Any]] = None):
 
         async def gen():
             state.clients += 1
-            state.attach_loop()
-            if client:
-                state.jobs.client_back(client)
-            _ensure_watcher(state)
-            last = resume if resume is not None and 0 <= resume <= state.bus.seq else state.bus.seq
+            opened = False
             try:
+                state.attach_loop()
+                if client:
+                    # 0.0.28 D — counted per page: a reconnect opens the new stream before the old
+                    # one's end is noticed, and that stale end must not read as the page leaving.
+                    # Inside the `try`: whatever fails after the count went up, the `finally`
+                    # brings it down (a leaked count is a page that can never be "gone").
+                    state.jobs.stream_opened(client)
+                    opened = True
+                    state.jobs.client_back(client)
+                _ensure_watcher(state)
+                last = resume if resume is not None and 0 <= resume <= state.bus.seq else state.bus.seq
                 fp = await asyncio.to_thread(_fingerprint, state.root)
                 yield {"event": "changed", "data": fp}
                 yield {"event": "focus", "data": json.dumps({"focus": state.focus})}
@@ -1143,7 +1168,7 @@ def build_app(state: AppState, features: Optional[List[Any]] = None):
                     state.last_seen = time.time()
             finally:
                 state.clients -= 1
-                if client:
+                if opened and state.jobs.stream_closed(client):
                     state.jobs.client_gone(client)
         return EventSourceResponse(gen())
 

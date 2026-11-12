@@ -369,9 +369,6 @@ class TestThreeStatesStayThree(_Base):
     three different facts with three different remedies, and a partial arm is exactly where they
     get collapsed into "Windows is weird"."""
 
-    def test_the_three_subsystem_names_are_three(self):
-        names = (N.DEGRADE_SUBSYSTEM, N.DEGRADE_WINDOWS, N.DEGRADE_AUDIO)
-        self.assertEqual(3, len(set(names)), names)
 
     def test_audio_played_no_visual_names_only_the_visual_gap(self):
         """STATE 1. The sound worked. The only thing missing is the banner, and only that is

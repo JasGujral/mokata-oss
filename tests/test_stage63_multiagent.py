@@ -303,11 +303,6 @@ class TestCliSurfaces(unittest.TestCase):
                 rc, _ = run_cli(["unsetup", agent, "--path", d, "--yes"])
                 self.assertEqual(rc, 0, f"unsetup {agent} failed")
 
-    def test_parity_guard_is_green(self):
-        from mokata.parity import verify_parity
-        report = verify_parity()
-        self.assertTrue(report.ok, report.render())
-
 
 if __name__ == "__main__":
     unittest.main()

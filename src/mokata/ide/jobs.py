@@ -18,8 +18,11 @@ THE MODEL (PRD §5.3):
     and are published on the server's event bus as `job` events at <= 1 s cadence (a ticker runs
     only while a job is active). Cancel sets the job's flag; the walks' checkpoints raise
     `Cancelled` and subprocesses are killed, so the CPU really stops.
-  * Who still wants it: each page that asked (its `client` id, the page's SSE connection) is a
-    WATCHER. A query job whose last watcher leaves (page closed, request superseded) is cancelled.
+  * Who still wants it: each REQUEST that asked is a want — `(client, token)`: the page's id (its
+    SSE connection) and the request's own token (`X-Mokata-Request`, one per `MK.api` call). A
+    superseded request leaves only its own token; a query job is cancelled only when no request of
+    any page still wants it (0.0.28 D). A page's stream that drops keeps its wants for
+    `RECONNECT_S`; a stream that ends after its replacement opened is not a drop (`stream_closed`).
     A caller with no page (a script, a test) holds a lease of `GRACE_S` from its last ask. INDEX
     builds (`index.*`, `mokata.update`) keep running with nobody watching (PRD §5.3 rule 3).
   * "Failing at use" (R35): a graph/impact job that FAILS is remembered per kind until one
@@ -30,6 +33,7 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import json
 import queue
@@ -123,6 +127,13 @@ TICK_S = 0.5            # job events while a job runs (>= 1 per second per runni
 HISTORY = 20            # finished jobs listed after the active ones
 GRACE_S = 10.0          # an anonymous caller's job lives this long after it last asked
 RECONNECT_S = 5.0       # a page whose event stream dropped has this long to reconnect
+LEFT_S = 30.0           # a request superseded before its handle stays "gone" this long (`leave_request`)
+LEFT_MAX = 1024         # ...and at most this many are remembered (the oldest is forgotten first)
+
+
+#: 0.0.28 D — the token of the request being served (`X-Mokata-Request`), set by the server's one
+#: route door for the request's own task; a job started while serving it is wanted by THAT request.
+REQUEST: "contextvars.ContextVar[str]" = contextvars.ContextVar("mokata_request_token", default="")
 
 
 def _canon(args: Dict[str, Any]) -> str:
@@ -160,8 +171,12 @@ class Job:
         # P37: set when the WORK has stopped (its function returned or raised) — a cancelled job
         # is `finished` at once, its work only at its next checkpoint (`handoff` waits on this).
         self.stopped = threading.Event()
-        self.watchers: set = set()
+        # client id -> the tokens of its requests that still want this job (0.0.28 D)
+        self.watchers: Dict[str, set] = {}
+        # client id -> its tokens while its stream is down (restored by `client_back`)
+        self.away: Dict[str, set] = {}
         self.lease = 0.0                 # until when an asker with no page still wants it
+        self.away_until = 0.0            # until when a page that dropped (`away`) may come back
         self.cancellable = True
         self._wakes: List[Callable[[], None]] = []
 
@@ -262,6 +277,11 @@ class JobRegistry:
         self._failing: Dict[str, Dict[str, Any]] = {}
         self._runs: Dict[Tuple[str, str], int] = {}
         self._away: Dict[str, List[str]] = {}
+        # (client, token) -> until when: requests superseded before the page learned their job.
+        # Insertion order IS expiry order (every entry lives LEFT_S), so the cap evicts the front
+        # in O(1) and the ticker prunes only the expired front (verifier R2-1).
+        self._left: "OrderedDict[Tuple[str, str], float]" = OrderedDict()
+        self._streams: Dict[str, int] = {}
         self.started = 0                           # jobs that actually ran (tests read it)
 
     # -- wiring ---------------------------------------------------------------------------
@@ -283,6 +303,7 @@ class JobRegistry:
     # -- starting / joining -------------------------------------------------------------------
     def start(self, kind: str, args: Dict[str, Any], fn: Callable[[], Any], *, label: str = "",
               scope: str = "", keep: Optional[bool] = None, client: Optional[str] = None,
+              token: Optional[str] = None,
               on_end: Optional[Callable[[], None]] = None) -> Job:
         """The job answering `(kind, args)`: the running one, or a new one. A FINISHED answer is
         never handed to a new question (the repo may have moved since); only the page that waited
@@ -307,52 +328,141 @@ class JobRegistry:
                 self._by_id[job.id] = job
                 self._trim()
                 new = True
-            self._watch(job, client)
+            self._watch(job, client, REQUEST.get() if token is None else token)
         if new:
             self._lanes[KINDS[kind]].put(job)
             self._emit(job)
             self._ensure_ticker()
         return job
 
-    def _watch(self, job: Job, client: Optional[str]) -> None:
+    def _watch(self, job: Job, client: Optional[str], token: str) -> None:
         if client:
-            job.watchers.add(client)
+            if self._left.get((client, token or ""), 0.0) > time.monotonic():
+                return                                     # that request was already superseded
+            job.watchers.setdefault(client, set()).add(token or "")
         else:
             job.lease = time.monotonic() + GRACE_S
 
-    def watch(self, job: Job, client: Optional[str]) -> None:
+    def watch(self, job: Job, client: Optional[str], token: str = "") -> None:
         with self._lock:
-            self._watch(job, client)
+            self._watch(job, client, token)
 
-    def leave(self, job: Job, client: Optional[str]) -> None:
-        """One watcher stopped wanting it. A query job nobody watches is cancelled."""
+    def leave(self, job: Job, client: Optional[str], token: Optional[str]) -> None:
+        """One REQUEST stopped wanting it (superseded): only its own token goes. A query job that
+        no request of any page still wants is cancelled. A leave names its request — there is no
+        "leave for the whole page" (that is the page's stream closing, `client_gone`)."""
+        if not token:
+            raise ValueError("a leave names the request that leaves (its token)")
         with self._lock:
-            job.watchers.discard(client)
-            orphan = not job.keep and not job.watchers and job.state not in FINISHED
+            for held in (job.watchers, job.away):
+                toks = held.get(client or "")
+                if toks is not None:
+                    toks.discard(token)
+                    if not toks:
+                        del held[client or ""]
+            orphan = self._orphan(job, time.monotonic())
         if orphan:
             self._cancel(job, "nobody is waiting for this any more")
 
+    def leave_request(self, client: Optional[str], token: Optional[str]) -> None:
+        """One REQUEST was superseded before its page learned which job (if any) it started — the
+        page aborted the fetch that would have said (0.0.28 D, verifier L6). Its want leaves every job
+        it is in, and a job that request starts later (this leave travels on its own connection and
+        can arrive first) never takes it: the token is remembered for `LEFT_S`."""
+        if not token:
+            raise ValueError("a leave names the request that leaves (its token)")
+        who = client or ""
+        now = time.monotonic()
+        hit: List[Job] = []
+        with self._lock:
+            self._left.pop((who, token), None)             # a repeat moves to the back (its new expiry)
+            self._left[(who, token)] = now + LEFT_S
+            while len(self._left) > LEFT_MAX:              # bounded with no ticker running: oldest goes
+                self._left.popitem(last=False)
+            for job in self._active.values():
+                for held in (job.watchers, job.away):
+                    toks = held.get(who)
+                    if toks is not None and token in toks:
+                        toks.discard(token)
+                        if not toks:
+                            del held[who]
+                        hit.append(job)
+            orphans = [j for j in dict.fromkeys(hit) if self._orphan(j, now)]
+        for j in orphans:
+            self._cancel(j, "nobody is waiting for this any more")
+
+    @staticmethod
+    def _orphan(job: Job, now: float) -> bool:
+        """Nobody wants it: no request of a page here, none of a page that is away inside its
+        reconnect window (`away_until`), and no page-less asker's lease still running."""
+        if job.keep or job.state in FINISHED or job.watchers:
+            return False
+        if job.away and now <= job.away_until:
+            return False
+        return now > job.lease
+
+    def _forget_away(self, now: float) -> None:
+        """Under the lock: past a page's reconnect window nothing of it is held (bounded growth): its
+        tokens leave every job whose window ran out, and the registry's list drops every id that is no
+        longer an active job waiting for that page."""
+        for j in self._by_id.values():
+            if j.away and (j.state in FINISHED or now > j.away_until):
+                j.away.clear()
+        live = {j.id: j for j in self._active.values()}
+        for client in list(self._away):
+            ids = [i for i in self._away[client] if i in live and client in live[i].away]
+            if ids:
+                self._away[client] = ids
+            else:
+                del self._away[client]
+
+    def stream_opened(self, client: str) -> bool:
+        """A page's event stream opened; True when it is the page's only open stream. A page can
+        hold two for a moment (an EventSource reconnects before the server notices the old one
+        ended), so the page is gone only when its LAST stream closes (`stream_closed`)."""
+        with self._lock:
+            n = self._streams[client] = self._streams.get(client, 0) + 1
+            return n == 1
+
+    def stream_closed(self, client: str) -> bool:
+        """A page's event stream ended; True when it was its last one — then, and only then, the
+        page has gone (`client_gone`). A stale stream ending after its replacement opened: False."""
+        with self._lock:
+            n = self._streams.get(client, 0) - 1
+            if n > 0:
+                self._streams[client] = n
+                return False
+            self._streams.pop(client, None)
+            return True
+
     def client_gone(self, client: str) -> None:
         """A page's event stream closed. An EventSource reconnects by itself (a network blip, a
-        server hiccup), so its jobs are not dropped at once: each keeps a lease of `RECONNECT_S`,
-        and `client_back` within it re-attaches them. Past it, a query job nobody wants stops."""
+        server hiccup), so its jobs are not dropped at once: each waits `RECONNECT_S` (`away_until`),
+        and `client_back` within it re-attaches every request it had. Past it, a query job nobody
+        wants stops. A second drop before the page came back loses nothing (appended, never
+        assigned)."""
         until = time.monotonic() + RECONNECT_S
         with self._lock:
             jobs = [j for j in self._active.values() if client in j.watchers]
             for j in jobs:
-                j.watchers.discard(client)
-                j.lease = max(j.lease, until)
-            self._away[client] = [j.id for j in jobs]
+                j.away.setdefault(client, set()).update(j.watchers.pop(client))
+                j.away_until = max(j.away_until, until)
+            if jobs:
+                held = self._away.setdefault(client, [])
+                held.extend(j.id for j in jobs if j.id not in held)
         if jobs:
             self._ensure_ticker()
 
     def client_back(self, client: str) -> None:
-        """The page's stream reconnected: it wants what it wanted before."""
+        """The page's stream reconnected: it wants what it wanted before — request by request."""
         with self._lock:
             for jid in self._away.pop(client, []):
                 j = self._by_id.get(jid)
-                if j is not None and j.state not in FINISHED:
-                    j.watchers.add(client)
+                if j is None:
+                    continue
+                toks = j.away.pop(client, None)
+                if toks and j.state not in FINISHED:
+                    j.watchers.setdefault(client, set()).update(toks)
 
     # -- reading ----------------------------------------------------------------------------
     def answer(self, job_id: str, kind: str, args: Dict[str, Any]) -> Optional[Job]:
@@ -524,19 +634,27 @@ class JobRegistry:
     def _tick(self) -> None:
         while True:
             time.sleep(TICK_S)
-            now = time.monotonic()
-            with self._lock:
-                active = list(self._active.values())
-                if not active:
-                    self._ticker = None
-                    return
-                orphans = [j for j in active if not j.keep and not j.watchers
-                           and now > j.lease]
-            for j in orphans:
-                self._cancel(j, "nobody is waiting for this any more")
-            for j in active:
-                if j not in orphans:
-                    self._emit(j)
+            if not self._sweep(time.monotonic()):
+                return
+
+    def _sweep(self, now: float) -> bool:
+        """One tick at `now`: cancel the query jobs no request wants past their lease, publish the
+        rest. False (and the ticker ends) when nothing is active."""
+        with self._lock:
+            active = list(self._active.values())
+            orphans = [j for j in active if self._orphan(j, now)]
+            self._forget_away(now)
+            while self._left and next(iter(self._left.values())) <= now:
+                self._left.popitem(last=False)             # only the expired front: order is expiry
+            if not active:
+                self._ticker = None
+                return False
+        for j in orphans:
+            self._cancel(j, "nobody is waiting for this any more")
+        for j in active:
+            if j not in orphans:
+                self._emit(j)
+        return True
 
     def close(self, wait: float = 0.0) -> None:
         """Cancel everything; with `wait`, give the running work that long to reach its next
@@ -613,5 +731,5 @@ def background(kind: str, args: Dict[str, Any], fn: Callable[[], Any], *, label:
     return None
 
 
-__all__ = ["CANCELLING", "CAPABILITY_OF", "Job", "JobRegistry", "KINDS", "SEALING_KINDS", "STATES", "SYNC_WINDOW_S", "TICK_S", "install",
+__all__ = ["CANCELLING", "REQUEST", "CAPABILITY_OF", "Job", "JobRegistry", "KINDS", "SEALING_KINDS", "STATES", "SYNC_WINDOW_S", "TICK_S", "install",
            "installed", "background", "seal_current"]

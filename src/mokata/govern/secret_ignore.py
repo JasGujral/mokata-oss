@@ -19,7 +19,10 @@ THE THREAT MODEL. Written first, because the mechanism is designed to it.
 
   SO THE SAFETY DOES NOT REST ON SECRECY OR ON TAMPER-PROOFING. It rests on three things:
 
-    1. ONLY THE GUESS IS NEGOTIABLE. `_SIGNATURES` and the `_KNOWN_SHAPES` floor never consult
+    1. ONLY THE GUESS IS NEGOTIABLE. (0.0.28 E-Q5: the guesses are the entropy backstop AND the
+       TOLERANT key marker `key-marker-tolerant` — dash-less, cut, split or unmarked — which a
+       human may record here; the FIRM marker `private-key` is a signature and never is, and
+       egress stays fatal for a tolerant finding a record notwithstanding.) `_SIGNATURES` and the `_KNOWN_SHAPES` floor never consult
        this module. A forged store — see `TestAdversarialLaundering.test_route_6` — still
        cannot launder an AWS/GitHub/Slack/GCP/Stripe/PEM/JWT/DSN credential, because those
        findings are not ignorable at any point in the pipeline.
@@ -60,7 +63,8 @@ from .. import MOKATA_DIR
 from ..atomicfile import atomic_write_text, lock_path_for
 from ..errors import MokataError
 from ..oslock import file_lock
-from .secrets import Finding, _matches_known_shape, _scan_entropy, _scan_signatures
+from .secrets import (KEY_TOLERANT, Finding, _matches_known_shape, _scan_entropy,
+                      _scan_signatures)
 from ..repo_paths import NotARepoName, escapes_root, name_of
 
 # The committed .mokata/ ROOT, never `temp_local/` — see (e) above. `temp_local/` is what the
@@ -74,6 +78,12 @@ STORE_VERSION = 1
 # not the guess. Keying on layer alone would have handed every documented credential shape an
 # appeal — the single most likely way to get this stage wrong.
 IGNORABLE_KINDS = ("high-entropy-token",)
+# E-Q5 (REDACT-MANGLED-KEY): the ONE signature-layer kind that is negotiable — a TOLERANT key
+# finding (a dash-less, cut or split marker, or an unmarked base64 run). It blocks like any
+# signature, but a human may record it as a false positive (hash + path) at the WriteGate and the
+# hook. A FIRM key finding (`private-key`) never is. Egress stays fatal for both
+# (`secrets.scan(for_send=True)` never suppresses it).
+IGNORABLE_SIGNATURE_KINDS = (KEY_TOLERANT,)
 
 # The ledger kind (I3 — the existing audit ledger, never a second log).
 LEDGER_KIND = "secret_ignore"
@@ -125,8 +135,11 @@ def token_key(token: str) -> str:
 
 
 def is_ignorable(finding: Finding) -> bool:
-    """Only the entropy GUESS is negotiable — see `IGNORABLE_KINDS`."""
-    return finding.layer == "entropy" and finding.kind in IGNORABLE_KINDS
+    """Only the entropy GUESS and the TOLERANT key finding are negotiable — see
+    `IGNORABLE_KINDS` and `IGNORABLE_SIGNATURE_KINDS`."""
+    if finding.layer == "entropy":
+        return finding.kind in IGNORABLE_KINDS
+    return finding.layer == "signature" and finding.kind in IGNORABLE_SIGNATURE_KINDS
 
 
 def classify(token: str) -> Optional[str]:
@@ -137,7 +150,8 @@ def classify(token: str) -> Optional[str]:
     cannot be classified, so a hash-only entry point would be a blind hash-adder, which is the
     laundering route this design exists to close."""
     for f in _scan_signatures(token):
-        return f.kind
+        if not is_ignorable(f):
+            return f.kind
     return _matches_known_shape(token)
 
 
@@ -145,7 +159,7 @@ def _is_entropy_candidate(token: str) -> bool:
     """Would the entropy backstop actually flag this string on its own? If not there is nothing
     to ignore — and refusing here is also what stops the store being pre-seeded with short
     fragments of something that will be assembled later."""
-    return any(f.kind in IGNORABLE_KINDS for f in _scan_entropy(token))
+    return any(is_ignorable(f) and f.token for f in _scan_signatures(token) + _scan_entropy(token))
 
 
 def ignores_path(root: str) -> str:
@@ -320,7 +334,8 @@ class IgnoreStore:
                     text = fh.read()
             except OSError:
                 continue                     # unreadable — no evidence either way
-            if e.hash not in {token_key(f.token) for f in _scan_entropy(text) if f.token}:
+            if e.hash not in {token_key(f.token) for f in _scan_signatures(text)
+                              + _scan_entropy(text) if f.token and is_ignorable(f)}:
                 out.append((e, "that string is no longer flagged in this file"))
         return out
 
@@ -343,8 +358,8 @@ def load_for_scan(root: str) -> Tuple[Optional[IgnoreStore], str]:
 # ══════════════════════════════════════════════════════════════════════════════════════════
 
 BLOCK_HEADLINE = "mokata: secret detected — write/commit/send blocked."
-_FP_LEAD = ("If this is a FALSE POSITIVE, the entropy backstop's guess can be ignored for this "
-            "exact string in this exact file:")
+_FP_LEAD = ("If this is a FALSE POSITIVE, the entropy backstop's guess (or a damaged-looking key "
+            "marker) can be ignored for this exact string in this exact file:")
 _FP_FOOT = ("The ignore is recorded in `.mokata/{name}` — version-controlled on purpose, so it "
             "shows up in the PR diff with your reason. It never applies to a recognised "
             "credential shape, and never to any other string or file.")
@@ -486,7 +501,10 @@ def add_ignore(root: str, token: str, path: str, *, reason: str,
                         actor=actor)
     rows = [e.as_dict() for e in store.entries()] + [entry.as_dict()]
     emit(f"mokata secret ignore: {rel}  [{key[:12]}…]  reason: {entry.reason}")
-    emit("  entropy-layer only · this exact string in this one file · committed to "
+    layer = "signature" if any(is_ignorable(f) and f.layer == "signature"
+                               for f in _scan_signatures(token)) else "entropy"
+    emit(("  entropy-layer only" if layer == "entropy" else "  tolerant key marker only")
+         + " · this exact string in this one file · committed to "
          f"`.mokata/{IGNORES_FILENAME}` so it appears in your PR diff")
     ledger = _ledger_for(root)
     if not _gated_write(root, rows, target=rel, assume_yes=assume_yes, confirm=confirm,
@@ -496,7 +514,7 @@ def add_ignore(root: str, token: str, path: str, *, reason: str,
         # I3 — the durable, human-readable record, alongside the gate's own `write_gate` entry.
         # Hash + path + reason only: the literal is never written here either.
         ledger.record(LEDGER_KIND, action="added", token_hash=key, target=rel,
-                      reason=entry.reason, actor=actor, layer="entropy")
+                      reason=entry.reason, actor=actor, layer=layer)
     return entry
 
 

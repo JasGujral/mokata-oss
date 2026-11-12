@@ -103,8 +103,7 @@
       if (st.view) parts.push(`${n(st.view.matched)} of ${n(st.view.scanned)} rows`);
       else parts.push(i.rows != null ? `${n(i.rows)} rows`
         : st.counting ? `≈${n(i.estimate)} rows · counting…`
-        : st.uncounted ? `≈${n(i.estimate)} rows · not counted: ${st.uncounted}`
-        : `≈${n(i.estimate)} rows · not counted (the count stopped; reload to count again)`);
+        : `≈${n(i.estimate)} rows · not counted: ${st.uncounted}`);
       parts.push(`${cols()} columns`, `${i.delimiter_name} (${i.delimiter_by})`);
       meta.textContent = parts.join(" · ");
       chips.replaceChildren();
@@ -302,20 +301,34 @@
       st.widths = info.header.map(() => 140);
       fCol.append(new Option("any column", "-1"));
       info.header.forEach((h, c) => fCol.append(new Option(show(h) || "column " + (c + 1), String(c))));
+      // a count about to start is "counting" from the FIRST paint: the meta line never shows an
+      // outcome ("not counted") before the count has had one (0.0.28 D — the Linux runner read it)
+      st.counting = !info.complete;
       paintMeta(); paintHead(); paintFilterBar(); draw();
       if (!info.complete) {
-        st.counting = true;
         strip.say("counting rows…");
-        const r = await MK.api(q("/api/table/count"), undefined, { onJob: (j) => strip.set(j) });
-        st.counting = false;
-        if (st.dead) return;
-        if (r && r.state === "ok") { strip.done(); Object.assign(st.info, r); st.info.estimate = r.rows; } else if (r && (r.cancelled || r.failed)) { /* the strip keeps saying so */ } else {
-          // the file cannot be counted (a record over the size bound): say the server's reason —
-          // "reload to count again" would be wrong advice, a reload fails the same way
-          strip.done();
-          st.uncounted = (r && (r.note || r.error)) || "the count could not finish";
-        }
-        paintMeta(); draw();
+        // what a count's answer does to the table - the first one, and the one the Jobs drawer's Retry
+        // brings back (`onRetry`): a retried count updates THIS table, no reopen, no new button
+        const counted = (r) => {
+          st.counting = false;
+          if (st.dead) return;
+          if (r && r.state === "ok") { strip.done(); Object.assign(st.info, r); st.info.estimate = r.rows; } else {
+            // Each way a count can end without a number says its OWN word (0.0.28 D) — never "reload",
+            // which fails the same way: cancelled -> the Jobs drawer's Retry (the existing control);
+            // failed -> the job's error; cannot be counted (a record over the size bound) -> the server's reason.
+            strip.done();
+            st.uncounted = r && r.cancelled ? "the count was cancelled — Retry in the Jobs drawer"
+              : r && r.failed ? `the count failed: ${r.note || "no reason given"}`
+              : (r && (r.note || r.error)) || "the count could not finish";
+          }
+          paintMeta(); draw();
+        };
+        const onJob = (j) => {
+          if (st.dead) return;
+          strip.set(j);
+          if (!st.counting && ["queued", "running", "partial"].includes(j.state)) { st.counting = true; paintMeta(); }
+        };
+        counted(await MK.api(q("/api/table/count"), undefined, { onJob, onRetry: counted }));
       }
     })();
     return { destroy() { st.dead = true; clearTimeout(st.retry); host.replaceChildren(); }, state: st, redraw: draw };

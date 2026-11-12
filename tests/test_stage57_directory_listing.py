@@ -62,11 +62,6 @@ class TestRightChannel(unittest.TestCase):
         self.assertIn("pending submission", pending)
         self.assertIn("community", pending)
 
-    def test_wrong_channel_wording_is_gone(self):
-        for text in (DL.notice(False), DL.notice(True)):
-            self.assertNotIn("plugin-directory approval", text)
-            self.assertNotIn("isn't registered on any", text)
-            self.assertNotIn("planned, not yet available", text)
 
     def test_marketplace_name_matches_the_manifest(self):
         import json

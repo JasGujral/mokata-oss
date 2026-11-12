@@ -5,7 +5,7 @@
       "required": ["sample", "kind", "path", "line", "col", "source", "lsp", "results", "edge"],
       "properties": {
         "sample": {"type": "boolean"},
-        "kind": {"type": "string", "enum": ["definition", "references", "hover", "symbols", "diagnostics"]},
+        "kind": {"type": "string", "enum": ["definition", "hover", "symbols", "diagnostics"]},
         "path": {"type": "string"},
         "line": {"type": "integer"},
         "col": {"type": "integer"},
@@ -15,6 +15,36 @@
         "lsp": {"type": "object", "required": ["state"], "properties": {"state": {"type": "string"}, "note": {"type": "string"}}},
         "results": {"type": "array", "items": {"type": "object"}},
         "edge": {"type": "object"}
+      }
+    },
+    "CallRow": {
+      "type": "object",
+      "required": ["name", "kind", "path", "shown", "outside", "line", "col", "col_exact", "snippet", "test"],
+      "properties": {
+        "name": {"type": "string"}, "kind": {"type": "string"}, "detail": {"type": "string"},
+        "path": {"type": "string"}, "shown": {"type": "string"}, "outside": {"type": "boolean"},
+        "line": {"type": "integer"}, "col": {"type": ["integer", "null"]}, "col_exact": {"type": "boolean"},
+        "snippet": {"type": "string"}, "test": {"type": "boolean"}, "calls": {"type": ["integer", "null"]}
+      }
+    },
+    "CallsAnswer": {
+      "type": "object",
+      "required": ["sample", "kind", "dir", "path", "line", "source", "asked", "callable", "lsp", "groups",
+                   "total", "truncated", "skipped", "complete", "items_named", "items_asked", "cap", "edge"],
+      "properties": {
+        "sample": {"type": "boolean"}, "kind": {"type": "string", "enum": ["calls"]},
+        "dir": {"type": "string", "enum": ["in", "out"]}, "path": {"type": "string"},
+        "line": {"type": "integer"}, "col": {"type": ["integer", "null"]},
+        "language": {"type": ["string", "null"]}, "symbol": {"type": "string"},
+        "source": {"type": "string", "enum": ["lsp", "graph", "none"]},
+        "asked": {"type": "boolean"}, "callable": {"type": ["boolean", "null"]},
+        "lsp": {"type": "object", "required": ["state"], "properties": {"state": {"type": "string"}, "note": {"type": "string"}}},
+        "groups": {"type": "array", "items": {"type": "object", "required": ["item", "rows", "total", "truncated", "skipped"],
+                   "properties": {"item": {"$ref": "#/schemas/CallRow"}, "rows": {"type": "array", "items": {"$ref": "#/schemas/CallRow"}},
+                                  "total": {"type": "integer"}, "truncated": {"type": "boolean"}, "skipped": {"type": "integer"}}}},
+        "total": {"type": "integer"}, "truncated": {"type": "boolean"}, "skipped": {"type": "integer"},
+        "complete": {"type": "boolean"}, "items_named": {"type": "integer"}, "items_asked": {"type": "integer"},
+        "cap": {"type": "integer"}, "note": {"type": "string"}, "edge": {"type": "object"}
       }
     },
     "LspServer": {
@@ -112,14 +142,21 @@
                  {"query": {"path": "src/app/core.py", "line": "1", "col": "5"}, "status": 200, "demo": true}]
     },
     {
-      "path": "/api/lsp/references", "method": "GET", "kind": "json",
-      "params": {"query": {"path": "repo-relative file", "line": "1-based line", "col": "1-based character column"}},
+      "path": "/api/lsp/calls", "method": "GET", "kind": "json",
+      "params": {"query": {"path": "repo-relative file", "line": "1-based line",
+                           "col": "optional 1-based character column; without it, the function enclosing the line",
+                           "dir": "in (who calls it) | out (what it calls)"}},
       "responses": {
-        "200": {"media": "json", "schema": {"$ref": "#/schemas/LspAnswer"}},
+        "200": {"media": "json", "schema": {"$ref": "#/schemas/CallsAnswer"}},
         "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
       },
-      "probes": [{"query": {"path": "src/app/core.py", "line": "1", "col": "5"}, "status": 200},
-                 {"query": {"status": "x"}, "status": 400}]
+      "probes": [{"query": {"path": "src/app/core.py", "line": "1", "col": "5", "dir": "in"}, "status": 200},
+                 {"query": {"path": "src/app/core.py", "line": "8", "dir": "out"}, "status": 200},
+                 {"query": {"path": "src/app/core.py", "line": "1", "dir": "sideways"}, "status": 400},
+                 {"query": {"path": "src/app/core.py", "line": "1", "dir": "in", "item": "{}"}, "status": 400},
+                 {"query": {"path": "src/app/core.py", "line": "0", "dir": "in"}, "status": 400},
+                 {"query": {"path": "../etc/passwd", "line": "1", "dir": "in"}, "status": 400},
+                 {"query": {"path": "src/app/core.py", "line": "1", "dir": "in"}, "status": 200, "demo": true}]
     },
     {
       "path": "/api/lsp/hover", "method": "GET", "kind": "json",

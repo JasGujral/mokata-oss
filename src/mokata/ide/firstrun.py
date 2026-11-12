@@ -352,11 +352,14 @@ def _init_job(root: str) -> Dict[str, Any]:
 def _move_record(root: str) -> None:
     from .server import _write_record
     from .statedir import user_repo_dir
+    from ..winacl import read_private
     old = os.path.join(user_repo_dir(root), "ide", "server.json")
+    raw = read_private(old)                  # 0.0.28 C: ours and private, one handle, never a FIFO wait
+    if raw is None:
+        return
     try:
-        with open(old, encoding="utf-8") as fh:
-            rec = json.load(fh)
-    except (OSError, ValueError):
+        rec = json.loads(raw.decode("utf-8"))
+    except ValueError:
         return
     if not isinstance(rec, dict) or rec.get("pid") != os.getpid():
         return

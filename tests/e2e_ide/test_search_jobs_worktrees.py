@@ -134,6 +134,14 @@ class WorktreesListAndMergeIsGated(H.IdeFlow):
         ap = p.locator(".wt-merge-card .ap-card").first
         ap.wait_for()
         self.text_until(".wt-merge-card .ap-cmd", "mokata approve", "the approve command on the card")
+        # 0.0.28 F: the override waives "no run bound" only — the spec legs are said NOT CHECKED,
+        # in their own warning line, and no line with a check mark names a spec leg
+        self.text_until(".wt-merge-card .wt-evidence", "NOT CHECKED: spec-awareness, spec-drift",
+                        "the spec legs said as NOT CHECKED")
+        self.assertEqual([], p.evaluate(
+            "[...document.querySelectorAll('.wt-merge-card .wt-evidence li.wt-ok')]"
+            ".map(li => li.textContent).filter(t => t.includes('spec'))"),
+            "a spec leg was shown with a check mark")
         self.until("document.querySelector('.wt-merge-card .wt-message').value"
                    ".includes('merged under override')",
                    "a message that says it is an override, not 'tests green'")

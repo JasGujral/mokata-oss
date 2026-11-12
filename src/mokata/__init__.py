@@ -10,7 +10,7 @@
 #   - A5 unified config + constitution surface     -> config.py
 #   - A7 `mokata init` onboarding                  -> init.py, profiles.py, cli.py
 
-__version__ = "0.0.27"
+__version__ = "0.0.28"
 
 # PY-FLOOR-3.12 (0.0.26 L12). The ONE interpreter floor, equal to pyproject's `requires-python`,
 # the launchers' ladders (hooks/mokata-plugin-env.sh `_mk_py_ok`, mokata-hook-launch.cmd, launch.sh)

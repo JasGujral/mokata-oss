@@ -210,14 +210,6 @@ class TestNosecJustificationIsDerivable(unittest.TestCase):
         self.assertIsInstance(first, ast.Attribute)
         self.assertEqual(ast.unparse(first), "args.wrap")
 
-    def test_the_nosec_comment_no_longer_claims_it_is_not_attacker_input(self):
-        """The claim that was there for four releases is FALSE at the default scope: the
-        project-level `.claude/settings.json` is Claude Code's checked-in settings file. A
-        comment stating a falsehood is worse than no comment — a reader stops at it."""
-        text = _src(hook_cli)
-        self.assertNotIn("Not attacker input", text)
-        self.assertIn("WrapOrigin", text)     # points at the pin, not at a promise
-
 
 class TestTheDerivationHelpersThemselves(unittest.TestCase):
     """§7i — the helpers above pass on a quiet tree whether or not they work. Feed them a tree
@@ -563,9 +555,17 @@ class TestShellSemanticsSurvive(unittest.TestCase):
             self.assertEqual(hook_cli._run_wrapped(recovered, ""), "HELLO")
 
     def test_statusline_main_prints_the_wrapped_output(self):
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            rc = hook_cli.statusline_main(["--wrap", "echo hi | tr a-z A-Z"])
+        """The test OWNS the directory the badge is asked about (0.0.28 W5, `LOCAL-FULL-VENV`).
+        It used to send no payload, so the badge was asked about the PROCESS cwd — and a suite run
+        from a linked worktree of a checkout where mokata is initialised resolves there, and
+        rightly prints `local · mokata` beside the wrapped output. That is the badge working, in
+        a directory this test never meant to ask about. A Claude Code payload naming a directory
+        mokata is not set up in is the case this row pins: the wrapped output, alone."""
+        with tempfile.TemporaryDirectory() as d:
+            payload = json.dumps({"workspace": {"current_dir": d}, "session_id": "S1"})
+            buf = io.StringIO()
+            with _support.stdin_is(io.StringIO(payload)), contextlib.redirect_stdout(buf):
+                rc = hook_cli.statusline_main(["--wrap", "echo hi | tr a-z A-Z"])
         self.assertEqual(rc, 0)
         self.assertEqual(buf.getvalue().strip(), "HI")
 

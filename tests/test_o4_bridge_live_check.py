@@ -58,10 +58,12 @@ def _dead_pid() -> int:
 
 
 def _write_record(d: str, **rec) -> None:
+    """The server's record as the server writes it: through the private door (0.0.28 C1 - a record
+    readable by others is refused as planted, so a plain fixture would test the refusal instead)."""
+    from mokata.atomicfile import atomic_write_text
     path = os.path.join(d, ".mokata", "temp_local", "ide", "server.json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(rec, fh)
+    atomic_write_text(path, json.dumps(rec), private=True)
 
 
 class ClosedIdeNoConnect(unittest.TestCase):

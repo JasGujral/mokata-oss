@@ -169,7 +169,7 @@ def missing_evidence(root: str, run_id: str, facts: Optional[LogFacts] = None) -
     from .run_resolver import SPEC_PREFIX
     from .state import StateStore
     from .tdd_state import TDD_STATE_PREFIX, from_state, state_dir
-    from .test_runs import mapped_tests, read_test_record
+    from .test_runs import PASSED, mapped_tests, read_test_record, suite_verdict
     store = StateStore(state_dir(root))
     acs = _ac_ids(store.read(SPEC_PREFIX + run_id))
     red: set = set()
@@ -193,10 +193,11 @@ def missing_evidence(root: str, run_id: str, facts: Optional[LogFacts] = None) -
         reasons.append("no test recorded PASSING for acceptance criteria " + ", ".join(unproven))
     suite = record["last_suite"]
     wrote = _last_write_at(root, run_id)
+    verdict, said = suite_verdict(suite)
     if suite is None:
         reasons.append("no test run is recorded for this run")
-    elif not suite.get("passed"):
-        reasons.append("the last recorded test run FAILED")
+    elif verdict != PASSED:
+        reasons.append(said)          # failed / cancelled / not all ran / unreadable: its own words
     elif wrote is not None and not (isinstance(suite.get("at"), (int, float))
                                     and suite["at"] >= wrote):
         reasons.append("the last recorded test run is OLDER than the run's last write — the code "

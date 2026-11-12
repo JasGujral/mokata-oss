@@ -166,9 +166,6 @@ class TestTheReceiptIsReadByTheStdlib(unittest.TestCase):
         self.assertFalse(plan.runnable)
         self.assertIn("receipt", plan.reason)
 
-    def test_the_subset_reader_is_gone(self):
-        self.assertFalse(hasattr(R, "_ReceiptReader"), "no 3.10 shim survives the 3.12 floor")
-
 
 class TestOtherRoutes(unittest.TestCase):
     SPECS = ["mokata[embeddings]", "code-review-graph"]

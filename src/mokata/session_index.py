@@ -123,13 +123,14 @@ def branch_of(cwd: str) -> str:
         return ""
 
 
-def claude_process(now: Optional[float] = None) -> Optional[List[Any]]:
+def claude_process(now: Optional[float] = None, lookup: Any = None) -> Optional[List[Any]]:
     """`[pid, start token]` of the Claude Code process that launched this hook: the nearest
     ancestor (within `CLAUDE_MAX_DEPTH`) born at least `CLAUDE_MIN_AGE_SECS` before the hook. None
-    when it cannot be told — liveness then falls back to the heartbeat, and says so."""
+    when it cannot be told — liveness then falls back to the heartbeat, and says so. `lookup`: a
+    `session_ancestry.system_lookup()` snapshot the caller already took (one per hook)."""
     try:
         from .session_ancestry import ancestors, system_lookup
-        lookup = system_lookup()
+        lookup = lookup if lookup is not None else system_lookup()
         if lookup is None:
             return None
         me = lookup(os.getpid())
@@ -207,12 +208,13 @@ def _update(root: str, session_id: Optional[str], change, t: float) -> bool:
 
 def on_start(root: str, session_id: Optional[str], source: Optional[str], cwd: Optional[str],
              transcript_path: Optional[str] = None, t: Optional[float] = None,
-             proc: Any = "detect") -> bool:
-    """SessionStart: open a segment (a kept-id resume opens a second one on the same row)."""
+             proc: Any = "detect", lookup: Any = None) -> bool:
+    """SessionStart: open a segment (a kept-id resume opens a second one on the same row).
+    `lookup`: the hook's one process-table snapshot (`claude_process`)."""
     t = hook_time() if t is None else float(t)
     src = source if isinstance(source, str) and source else "startup"
     if proc == "detect":
-        proc = claude_process(t)
+        proc = claude_process(t, lookup)
 
     def change(rec: Dict[str, Any]) -> None:
         segs = rec.setdefault("segments", [])

@@ -1416,10 +1416,23 @@ def _worktree_briefing(root: str, cwd: str, session_id: Optional[str]) -> Option
         return None
 
 
+def _one_log_parse(fn):
+    """0.0.28 F (round 3) — the whole SessionStart shares ONE parse of the progress log
+    (`log_read_scope.shared_backward_reads`): the resume record, the re-anchor, the current stage
+    and the next-step derivation each walked it again, which on a log at its read bound was the
+    session-start budget. A decorator, so the hook keeps its name (callers are derived by name)."""
+    import functools
+
+    @functools.wraps(fn)
+    def run(argv: Optional[List[str]] = None) -> int:
+        from .log_read_scope import shared_backward_reads
+        with shared_backward_reads():
+            return fn(argv)
+    return run
+
+
+@_one_log_parse
 def session_start_main(argv: Optional[List[str]] = None) -> int:
-    """Inject mokata's sub-2k-token bootstrap (A4). Async/observability hook: only adds
-    context and ALWAYS exits 0 — a broken config degrades to a one-line note, never blocks
-    the session."""
     args = _parse_flags(argv, "mokata SessionStart briefing hook", [
         ("--plugin-root", dict(default=None,
                                help="the plugin/clone root holding the bundled engine")),
@@ -1482,12 +1495,17 @@ def session_start_main(argv: Optional[List[str]] = None) -> int:
     _resume_run(root, session_id, source, _tp if isinstance(_tp, str) else None)
     # P33 SESSION-INDEX — every session gets its durable row HERE, whatever it goes on to do
     # (read-only, brainstorm-only, blocked, Bash-only): a segment with its cwd, branch, process.
-    _index_session_start(root, session_id, source, cwd, _tp if isinstance(_tp, str) else None)
+    # 0.0.28 F round 4 — ONE process-table snapshot for this start: the index row's Claude process
+    # and the ancestry map below each took their own (`ps -A` twice on macOS, ~25 ms apiece).
+    from .session_ancestry import system_lookup
+    procs = system_lookup()
+    _index_session_start(root, session_id, source, cwd, _tp if isinstance(_tp, str) else None,
+                         lookup=procs)
 
     # SESSION-BIND-BY-ANCESTOR (0.0.23 F1) — tell the MCP server (a sibling descendant of this
     # Claude process, which can never see `session_id` — #25642) which session this process now
     # serves. On `resume` this is what re-points a process whose session `/resume` just switched.
-    _record_session_ancestry(root, session_id)
+    _record_session_ancestry(root, session_id, lookup=procs)
 
     try:
         surface = Surface.load(root)
@@ -1525,7 +1543,8 @@ def session_start_main(argv: Optional[List[str]] = None) -> int:
                           _new_worktree_notice(surface)) if f]
     briefing = build_bootstrap(surface, reanchor=reanchor,
                                footer="\n".join(footer) if footer else None,
-                               off_path=off)   # O12/O12b: no tree walk, no `git` call here
+                               off_path=off,   # O12/O12b: no tree walk, no `git` call here
+                               session=session_id or "")
     context = briefing.text
     # R11 — the briefing's tokenizer-free chars/4 estimate is logged so its safety margin is
     # MEASURED. O12b: the ledger write moved into the detached refresher started below (with the
@@ -1539,7 +1558,8 @@ def session_start_main(argv: Optional[List[str]] = None) -> int:
     # intentions, the dependency check, the structure summary) for the NEXT session and logs this
     # briefing's estimate. Started after the emit; it never delays the briefing.
     refreshing = off and BC.start_refresh(root, via_plugin=bool(args.via_plugin),
-                                          calibrate=briefing.token_estimate, capture=True)
+                                          calibrate=briefing.token_estimate, capture=True,
+                                          session=session_id or "")
     if not refreshing:
         try:                                # in-process / no refresher: the estimate is logged here
             from .govern import log_bootstrap_calibration
@@ -1877,22 +1897,23 @@ def _develop_evidence(surface, root: str, session_id: str) -> List[str]:
         return []
 
 
-def _record_session_ancestry(root: str, session_id: Optional[str]) -> None:
+def _record_session_ancestry(root: str, session_id: Optional[str], lookup: Any = None) -> None:
     """SESSION-BIND-BY-ANCESTOR — record `session_id` against this hook's ancestor pids (see
     `session_ancestry`). SessionStart/UserPromptSubmit only, never PreToolUse. Bounded; never
-    raises: an unrecorded map only means the MCP side resolves exactly as it did before."""
+    raises: an unrecorded map only means the MCP side resolves exactly as it did before.
+    `lookup`: the hook's process-table snapshot, when it already took one."""
     try:
         from .session_ancestry import record_session
-        record_session(root, session_id)
+        record_session(root, session_id, lookup=lookup)
     except Exception:  # noqa: BLE001 — observability-class write in a hook that must exit 0
         pass
 
 
 def _index_session_start(root: str, session_id: Optional[str], source: Optional[str], cwd: str,
-                         transcript_path: Optional[str]) -> None:
+                         transcript_path: Optional[str], lookup: Any = None) -> None:
     try:
         from .session_index import on_start
-        on_start(root, session_id, source, cwd, transcript_path)
+        on_start(root, session_id, source, cwd, transcript_path, lookup=lookup)
     except Exception:  # noqa: BLE001 — the index is observability: the briefing still goes out
         pass
 
@@ -2036,7 +2057,7 @@ def _run_wrapped(command: str, raw: str) -> str:
     if not command:
         return ""
     try:
-        import subprocess
+        from .quiet_spawn import run_jobbed
         # Justification for the B602 suppression (F10, rewritten — the previous one asserted
         # this string was never under an attacker's control, which is FALSE at the default
         # scope and had been for four releases):
@@ -2059,12 +2080,16 @@ def _run_wrapped(command: str, raw: str) -> str:
         #   site, or a `_merge_statusline` that read one file and wrote another goes RED here
         #   rather than quietly turning this comment into a lie.
         #
-        # `shell=True` STAYS: it must match how the harness itself runs a statusLine (pipes,
+        # The SHELL stays: it must match how the harness itself runs a statusLine (pipes,
         # $VARS); a shlex.split arg-list would silently break a user's existing line — a
-        # behaviour change. Bounded by `timeout`, best-effort (failure → "").
-        proc = subprocess.run(command, shell=True, input=raw,  # nosec B602
-                              capture_output=True, text=True, timeout=_WRAP_TIMEOUT_SECS)
-        first = (proc.stdout or "").splitlines()
+        # behaviour change. It is the process door's `shell_line` (Python's own `shell=True`),
+        # 0.0.28 lane B: output in temp files and, on the timeout, the whole tree ended — on
+        # Windows `subprocess.run(capture_output, timeout)` answered a timeout with an UNBOUNDED
+        # `communicate()`, so a grandchild holding the pipe stalled every statusline tick.
+        # Best-effort: any failure, a refusal or the timeout → "".
+        _rc, out, _err = run_jobbed(shell_line=command, stdin_bytes=raw.encode("utf-8"),  # nosec B602
+                                    timeout=_WRAP_TIMEOUT_SECS)
+        first = (out or "").splitlines()
         return first[0].strip() if first else ""
     except Exception:
         return ""

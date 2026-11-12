@@ -39,6 +39,7 @@ precisely because `select` on a pipe does not work on Windows.
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """
 
+import gc
 import io
 import json
 import os
@@ -49,6 +50,8 @@ import tempfile
 import textwrap
 import time
 import unittest
+import warnings
+from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
 
@@ -116,6 +119,14 @@ for raw in sys.stdin:
         target = ((msg.get("params") or {{}}).get("arguments") or {{}}).get("target", "")
         if MODE == "mute":
             continue                      # ALIVE and saying nothing
+        if MODE == "grandchild":
+            # a worker that INHERITS the transport pipes and outlives the server (code-review-graph's
+            # ProcessPoolExecutor workers do exactly this), then silence
+            import subprocess
+            gc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(100000)"])
+            with open("gc.pid", "w", encoding="utf-8") as fh:
+                fh.write(str(gc.pid))
+            continue
         if MODE == "slow-alpha" and target == "ALPHA":
             time.sleep({slow})            # answers, but far too late for the bound
             send({{"jsonrpc": "2.0", "id": msg.get("id"), "result": rows(target)}})
@@ -453,6 +464,146 @@ class TestTheDegradeLayerSaysWhich(unittest.TestCase):
         self.assertEqual([n.subsystem for n in degrade.emitted_notices()], ["code-graph"])
 
 
+class TestSessionCloseReleasesItsPipes(FakeServerCase):
+    """`CRG-SESSION-CLOSE-LEAKS-FDS` (0.0.28 lane A). Reaping the server did not close the three
+    pipes `Popen` opened on it, so each closed session leaked three descriptors until the garbage
+    collector found them. A REAL subprocess: a mocked pipe would prove the handler, not the leak."""
+
+    MODE = "healthy"
+
+    def _opened(self):
+        session = self.session()
+        session._ensure()
+        return session, session._proc
+
+    @staticmethod
+    def _released(session):
+        """The read pipes are closed by daemon closers the instant their readers let go; join them
+        (no timeout: a closer that never finishes is a hang the runner's progress check sees)."""
+        for closer in getattr(session, "_closers", []):
+            if closer is not None:
+                closer.join()
+
+    def test_every_pipe_is_closed_when_the_session_closes(self):
+        session, proc = self._opened()
+        self.assertFalse(proc.stdin.closed)
+        session.close()
+        self._released(session)
+        self.assertTrue(proc.stdin.closed, "stdin pipe left open")
+        self.assertTrue(proc.stdout.closed, "stdout pipe left open")
+        self.assertTrue(proc.stderr.closed, "stderr pipe left open")
+        self.assertIsNotNone(proc.poll(), "the server process was not reaped")
+
+    def test_no_ResourceWarning_is_raised_when_a_closed_session_is_collected(self):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", ResourceWarning)
+            session, proc = self._opened()
+            session.close()
+            self._released(session)
+            del session, proc
+            gc.collect()
+        leaks = [str(w.message) for w in caught if issubclass(w.category, ResourceWarning)]
+        self.assertEqual([], leaks)
+
+    def test_a_pipe_that_is_already_broken_does_not_stop_the_close(self):
+        """The server may have died with bytes still buffered on stdin; closing that pipe raises
+        `BrokenPipeError` (an `OSError`). The close must still finish and release the others."""
+        from mokata.knowledge.crg_client import _close_quietly
+
+        class _Broken:
+            def close(self):
+                raise BrokenPipeError(32, "Broken pipe")
+
+        class _Gone:
+            def close(self):
+                raise ValueError("I/O operation on closed file")
+
+        _close_quietly(_Broken())
+        _close_quietly(_Gone())
+        _close_quietly(None)
+
+    def test_closing_twice_is_harmless(self):
+        session, proc = self._opened()
+        session.close()
+        self._released(session)
+        session.close()
+        self._released(session)
+        self.assertTrue(proc.stdout.closed)
+
+
+class TestCloseDoesNotWaitForAPipeAGrandchildHolds(FakeServerCase):
+    """0.0.28 lane A, verifier H1. A pipe's write end held by a surviving grandchild never gives EOF,
+    and a reader parked on it holds the stream's lock — so closing that stream from the closing
+    thread BLOCKS for the grandchild's lifetime (measured 25.4 s vs 1.1 s, and forever for a
+    long-lived worker). The rule: the thread that reads a pipe owns closing it; `close()` never
+    waits on a pipe somebody else may hold."""
+
+    MODE = "grandchild"
+
+    def test_a_timeout_returns_at_the_read_bound_while_a_grandchild_holds_the_pipes(self):
+        import signal
+        import threading
+        from mokata import quiet_spawn
+        session = self.session()
+        outcome = {}
+
+        def run():
+            try:
+                session.call("query_graph_tool", {"pattern": "callers_of", "target": "X"})
+            except BaseException as exc:            # carried to the asserting thread
+                outcome["exc"] = exc
+
+        # BEHAVIOURAL, not clock-based: a `close()` that waits on its closers (bounded or not)
+        # is caught by watching who gets joined, whatever the wait costs.
+        from mokata.knowledge import crg_client
+        joined_closers = []
+        real_join = threading.Thread.join
+
+        def spy(thread, *a, **k):
+            if getattr(thread, "_target", None) is crg_client._close_quietly:
+                joined_closers.append(thread)
+            return real_join(thread, *a, **k)
+
+        patcher = mock.patch.object(threading.Thread, "join", spy)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        worker.join(BOUND * 50)                     # relative to the configured bound, not a new clock
+        pid_file = os.path.join(self._tmp, "gc.pid")
+        grandchild = None
+        if os.path.exists(pid_file):
+            with open(pid_file, encoding="utf-8") as fh:
+                grandchild = int(fh.read())
+
+        def reap():
+            if grandchild is not None:
+                try:
+                    quiet_spawn.signal_pid(grandchild, getattr(signal, "SIGKILL", signal.SIGTERM))
+                except OSError:                     # already gone: released earlier by the test
+                    pass
+        self.addCleanup(reap)
+        hung = worker.is_alive()
+        if hung:
+            reap()                                  # release the blocked close so the suite ends
+            worker.join()
+        self.assertIsNotNone(grandchild, "the fake server never spawned its grandchild")
+        self.assertFalse(hung, "close() waited on a pipe the grandchild still holds")
+        self.assertIsInstance(outcome.get("exc"), CrgTimeout)
+        patcher.stop()
+        self.assertEqual([], joined_closers, "close() waited on a closer thread")
+        closers = [c for c in session._closers if c is not None]
+        self.assertTrue(closers)
+        # the pipes are still held at the moment close() returned: the closers are still parked...
+        self.assertTrue(any(c.is_alive() for c in closers),
+                        "the closers finished while the grandchild still held the pipes")
+        # ...and the moment the holder goes, they exit (no timeout: a hang here is a hang)
+        reap()
+        for c in closers:
+            real_join(c)
+            self.assertFalse(c.is_alive())
+
+
 # ------------------------------------------------------------- 6 · THE SERVER'S OWN ACCOUNT (d. 6)
 class TestStderrIsCapturedNotDiscarded(FakeServerCase):
     MODE = "mute"
@@ -463,12 +614,6 @@ class TestStderrIsCapturedNotDiscarded(FakeServerCase):
         with self.assertRaises(CrgTimeout) as ctx:
             self.session().call("query_graph_tool", {"pattern": "callers_of", "target": "ALPHA"})
         self.assertIn("index lock held", str(ctx.exception))
-
-    def test_a1_stderr_is_no_longer_devnulled(self):
-        with open(os.path.join(SRC, "knowledge", "crg_client.py"), "r", encoding="utf-8") as fh:
-            text = fh.read()
-        self.assertNotIn("stderr=subprocess.DEVNULL", text)
-        self.assertIn("stderr=subprocess.PIPE", text)
 
 
 class TestASecretInStderrIsWithheld(FakeServerCase):
@@ -514,6 +659,7 @@ class TestTheStderrTailIsBounded(unittest.TestCase):
              "sys.stderr.flush()\n"],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, bufsize=1)
         tail = BoundedStderrTail(proc.stderr)
+        self.addCleanup(proc.stderr.close)
         self.assertEqual(proc.wait(timeout=20), 0,
                          "the subprocess blocked writing to an undrained pipe")
         time.sleep(0.3)

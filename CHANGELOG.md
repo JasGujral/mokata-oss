@@ -10,6 +10,205 @@ All notable changes to mokata are documented here. The format is based on
 > early-stage, fast-moving project. The detailed build history lives in the repository's internal
 > build log.
 
+## [0.0.28] — 2026-11-12
+
+**Fewer hangs, fewer leaks, and Windows behaves.** Test, merge, baseline and language-server
+processes on Windows are now held and ended as a whole; the MCP server no longer stalls and checks
+every call before it runs; the files that hold tokens and trust are private from the first instant
+on every OS; private keys with a damaged header are still redacted; a test proof is bound to the
+file that ran; the gated merge also needs the spec checks; and Find Usages gains Callers and Callees
+from a language server.
+
+### ⚠ Upgrade notes
+- **MCP callers: the `approve`, `confirm` and `mtype` arguments are gone.** Consent is the
+  `proposal_id` alone: call the write again with the `proposal_id` a human approved.
+  `review_record` takes `outcome="passed"` or `outcome="failed"`.
+- **MCP calls are now checked before they run.** An argument name the tool does not know, a missing
+  required argument, or a value outside the allowed set is refused with a reply that names the fix
+  (the closest accepted name, or the accepted values). Before, an unknown name was silently dropped.
+- **Test proofs recorded before 0.0.28 must be re-run** (red, then green) to prove again. The Proof
+  screen says so instead of guessing.
+- **`mokata baseline` has a new state, NOT RUN.** A suite that timed out, could not start, or could
+  not be held is NOT RUN (the command exits 1; the MCP tool returns `ok: false`), never "failing" and never "no command".
+- **`mokata worktree merge` now also needs the spec checks** (spec awareness and spec drift) to have
+  run on the session's worktree at its head. A stale, missing or failing result blocks the merge.
+- **The Language panel no longer lists references.** References live in Find Usages, next to the
+  new Callers and Callees tabs.
+
+### Added
+- **Callers and Callees from a language server.** Find Usages now has three tabs: Usages, Callers
+  and Callees, each a tree you can expand, answered by the language server once you trust the
+  workspace; without a server, callers come from the code graph. "Find Callers" and "Find Callees"
+  are in the command palette and the Code right-click menu. This is the call hierarchy that the
+  0.0.27 notes moved to 0.0.28, now shipped.
+- **`mokata mcp docs`** renders a reference page of every MCP tool, generated from the tools
+  themselves.
+- **`mokata doctor` reports the IDE server, bridge and trust records and `settings.local.json`**, and `mokata doctor --fix` re-protects your own weak
+  ones (it never touches a file someone else owns). `mokata doctor --plugin` names a plugin pin that
+  does not resolve yet, and how to fix it.
+- **`mokata worktree test`** and the IDE's Run suite run the suite and the spec checks as one job.
+  Cancel in the IDE stops it and records nothing; Ctrl-C on the command line cancels it at the next
+  checkpoint (see Known limitations).
+
+### Changed
+- **Windows: one place starts every held process.** Test re-runs, the gated merge's full suite,
+  `mokata baseline`, the status-line wrapper, the code-graph version probe and the language server
+  start through it. On Windows each runs inside a job that is ended as a whole, so a leftover
+  grandchild can no longer keep a run going or hold a worktree open. If Windows will not let mokata
+  hold the process tree, mokata refuses to run it and says why; it never runs it unheld.
+- **Stricter runner choice on Windows:** a test runner inside your repository is never picked up from
+  PATH by name; `.cmd`, `.bat` and script runners, device names and stream names are refused before
+  anything runs; a language server installed only as a `.cmd` shim is named with a hint instead of
+  "not on PATH".
+- **Every MCP tool parameter is described, typed and marked required** where it is required, so a
+  model's first call is usually right. A repository that is not set up yet gets one clear reply
+  naming `mokata init`.
+- **The gated merge records "nothing to check".** When the spec checks have nothing to grade, the
+  merge is allowed and the approval and merge commit say NOT CHECKED.
+- **The "where you left off" line** at the start of a session is the same next step `mokata suggest`
+  and the IDE show, computed one way, and stays within its time budget on a large progress log.
+- **Hooks are faster inside Claude Code.** Claude Code starts its processes with Python's bytecode
+  cache turned off, so every hook recompiled mokata on each run. The hook launchers now keep compiled
+  bytecode in mokata's own folder in your user cache (`$XDG_CACHE_HOME/mokata/pycache`, or
+  `~/.cache/mokata/pycache`; on Windows `%USERPROFILE%\.cache\mokata\pycache` when `XDG_CACHE_HOME`
+  is not set), never beside the installed code. If that folder cannot be written, hooks still run,
+  uncached.
+- The IDE's end-to-end flows run in Firefox as well as Chromium on every change. About 70 stale or
+  duplicate tests were removed, each checked first for lost coverage.
+
+### Fixed
+- **The MCP server no longer hangs** when a child process reads its input, when many slow calls are
+  in flight, or when the client does not read its log output.
+- **Review window (`mokata ide`):** a table count that cannot finish says why from the first paint,
+  and Retry in the Jobs drawer lands the count back in the open table; the Review panel says "not
+  run" and "cancelled" instead of calling a partly run or cancelled suite FAILED; copy and cite in
+  Split view follow the selection exactly (including a drag that starts in a gap row), in Firefox as
+  well as Chromium, and stay fast on hunks of thousands of rows; the quick-open list no longer
+  changes under your pointer; and the IDE no longer deadlocks on its first requests.
+- **A language server's malformed answer is skipped and counted;** the good results stay. A reply
+  larger than 32 MiB ends the server with that reason, and the reason is no longer overwritten by
+  "exited".
+- **macOS with the system SQLite:** a freshly rebuilt code graph could be reported as incomplete,
+  because the system library refuses a read-only open of a database whose side files were removed.
+  mokata's read-only checks now open such a database without creating or changing any file.
+- **Windows:** a test command spelled with a trailing dot (`run.cmd.`) is read as Windows reads it
+  and refused, instead of being run and recorded as failed. The gated merge's suite is now held like
+  every other run.
+- The code graph's client closes its pipes when a session ends.
+
+### Security
+- **Files that hold tokens and trust are private from the first instant** on Windows, macOS and
+  Linux: the IDE server and bridge records, the trust record, the usages spill, the reviews store and
+  `.claude/settings.local.json`. They are checked again when read; a planted or weak copy is not
+  trusted, and a named pipe in its place no longer hangs mokata. On a disk that cannot hold
+  permissions (FAT, exFAT, some network mounts) mokata still works, and `mokata doctor` says the files
+  are only as private as the disk.
+- **A PATH entry that points into your repository in another letter case** no longer lets a planted
+  tool run on macOS. One file typed three ways is one record.
+- **Private keys with a damaged header are still redacted.** A key whose `BEGIN` line is mangled
+  (missing or odd dashes, a cut word, look-alike characters, a marker split across string pieces or
+  lines, a base64-wrapped key) is now redacted from the context the IDE sends to a session, from Copy
+  with Context, and from grounded explanations. A key body with no header at all is recognised by its
+  structure. One detector serves every place that redacts or blocks. A doubtful marker in prose (for
+  example documentation that quotes one) can be recorded as reviewed; a real key cannot. `.ppk` files
+  are treated as sensitive.
+- **A test proof is bound to the file that ran.** Re-pointing a symlink at another file, even a
+  byte-identical one, no longer keeps the proof; links outside the repository, dangling links and
+  links at HEAD never prove.
+
+### Re-scheduled
+- **Callees without a language server** — the Callees tab will fall back to the code graph when no
+  language server is running, as Callers already does.
+  Scheduled for **0.0.29** (tracked as `LSP-CALLS-GRAPH-CALLEES`).
+  Until then the Callees tab needs a trusted language server.
+
+### Known limitations
+- **Windows test runs.** A test command that resolves only to a batch file (`mvn.cmd`, `gradlew.bat`,
+  an explicit `.cmd`/`.bat`, or one spelled with a trailing dot such as `run.cmd.`) cannot be run by
+  mokata: it is refused before anything starts, the IDE re-run is disabled and the gated merge is not
+  possible for that project, because the merge needs mokata's own suite result and merge-override
+  does not substitute for it. Set the test command to a real executable (for example
+  `node <runner.js>`), or merge that project from macOS, Linux or WSL. A test runner set explicitly
+  to `cmd.exe` or `powershell.exe` is a real program and still runs, and a baseline command's first
+  word can be found in the repository folder by `cmd.exe`.
+- **Windows helper commands are not yet held.** The self-updater, `claude --version`,
+  `mokata --version` during install, the code graph's command line and a domain gate's own tool do
+  not yet run through the held process tree, so a timeout there can wait on a leftover child.
+- **Ctrl-C in `mokata worktree test`.** Ctrl-C cancels at the next checkpoint, not at once: a second
+  Ctrl-C does nothing until then, and one that arrives after the last checkpoint is ignored, so the
+  command finishes and records its result. Cancel in the IDE stops it immediately.
+- **Spec checks in the merge gate.** A decision recorded after the spec checks ran (within their
+  24-hour window) is not part of their verdict; re-run them before merging. Setting
+  `review.verdict_max_age_hours` to 0 or less turns the age limit off.
+- **`mokata baseline`.** A test command containing a NUL byte stops with an error instead of
+  reporting NOT RUN.
+- **MCP.** Cancelling a long `ci_check` from an MCP client does not stop its work; Ctrl-C on the
+  command line and Cancel in the IDE do. The MCP server clears `GIT_ASKPASS`, so an https credential
+  that comes only from an askpass helper (for example VS Code's) is not used by `vault_push` or
+  `worktree_merge`; on Windows the variable is unset rather than empty, so a helper may still be
+  asked. The `remember` tool reports a bad date in an intention (for example month 13) as "an
+  intention needs a due condition" rather than as a bad date.
+- **Plugin route:** for a short time during a release the marketplace can offer a version that PyPI
+  does not serve yet. `mokata doctor --plugin` says so; wait and retry.
+- **File privacy.** `mokata doctor --fix` re-protects a token file that was readable but keeps the
+  same token; anything that read it before still has it. On a disk without access control (FAT,
+  exFAT, some network mounts) a file the disk reports as yours is accepted, and the files are only as
+  private as the disk. The IDE's pairing token is passed on the command line, where other processes
+  of the same user can see it. Files under `.mokata/runs/` are now written with your normal file
+  permissions (your umask), not owner-only as before; they hold run state, not tokens.
+- **Hook bytecode cache.** A relative `XDG_CACHE_HOME` makes the hooks write their compiled bytecode
+  under the current folder, which is usually your project; set it to an absolute path or leave it
+  unset. The first hook after an install or upgrade pays a one-time compile, and the caches of older
+  versions are not cleaned up.
+- **Redaction.** In rare shapes a few bytes of a private key's last line can be left (a 1-3
+  character last line, a key written with two different comment styles, a line split around a
+  variable), and one line right after a key with no header can be hidden as well. PGP and PKCS#12
+  bodies are caught by their marker or file suffix only.
+- **Proof.** On Windows, a symlink written with `/` and `..` never proves, and a test reached through
+  a junction never proves at HEAD. Hard links and bind mounts are the same bytes under two names;
+  mokata cannot tell them apart.
+- **Callers and Callees.** Without a language server the Callees tab is empty. The first answer in a
+  repository that holds a very large Python file can take a while as the code graph indexes it (it
+  shows progress and can be cancelled).
+- **Review window.** Citing a selection in Unified view walks the whole table, so it slows down on
+  very large diffs. The image pixel difference is shown but feeds no gate.
+- **Command hints.** Some messages from the command line suggest commands that do not exist
+  (`mokata uninstall`, `mokata upgrade`, `mokata ship`, `mokata team init --vector`). Other
+  commands that mokata prints still use the plugin form `/mokata:<name>` (`mokata suggest`, hints,
+  skill text, the IDE's empty Sessions screen); after `mokata init` type `/<name>` instead (or
+  `/mokata-<name>` for review, init, doctor, resume and bug).
+- **`mokata index` is Python only.** Impact and blast radius from it do not cover Go, TypeScript,
+  Rust or Java; the command says so. The skipped count covers only javascript, go, rust and java,
+  and `.pyi` / `.PY` files are counted as skipped.
+- **Very large TypeScript repositories are slow to ripple:** about 74 seconds for a function with
+  391 callers in a 15M-line tree (a visible job with Cancel); the first search hit takes about 2.2
+  seconds. Measured for 0.0.27; not re-measured for this release.
+- **The `.git/hooks` and `.git/config` gate has limits.** It does not see a computed `cd`
+  (`cd "$D"`, `cd -`, `popd`), Bash mokata cannot parse (variables, `eval`, heredoc-fed
+  interpreters, `find -exec`, `xargs`), or commands that change config as a side effect
+  (`git remote add`, `git push -u`, `git branch -u`); a hard link to `.git/config` is not seen on
+  FAT, exFAT or some SMB shares. **An agent with a shell can approve its own proposal with
+  `mokata approve <id> --yes`**: the gate makes the write visible, it does not stop an agent that has
+  Bash. Writes to `.gitattributes`, `.git/info/attributes` and `.gitmodules` are not gated. The gate
+  is not yet described in the product docs.
+- **The gated merge commit is unsigned** (`mokata worktree merge` runs no signing program).
+- **Language server:** pnpm and yarn global installs on Windows are unverified on a real install;
+  trust is not bound to the server's command line, and the trust status says so.
+- **CSV:** a single record over 64 MiB is refused; a keyed comparison of 1,000,000 rows in reverse
+  order takes about 71 seconds (measured for 0.0.27); a keyed comparison matches keys exactly, so
+  case matters, and there is no regex filter.
+- **A path-swap race can still serve a swapped file** (2 in 1.2 million attempts in a test); Windows
+  8.3 short names and alternate streams are unverified for the IDE's file reads on a real Windows
+  machine. On a case-sensitive disk a directory named `.Git` is refused.
+- **Not in this release, and not scheduled:** hunk-level stage and discard, PR review submit and
+  other git hosts.
+- **Carried over from earlier releases, not re-verified for this release:** the Windows IDE terminal
+  and the `.cmd` hook launcher are not verified on a real Windows desktop; on Windows a spec proposal
+  can wait ~20 s while another mokata process writes the same run's state; follow mode is unproven
+  against a real `claude` session; runs created before 0.0.26 keep the previous re-entry behaviour
+  until a new run is registered; a restarted MCP server is recognised only within two launcher
+  processes of Claude's hooks; the clean-machine install workflow has not run on a release runner.
+
 ## [0.0.27] — 2026-11-04
 
 **Read a change your way, check that it is proven, merge with evidence — in an IDE with three

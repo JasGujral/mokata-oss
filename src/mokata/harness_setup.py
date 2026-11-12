@@ -26,7 +26,6 @@ import shlex
 import shutil
 import sys
 import sysconfig
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -1113,8 +1112,13 @@ def _write_json(path: Path, data: Dict) -> None:
     # ATOMIC write (P2): render to a temp file in the SAME directory, then `os.replace` it onto
     # the target — a crash mid-write leaves the old config intact rather than a truncated/
     # half-written one. Same-dir temp keeps the rename atomic (no cross-filesystem move).
+    # 0.0.28 C1 (refute H1): `settings.local.json` carries the bridge/gate hook TOKEN (`--ide-bridge`,
+    # `--http-gates`), so it is written through the private door — born readable by this user only,
+    # on every OS; `os.replace` carries that onto the file. Every other config keeps today's temp.
+    from .atomicfile import _exclusive_temp
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    fd, tmp = _exclusive_temp(str(path.parent), f".{path.name}.", ".tmp",
+                              private=path.name == LOCAL_SETTINGS)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(data, fh, indent=2)

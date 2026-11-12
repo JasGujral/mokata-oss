@@ -342,17 +342,6 @@ class TheCiGateAndTheMergeAgreeOnONECommit(unittest.TestCase):
                           "the jq projection drops %r, so the read asks for a field it never "
                           "returns: %s" % (field, jq[0].strip()))
 
-    def test_the_old_single_field_read_is_GONE_from_the_PR_step(self):
-        """Pre-1.0: deleted, not left beside its replacement (doc 85 §7d). ⚠ The post-merge
-        reconciliation read a few lines further on asks `--json state` ALONE on purpose — it is
-        answering *did the merge land*, where there is no head to compare — so this is scoped to
-        the PR step rather than asserted over the whole file."""
-        text = script()
-        step = text[text.index("# --- 3b) open the release PR"):
-                    text.index("# --- 4b) merge the PR into main")]
-        self.assertNotIn("--json state --jq .state", step,
-                         "the single-field read is still in the PR step")
-
 
 @unittest.skipUnless(os.path.exists(RELEASE_SH) and os.path.exists(SYNC_SH),
                      "release.sh and sync-public.sh are dev-only, excluded from the public mirror")

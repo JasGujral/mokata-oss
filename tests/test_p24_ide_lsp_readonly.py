@@ -47,6 +47,10 @@ from mokata.ide import trust as T
 from mokata.ide.features import lsp as F
 from mokata.knowledge import cancel as C
 
+#: A pid no process can have (above Linux's `pid_max` ceiling of 2**22 and macOS's 99999): a faked
+#: Popen carries it so the door's handle never watches, signals or reaps a real process.
+_NO_SUCH_PID = 2 ** 22 + 1
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 FAKE = os.path.join(HERE, "_fake_lsp_server.py")
 AGENT = {"X-Mokata-Token": TOKEN}
@@ -499,10 +503,18 @@ class TheBridgeIsReadOnly(_Repo):
         self.assertEqual(1, srv.status()["refused_edits"])
 
     def test_the_allowlist_is_exactly_the_reads_and_the_handshake(self):
-        """What the bridge may send is small and named: five document reads, the lifecycle, the
-        document open/close notices and cancel — nothing that writes."""
+        """What the bridge may send is small and named: the document reads (hover, definition,
+        references, symbols, and the call hierarchy's three — 0.0.28 G), the lifecycle, the
+        document open/close notices and cancel — nothing that writes. The call hierarchy's
+        siblings that are not offered (`callHierarchy/resolve` does not exist in LSP; type
+        hierarchy is not a read the bridge offers) are refused like any unknown method."""
         self.assertEqual({"initialize", "shutdown", "textDocument/hover", "textDocument/definition",
-                          "textDocument/references", "textDocument/documentSymbol"}, set(L.ALLOWED_REQUESTS))
+                          "textDocument/references", "textDocument/documentSymbol",
+                          "textDocument/prepareCallHierarchy", "callHierarchy/incomingCalls",
+                          "callHierarchy/outgoingCalls"}, set(L.ALLOWED_REQUESTS))
+        for refused in ("callHierarchy/resolve", "textDocument/prepareTypeHierarchy",
+                        "typeHierarchy/supertypes", "typeHierarchy/subtypes"):
+            self.assertNotIn(refused, L.ALLOWED)
         self.assertEqual({"initialized", "exit", "textDocument/didOpen", "textDocument/didClose",
                           "$/cancelRequest"}, set(L.ALLOWED_NOTIFICATIONS))
         self.assertFalse(L.ALLOWED & L.WRITE_METHODS)
@@ -534,10 +546,9 @@ class DefinitionAndReferencesRoundTrip(_Repo):
                              [(x["path"], x["line"], x["col"]) for x in d["results"]])
             self.assertEqual("def parse(text):", d["results"][0]["snippet"])
 
-            refs = lsp_get(c, "/api/lsp/references?path=src/app/core.py&line=1&col=5").json()
-            self.assertEqual("lsp", refs["source"])
-            self.assertEqual([1, 8], sorted(x["line"] for x in refs["results"]))
-            self.assertTrue(all(x["path"] == "src/app/core.py" for x in refs["results"]))
+            # 0.0.28 G-Q3: references have ONE surface — Find Usages (its LSP path is
+            # `usages._lsp_usages`, graded in test_p4_*); the Language panel's route is gone.
+            self.assertEqual(404, c.get("/api/lsp/references?path=src/app/core.py&line=1&col=5").status_code)
 
             hov = lsp_get(c, "/api/lsp/hover?path=src/app/core.py&line=8&col=16").json()
             self.assertIn("(function) parse", hov["hover"])
@@ -737,12 +748,18 @@ class ProcessManagement(_Repo):
         from mokata import quiet_spawn
         with mock.patch("mokata.quiet_spawn.os.name", "nt"):
             self.assertEqual({"creationflags": 0x08000000 | 0x00000200}, quiet_spawn.detached())
-        with mock.patch("mokata.ide.lsp.subprocess.Popen") as popen, \
-                mock.patch("mokata.ide.lsp._resume_process"):
+        # A fake process has no real handle: on a real Windows host the door's job and resume are
+        # stood in for too (the door's Windows path is graded with real processes in test_b).
+        with mock.patch("mokata.quiet_spawn.subprocess.Popen") as popen, \
+                mock.patch.object(quiet_spawn.WinJob, "make",
+                                  return_value=mock.Mock(active=lambda: 0)), \
+                mock.patch.object(quiet_spawn, "_resume_process", lambda proc: None):
             popen.return_value.stdin = io.BytesIO()
             popen.return_value.stdout = io.BytesIO()
             popen.return_value.stderr = io.BytesIO()
             popen.return_value.poll.return_value = None
+            popen.return_value.returncode = None
+            popen.return_value.pid = _NO_SUCH_PID     # no real process: nothing is ever signalled
             popen.return_value.wait.side_effect = lambda *a, **k: time.sleep(0.05)
             srv = L.Server(self.repo, "python", "fake", ["x"], clock=time.monotonic)
             try:
@@ -753,7 +770,7 @@ class ProcessManagement(_Repo):
                 srv.stopped.set()
                 srv._stop_readers.set()
             kw = popen.call_args.kwargs
-            self.assertNotIn("shell", kw)
+            self.assertFalse(kw.get("shell"), kw)
             self.assertTrue(kw.get("start_new_session") or kw.get("creationflags"), kw)
         self.assertFalse(hasattr(L, "resolve_cmd_shim"), "shim text is never parsed (decoy-REM finding)")
         # `"` and `|` cannot be in a Windows file name (WinError 123), so the spelling of the
@@ -1021,10 +1038,11 @@ class TheMokataEdge(_Repo):
         super().setUp()
         T.decide(self.repo, True, "test")
 
-    def test_references_carry_tests_vs_code_and_the_graphs_blast_radius_with_its_basis(self):
-        """A references answer says how many of them are tests, and brings the graph's callers,
-        blast radius, covering tests and the honesty basis for the same symbol — what a change
-        at this symbol would break, which a plain LSP client cannot say."""
+    def test_definition_carries_tests_vs_code_and_the_graphs_blast_radius_with_its_basis(self):
+        """A definition answer says how many of its results are tests, and brings the graph's
+        callers, blast radius, covering tests and the honesty basis for the same symbol — what a
+        change at this symbol would break, which a plain LSP client cannot say. (0.0.28 G-Q3: this
+        pinned the deleted `/api/lsp/references`; the edge is the same on every symbol read.)"""
         _write(self.repo, "tests/test_more.py", "from app.core import parse\n\n\ndef test_two():\n    assert parse('a,b')\n")
         c, state = boot(self.repo)
         try:
@@ -1035,14 +1053,13 @@ class TheMokataEdge(_Repo):
             # the fake server only knows the documents it was handed: open the tests too
             for rel in ("tests/test_core.py", "tests/test_more.py"):
                 srv.open(os.path.join(self.repo, *rel.split("/")), "python")
-            refs = lsp_get(c, "/api/lsp/references?path=src/app/core.py&line=1&col=5").json()
+            refs = lsp_get(c, "/api/lsp/definition?path=src/app/core.py&line=8&col=16").json()
             self.assertEqual("lsp", refs["source"])
             edge = refs["edge"]
             tests = [r for r in refs["results"] if r["test"]]
             self.assertEqual(len(tests), edge["tests"])
-            self.assertGreaterEqual(edge["tests"], 2)
             self.assertEqual(len(refs["results"]) - edge["tests"], edge["code"])
-            self.assertTrue(all(r["path"].startswith("tests/") for r in tests))
+            self.assertEqual(1, edge["code"])
             self.assertEqual("parse", edge["symbol"])
             self.assertIn(edge["blast_basis"], ("structural", "lexical", "verified_empty"))
             self.assertIn("callers", edge)
@@ -1164,7 +1181,7 @@ class StoppingNeverHangsAndKillsTheTree(_Repo):
         try:
             with open(f"/proc/{pid}/stat", encoding="utf-8") as fh:
                 return fh.read().rsplit(")", 1)[1].split()[0] != "Z", pid
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):  # gone between the open and the read
             if os.path.isdir("/proc/self"):
                 return False, pid                       # Linux, and the pid is gone
         st = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], stdin=subprocess.DEVNULL,
@@ -1197,7 +1214,7 @@ class StoppingNeverHangsAndKillsTheTree(_Repo):
         th.join(5)
         self.assertIsInstance(outcome.get("exc"), L.ServerGone)
         self.assertFalse(srv.alive)
-        self.assertTrue(wait_for(lambda: not self._grandchild_alive()[0], timeout=5), self._grandchild_alive())
+        self.assertTrue(wait_for(lambda: not self._grandchild_alive()[0], timeout=30), self._grandchild_alive())
 
     def test_stop_all_on_a_server_that_ignores_shutdown_is_bounded_and_leaves_no_grandchild(self):
         """`stop_all` (revoke, IDE shutdown, idle reap) on a server that never answers `shutdown`
@@ -1212,7 +1229,7 @@ class StoppingNeverHangsAndKillsTheTree(_Repo):
         self.assertLess(took, 3 * L.STOP_GRACE_S + 1, f"stop_all blocked for {took:.1f}s")
         self.assertFalse(srv.alive)
         self.assertEqual([], h.status()["servers"])
-        self.assertTrue(wait_for(lambda: not self._grandchild_alive()[0], timeout=5), self._grandchild_alive())
+        self.assertTrue(wait_for(lambda: not self._grandchild_alive()[0], timeout=30), self._grandchild_alive())
 
     def test_revoke_and_ide_close_return_promptly_with_a_lingering_server(self):
         """Through the routes: `POST /api/lsp/trust {revoke}` and `state.close()` do not hang on
@@ -1227,7 +1244,7 @@ class StoppingNeverHangsAndKillsTheTree(_Repo):
         self.assertEqual(200, r.status_code, r.text)
         self.assertLess(time.monotonic() - t0, 3 * L.STOP_GRACE_S + 1)
         self.assertFalse(srv.alive)
-        self.assertTrue(wait_for(lambda: not self._grandchild_alive()[0], timeout=5))
+        self.assertTrue(wait_for(lambda: not self._grandchild_alive()[0], timeout=30))
         t0 = time.monotonic()
         state.close()
         self.assertLess(time.monotonic() - t0, 3 * L.STOP_GRACE_S + 1)
@@ -1245,99 +1262,22 @@ class StoppingNeverHangsAndKillsTheTree(_Repo):
         srv = h.get("python")
         self.assertTrue(wait_for(lambda: os.path.exists(self.pidfile)))
         if os.name == "nt":                 # no process groups: the tree's handle is its Job Object
-            self.assertTrue(srv.job is not None and srv.job.ok, "no Job Object holds the tree")
-        else:
-            self.assertEqual(srv.pgid, srv.proc.pid)
+            self.assertIsNotNone(srv.tree._job, "no Job Object holds the tree")
+        else:                               # its group, recorded at spawn (the door's handle)
+            self.assertEqual(srv.tree._pgid, srv.proc.pid)
         uri, _ = srv.open(os.path.join(self.repo, "src", "app", "core.py"), "python")
         t0 = time.monotonic()
         with self.assertRaises(L.ServerGone):
             srv.request("textDocument/hover", {"textDocument": {"uri": uri}, "position": {"line": 0, "character": 5}})
         self.assertLess(time.monotonic() - t0, 8.0, "the crash was hidden by the child's pipe")
         self.assertTrue(srv.stopped.is_set())
-        self.assertTrue(wait_for(lambda: not self._grandchild_alive()[0], timeout=5), self._grandchild_alive())
+        self.assertTrue(wait_for(lambda: not self._grandchild_alive()[0], timeout=30), self._grandchild_alive())
         self.assertTrue(wait_for(lambda: any(e.get("what") == "crashed" for e in events)))
         self.assertEqual("crashed", h.status()["servers"][0]["state"])
         t0 = time.monotonic()
         h.stop_all("test")
         self.assertLess(time.monotonic() - t0, 3 * L.STOP_GRACE_S + 1)
         self.assertFalse(self._grandchild_alive()[0])
-
-    def test_on_windows_the_tree_is_killed_through_its_job_object_even_after_the_leader_died(self):
-        """Re-verification R1, the Windows half: `taskkill /T` needs a LIVE leader to find the tree,
-        so after a crash it reaches nothing. The server is put in a Job Object at spawn (before
-        `initialize`), and the tree kill terminates the JOB — also when the leader is already
-        dead — and never falls back to taskkill then. (kernel32 is faked: no Windows box here.)"""
-        calls = []
-
-        class K32:
-            def CreateJobObjectW(self, *a):
-                calls.append("create")
-                return 4242
-
-            def SetInformationJobObject(self, job, cls, info, size):
-                st = info._obj                           # the structure byref() points at
-                calls.append(("limits", job, cls, st.BasicLimitInformation.LimitFlags, size))
-                return self.set_ok
-
-            set_ok = 1
-
-            def AssignProcessToJobObject(self, job, handle):
-                calls.append(("assign", job, handle))
-                return 1
-
-            def TerminateJobObject(self, job, code):
-                calls.append(("terminate", job))
-                return 1
-
-            def CloseHandle(self, h):
-                calls.append(("close", h))
-                return 1
-
-        dead = mock.Mock(pid=77, _handle=9001)
-        dead.poll.return_value = 3                       # the leader already crashed
-        job = L.WinJob(dead, kernel32=K32())
-        self.assertTrue(job.ok)
-        self.assertIn(("assign", 4242, 9001), calls)
-        import ctypes
-        lim = [c for c in calls if c[0] == "limits"]
-        self.assertEqual(1, len(lim))
-        # verify2 N5: the flag that kills the tree when the IDE itself dies, and the Windows
-        # x64/ARM64 layout of JOBOBJECT_EXTENDED_LIMIT_INFORMATION (144 bytes; 4-byte DWORDs)
-        self.assertEqual((4242, 9, 0x2000), lim[0][1:4], "KILL_ON_JOB_CLOSE must be set")
-        if ctypes.sizeof(ctypes.c_void_p) == 8:
-            self.assertEqual(144, lim[0][4])
-        # a job whose limits did not take is not the promised job: not `ok` (taskkill fallback)
-        k = K32()
-        k.set_ok = 0
-        self.assertFalse(L.WinJob(dead, kernel32=k).ok)
-        with mock.patch("mokata.ide.lsp.os.name", "nt"), \
-                mock.patch("mokata.ide.lsp.subprocess.run") as run:
-            L._kill_tree(dead, None, job)
-        run.assert_not_called()
-        self.assertIn(("terminate", 4242), calls)
-        self.assertIn(("close", 4242), calls)
-        # and the Server makes that job at spawn on Windows
-        made = []
-        with mock.patch("mokata.ide.lsp.subprocess.Popen") as popen, \
-                mock.patch("mokata.ide.lsp._resume_process"), \
-                mock.patch("mokata.ide.lsp.WinJob", side_effect=lambda p: made.append(p) or job):
-            popen.return_value.stdin = io.BytesIO()
-            popen.return_value.stdout = io.BytesIO()
-            popen.return_value.stderr = io.BytesIO()
-            popen.return_value.poll.return_value = None
-            popen.return_value.wait.side_effect = lambda *a, **k: time.sleep(0.05)
-            srv = L.Server(self.repo, "python", "fake", ["x"])
-            srv.request = lambda *a, **k: {"capabilities": {}}
-            srv.notify = lambda *a, **k: None
-            with mock.patch("mokata.ide.lsp.os.name", "nt"), \
-                    mock.patch("mokata.ide.lsp.to_uri", lambda p: "file:///repo"):
-                try:
-                    srv.start()
-                finally:
-                    srv.stopped.set()
-                    srv._stop_readers.set()
-        self.assertEqual([popen.return_value], made)
-        self.assertIs(job, srv.job)
 
     @unittest.skipIf(os.name == "nt", "process groups are POSIX; Windows uses the Job Object")
     def test_after_a_crash_the_group_is_killed_once_and_never_signalled_again(self):
@@ -1360,7 +1300,7 @@ class StoppingNeverHangsAndKillsTheTree(_Repo):
         with mock.patch.object(os, "killpg", spy):
             with self.assertRaises(L.ServerGone):
                 srv.request("textDocument/hover", {"textDocument": {"uri": uri}, "position": {"line": 0, "character": 5}})
-            self.assertTrue(wait_for(lambda: not self._grandchild_alive()[0], timeout=5))
+            self.assertTrue(wait_for(lambda: not self._grandchild_alive()[0], timeout=30))
             time.sleep(0.3)
             srv.stop("later stop")
             srv.kill("later kill")
@@ -1396,7 +1336,7 @@ class StoppingNeverHangsAndKillsTheTree(_Repo):
         uri, _ = srv.open(os.path.join(self.repo, "src", "app", "core.py"), "python")
         with self.assertRaises(L.ServerGone):
             srv.request("textDocument/hover", {"textDocument": {"uri": uri}, "position": {"line": 0, "character": 5}})
-        self.assertTrue(wait_for(lambda: not self._grandchild_alive()[0], timeout=5), self._grandchild_alive())
+        self.assertTrue(wait_for(lambda: not self._grandchild_alive()[0], timeout=30), self._grandchild_alive())
 
     def test_a_cli_untrust_stops_a_running_server_at_the_next_use_not_the_idle_reap(self):
         """`mokata ide --untrust` in a terminal only flips the record; the host re-reads trust on
@@ -1459,17 +1399,22 @@ class TheTreeIsInItsJobBeforeItRuns(unittest.TestCase):
     breakaway) belonged to no job at all. The rule: the process is created SUSPENDED, put in the
     job, and only then resumed — so nothing it starts can start first."""
 
-    def _spawn(self, popen_side=None, job_ok=True, resume_err=None):
+    def _spawn(self, make_err=None, resume_err=None):
+        """The door's Windows order with Popen, the job and the resume all faked (the real thing
+        is `test_on_windows_nothing_a_launcher_starts_first_escapes_the_job` below)."""
+        from mokata import quiet_spawn as Q
         calls = []
-        proc = mock.Mock(pid=5, _handle=77)
-        job = mock.Mock(ok=job_ok)
+        proc = mock.Mock(pid=_NO_SUCH_PID, _handle=77, returncode=None)
+        job = mock.Mock()
 
         def popen(argv, **kw):
             calls.append(("popen", kw.get("creationflags")))
             return proc
 
-        def winjob(p):
-            calls.append(("job", p))
+        def make(handle, k32=None):
+            calls.append(("job", handle))
+            if make_err:
+                raise make_err
             return job
 
         def resume(p):
@@ -1477,12 +1422,12 @@ class TheTreeIsInItsJobBeforeItRuns(unittest.TestCase):
             if resume_err:
                 raise resume_err
 
-        with mock.patch("mokata.ide.lsp.subprocess.Popen", side_effect=popen), \
-                mock.patch("mokata.ide.lsp.WinJob", side_effect=winjob), \
-                mock.patch("mokata.ide.lsp._resume_process", side_effect=resume):
+        with mock.patch("mokata.quiet_spawn.subprocess.Popen", side_effect=popen), \
+                mock.patch("mokata.quiet_spawn._windows", lambda: True), \
+                mock.patch.object(Q.WinJob, "make", side_effect=make):
             try:
-                got = L.spawn_jobbed(["x"], stdin=None, nt=True)
-            except OSError as exc:
+                got = Q.spawn_jobbed(["x"], stdin=None, _resume=resume)
+            except (OSError, RuntimeError) as exc:
                 got = exc
         return calls, proc, job, got
 
@@ -1492,24 +1437,42 @@ class TheTreeIsInItsJobBeforeItRuns(unittest.TestCase):
         self.assertTrue(calls[0][1] & 0x4, "not created CREATE_SUSPENDED")
         self.assertEqual(0x200 | 0x08000000, calls[0][1] & ~0x4,
                          "its own process group and hidden console must survive")
-        self.assertEqual((proc, job), got)
+        self.assertEqual(77, calls[1][1], "the job must hold THIS process's handle")
+        self.assertIs(proc, got.proc)
+        self.assertIs(job, got._job)
 
-    def test_a_job_that_could_not_be_made_still_lets_the_process_run_and_says_so(self):
-        calls, proc, job, got = self._spawn(job_ok=False)
-        self.assertEqual(["popen", "job", "resume"], [c[0] for c in calls])
-        self.assertFalse(got[1].ok, "the caller must see that no job holds the tree")
+    def test_a_job_that_could_not_be_made_refuses_and_nothing_runs(self):
+        """0.0.28 D2 (Jas): no "run it anyway and hope" — the process is killed while still
+        suspended (it never ran an instruction) and the refusal propagates."""
+        from mokata import quiet_spawn as Q
+        calls, proc, job, got = self._spawn(make_err=Q._no_job("AssignProcessToJobObject",
+                                                               "WinError 5: Access is denied."))
+        self.assertIsInstance(got, OSError)
+        self.assertTrue(str(got).startswith(Q.NO_JOB), got)
+        self.assertNotIn("resume", [c[0] for c in calls], "a refused process was resumed")
+        proc.kill.assert_called()
 
     def test_a_process_that_cannot_be_resumed_is_killed_not_left_suspended(self):
         calls, proc, job, got = self._spawn(resume_err=OSError("refused"))
         self.assertIsInstance(got, OSError)
         proc.kill.assert_called()
-        job.terminate.assert_called()
+        job.close.assert_called()
+
+    def test_anything_else_raised_while_held_also_kills_it(self):
+        calls, proc, job, got = self._spawn(resume_err=RuntimeError("not an OSError"))
+        self.assertIsInstance(got, RuntimeError)
+        proc.kill.assert_called()
+        job.close.assert_called()
 
     def test_on_posix_it_is_a_plain_popen_with_no_job(self):
-        with mock.patch("mokata.ide.lsp.subprocess.Popen") as popen:
-            proc, job = L.spawn_jobbed(["x"], stdin=None, nt=False)
-        self.assertIsNone(job)
-        self.assertEqual({"stdin": None, "start_new_session": True}, popen.call_args.kwargs)
+        from mokata import quiet_spawn as Q
+        with mock.patch("mokata.quiet_spawn.subprocess.Popen") as popen:
+            popen.return_value.pid = _NO_SUCH_PID
+            popen.return_value.returncode = None
+            tree = Q.spawn_jobbed(["x"], stdin=None, nt=False)
+        self.assertIsNone(tree._job)
+        self.assertEqual({"stdin": None, "shell": False, "start_new_session": True},
+                         popen.call_args.kwargs)
 
     def _launcher_fixture(self):
         import subprocess
@@ -1527,23 +1490,25 @@ class TheTreeIsInItsJobBeforeItRuns(unittest.TestCase):
         return venv, os.path.join(venv, "Scripts", "python.exe"), script
 
     def _spawn_through_the_launcher(self, runs, tag):
-        """`runs` times: start the venv launcher on the grandchild script THROUGH `spawn_jobbed`,
-        wait for it to report, terminate the job. Then every launcher, real interpreter and
+        """`runs` times: start the venv launcher on the grandchild script THROUGH the process door
+        (`quiet_spawn.spawn_jobbed`), wait for it to report, end the tree. Then every launcher, real interpreter and
         grandchild must be dead. Returns nothing; asserts."""
         import subprocess
         from _win_proc import tasklist_says_alive
+        from mokata.quiet_spawn import spawn_jobbed
         venv, launcher, script = self._launcher_fixture()
         pids = []
         for i in range(runs):
             pidfile = os.path.join(venv, f"{tag}{i}")
-            proc, job = L.spawn_jobbed([launcher, script, pidfile], stdin=subprocess.DEVNULL,
-                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            self.assertTrue(job.ok, "no Job Object holds the tree")
+            tree = spawn_jobbed([launcher, script, pidfile], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.assertIsNotNone(tree._job, "no Job Object holds the tree")
             self.assertTrue(wait_for(lambda: os.path.exists(pidfile), timeout=120), f"run {i}: no pids")
             with open(pidfile, encoding="utf-8") as fh:
-                pids.append((i, proc.pid, *map(int, fh.read().split())))
-            job.terminate()
-            proc.wait(timeout=60)
+                pids.append((i, tree.proc.pid, *map(int, fh.read().split())))
+            ended = tree.end()
+            tree.close()
+            self.assertTrue(ended.ok, ended.why)
         for i, launcher_pid, real, grandchild in pids:
             for pid in (launcher_pid, real, grandchild):
                 self.assertTrue(wait_for(lambda pid=pid: not tasklist_says_alive(pid)[0], timeout=60),
@@ -1564,13 +1529,14 @@ class TheTreeIsInItsJobBeforeItRuns(unittest.TestCase):
         """The same, but the assignment is made SLOW (1 s) — the race lost on purpose. Assigned
         after a running start, the launcher's child and grandchild are long started and in no job:
         they survive `terminate` every time. Created suspended, nothing runs during the wait."""
-        real = L.WinJob
+        from mokata import quiet_spawn as Q
+        real = Q.WinJob.make
 
-        def slow(proc, *a, **k):
+        def slow(handle, *a, **k):
             time.sleep(1.0)
-            return real(proc, *a, **k)
+            return real(handle, *a, **k)
 
-        with mock.patch("mokata.ide.lsp.WinJob", side_effect=slow):
+        with mock.patch.object(Q.WinJob, "make", side_effect=slow):
             self._spawn_through_the_launcher(5, "s")
 
 

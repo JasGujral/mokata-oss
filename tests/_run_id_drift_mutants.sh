@@ -135,7 +135,7 @@ mutant "M18 progress reports a finished run as the current one" "$P" \
 # ---- eager MCP registration --------------------------------------------------------------------
 
 mutant "M19 registration goes back to lazy — the un-used window is invisible to narrowing" "$S" \
-  '    _register_this_window(getattr(args, "path", ".") or ".")' '    pass' "$D"
+  '    _spawn_registration(getattr(args, "path", ".") or ".")' '    pass' "$D"
 
 # ---- sticky pid ---------------------------------------------------------------------------------
 

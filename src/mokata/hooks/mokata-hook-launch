@@ -132,6 +132,24 @@ _run_with() {
     exec "$_py" -m mokata_emit "$@"
 }
 
+# BYTECODE (0.0.28 W5, verifier M1). Claude Code exports PYTHONDONTWRITEBYTECODE=1 to every child,
+# hooks included, and the pinned uv runtime is installed WITHOUT .pyc (the source-tree rung has none
+# either): honouring it, every hook recompiled the ~60 modules it imports — 63 ms of the prompt
+# hook's 190, on every prompt. So the hook's Python writes its bytecode, into mokata's OWN per-user
+# cache — the one rule mokata has for one (`branch_protection.default_cache_dir`: $XDG_CACHE_HOME,
+# else ~/.cache, then mokata/) — never beside the sources: a plugin checkout is not ours to dirty.
+# No cache to name (no XDG_CACHE_HOME, no HOME) -> the variable stays, and nothing is written. An
+# unwritable cache costs the old compile and nothing else: Python skips a write it cannot make.
+_mk_cache=${XDG_CACHE_HOME:-}
+if [ -z "$_mk_cache" ] && [ -n "${HOME:-}" ]; then
+    _mk_cache=$HOME/.cache
+fi
+if [ -n "$_mk_cache" ]; then
+    PYTHONPYCACHEPREFIX=$_mk_cache/mokata/pycache
+    export PYTHONPYCACHEPREFIX
+    unset PYTHONDONTWRITEBYTECODE
+fi
+
 # 0 — an explicit override wins.
 if [ -n "${MOKATA_HOOK:-}" ] && [ -x "${MOKATA_HOOK}" ]; then
     exec "$MOKATA_HOOK" "$@"

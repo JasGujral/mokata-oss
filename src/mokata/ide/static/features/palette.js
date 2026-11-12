@@ -96,8 +96,13 @@
   if (typeof document === "undefined" || !document.getElementById) return;   // node tests
 
   // --------------------------------------------------------------------------- state
+  // `pressed`/`owed`/`shown`/`keep`: 0.0.28 D — the list is never replaced under the person's hand.
+  // A press on a row and its release must meet the SAME element (two elements: the browser fires no
+  // click), so an answer that lands while the button is down is held (`owed`) and drawn once it comes
+  // up; and a refresh of the query already shown keeps the row the person picked (`keep`) instead of
+  // jumping back to the first. Both were reached by the index's "done" re-ask (P32 `whenSymbols`).
   const pal = { open: false, changedOnly: false, rows: [], idx: 0, gen: 0, timer: 0,
-                slash: null, outlines: {} };
+                slash: null, outlines: {}, pressed: false, owed: false, shown: null, keep: null };
   const mac = typeof navigator !== "undefined" && /Mac|iP(hone|ad)/.test(navigator.platform || "");
   const ui = () => MK.ui || {};
 
@@ -130,7 +135,7 @@
   // theme switch from the palette leaves focus on the editor; a jump to a file focuses its own view.
   function close(restore) {
     const back = pal.opener;
-    pal.open = false; pal.opener = null; $("qo").hidden = true;
+    pal.open = false; pal.opener = null; $("qo").hidden = true; pal.shown = null; pal.owed = false; pal.pressed = false;
     if (restore && back && back.isConnected && back !== document.body && typeof back.focus === "function") back.focus({ preventScroll: true });
   }
 
@@ -159,6 +164,11 @@
     ul.append(li);
   }
   function paint() {
+    if (pal.keep !== null) {                           // a refresh: the picked row stays picked
+      const k = pal.rows.findIndex((r) => r.li.textContent === pal.keep);
+      if (k >= 0) pal.idx = k;
+      pal.keep = null;
+    }
     pal.rows.forEach((r, k) => r.li.classList.toggle("active", k === pal.idx));
     const cur = pal.rows[pal.idx];
     if (cur) cur.li.scrollIntoView({ block: "nearest" });
@@ -207,11 +217,19 @@
     const { mode, needle } = parse(q);
     paintChrome(mode);
     const box = $("qo-results");
-    const fresh = () => { if (gen !== pal.gen) return false; box.replaceChildren(); pal.rows = []; pal.idx = 0; return true; };
+    const fresh = () => {
+      if (gen !== pal.gen) return false;
+      if (pal.pressed) { pal.owed = true; return false; }            // drawn when the button comes up
+      const cur = pal.rows[pal.idx];
+      pal.keep = q === pal.shown && cur ? cur.li.textContent : null;
+      pal.shown = q; pal.owed = false;
+      box.dataset.q = q;                               // the query this list answers (the e2e waits on it)
+      box.replaceChildren(); pal.rows = []; pal.idx = 0; return true;
+    };
     if (mode === "files") return runFiles(gen, needle, fresh);
     if (mode === "workspace") return runWorkspace(gen, needle, fresh);
     if (mode === "symbol") return runSymbol(gen, needle, fresh);
-    if (mode === "line") { fresh(); runLine(box, needle); paint(); return; }
+    if (mode === "line") { if (fresh()) { runLine(box, needle); paint(); } return; }
     return runCommands(gen, needle, mode === "slash", fresh);
   }
 
@@ -295,7 +313,7 @@
   // so this asks the ⌘P symbol index (the graph layer's, AST floor beneath) through /api/quickopen
   // with its symbols-only form "@x" — every row still carries its basis.
   async function runWorkspace(gen, needle, fresh) {
-    if (!needle) { fresh(); empty($("qo-results"), "Type a symbol name — every definition in the workspace."); return; }
+    if (!needle) { if (fresh()) empty($("qo-results"), "Type a symbol name — every definition in the workspace."); return; }
     const res = await MK.api("/api/quickopen", { q: "@" + needle, changed: [] }).catch(() => null);
     if (!res || !fresh()) return;
     const box = $("qo-results");
@@ -311,7 +329,7 @@
 
   async function runSymbol(gen, needle, fresh) {
     const path = currentPath();
-    if (!path) { fresh(); empty($("qo-results"), "Open a file first — or type # to search every file's symbols."); return; }
+    if (!path) { if (fresh()) empty($("qo-results"), "Open a file first — or type # to search every file's symbols."); return; }
     let ol = MK.nav && MK.nav.path === path && MK.nav.outline ? MK.nav.outline : pal.outlines[path];
     if (!ol) {
       ol = await MK.api("/api/outline?path=" + encodeURIComponent(path)).catch(() => null);
@@ -416,6 +434,21 @@
     $("qo-open").onclick = () => MK.openQuick();
     $("qo-input").oninput = () => { clearTimeout(pal.timer); pal.timer = setTimeout(run, 70); };
     $("qo").onclick = (ev) => { if (ev.target === $("qo")) close(); };
+    // a press in the list holds any answer that lands before the button comes up; it is drawn a task
+    // AFTER the release, so the click (dispatched with the mouseup) reaches the row it was pressed on
+    $("qo-results").addEventListener("mousedown", (ev) => { if (ev.button === 0) pal.pressed = true; });
+    const released = () => {
+      if (!pal.pressed) return;
+      pal.pressed = false;
+      setTimeout(() => { if (pal.owed) { pal.owed = false; if (pal.open) run(); } }, 0);
+    };
+    for (const type of ["mouseup", "dragend", "pointercancel"]) document.addEventListener(type, released, true);
+    // a press whose release this page never saw (it came up outside the window) ends at the next
+    // move with no button down: it must not hold the list for good
+    document.addEventListener("mousemove", (ev) => { if (!(ev.buttons & 1)) released(); }, true);
+    // ...nor at a window that lost focus or a page that was hidden: neither gets the mouseup back
+    window.addEventListener("blur", released);
+    document.addEventListener("visibilitychange", released);
     // The palette's own keys, on its input: handled (and preventDefault'ed) here before the
     // registry and app.js see them.
     $("qo-input").addEventListener("keydown", (ev) => {

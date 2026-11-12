@@ -247,8 +247,19 @@ def connect_sqlite_readonly(path: str, *, timeout_s: float = 1.0,
     from pathlib import Path
     import os
     # `immutable=1` (0.0.27 P14): a `mode=ro` open of a WAL database whose `-wal`/`-shm` are absent
-    # CREATES both (measured; `tests/test_p14_next_step_hints.py` keeps the probe). An immutable
-    # open creates nothing — and takes no lock, so the CALLER must bracket the read (P14's
-    # `events.read_run_readonly` does) and discard it if the file moved underneath.
+    # CREATES both on most SQLite builds, and on Apple's system libsqlite3 (every pyenv / Command
+    # Line Tools Python on macOS) REFUSES to open at all — "unable to open database file", which
+    # made a freshly swapped-in complete code graph probe INCOMPLETE (0.0.28 W5, R39). Measured;
+    # `tests/test_p14_next_step_hints.py` keeps the probe. So the rule is this door's, not each
+    # caller's: NO side file beside the database (no `-wal`, `-shm` or `-journal`) means every
+    # committed page is in the main file, and the immutable open is the exact read — it creates
+    # nothing and works on every build. A side file present means a writer's frames may live
+    # outside the main file: `mode=ro`, which reads them (and, its side files existing, creates
+    # nothing). An immutable open takes no lock, so a writer that STARTS mid-read is not seen —
+    # in WAL mode it cannot change the main file before a checkpoint, which needs the WAL it has
+    # to create first; a caller that must refuse even that brackets the read (P14's
+    # `events.read_run_readonly` does) and passes `immutable` itself.
+    if not immutable:
+        immutable = not any(os.path.exists(path + ext) for ext in ("-wal", "-shm", "-journal"))
     uri = Path(os.path.abspath(path)).as_uri() + ("?mode=ro&immutable=1" if immutable else "?mode=ro")
     return sqlite3.connect(uri, uri=True, timeout=timeout_s)

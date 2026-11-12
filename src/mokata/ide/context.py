@@ -84,51 +84,50 @@ def _store(root: str):
 REDACTED = "‹line redacted by mokata's secret scan: {kind}›"
 
 
-def _redact(text: str, path: str, inside: bool = False) -> Tuple[str, int]:
-    """(text with every secret-bearing line replaced, how many lines). A sensitive PATH refuses.
-
-    A private key is replaced WHOLE, BEGIN through END (an unterminated BEGIN to the end), by the
-    one key pass Copy with Context uses (`usages.pem_lines`): the shared scanner flags a key's
-    BEGIN line only, and a body line wrapped narrow is too short for its entropy layer. `inside`:
-    the text starts inside a key whose BEGIN is above it. Every other finding replaces its own
-    line. Anything secret- or key-shaped left after that refuses the item."""
-    from ..govern.secrets import scan
+def _redact(text: str, path: str, inside: Any = False) -> Tuple[str, int]:
+    """(text with every secret-bearing line replaced, how many lines) — `usages.redact_text`, the
+    one line redactor (REDACT-MANGLED-KEY). A sensitive PATH refuses; anything secret- or
+    key-shaped left after redaction refuses the item. `inside`: the text starts inside a key
+    whose BEGIN is above it."""
     from . import usages as U
-    findings = scan(text, path=path)
-    if any(f.layer == "path" for f in findings):
-        raise ContextRefused(f"{path} is a sensitive location — it is never sent as context")
-    lines = text.splitlines()                   # the scanner's own line numbering
     try:
-        out = list(U.pem_lines(lines, {}, path, inside=inside, mark=REDACTED))
+        return U.redact_text(text, path, inside=inside, mark=REDACTED)
     except U.RefRefused as exc:
-        raise ContextRefused(str(exc)) from None
-    for f in findings:
-        if f.layer in ("signature", "entropy") and f.line and 1 <= f.line <= len(out) \
-                and out[f.line - 1] == lines[f.line - 1]:
-            out[f.line - 1] = REDACTED.format(kind=f.kind)
-    n = sum(1 for a, b in zip(lines, out) if a != b)
-    joined = "\n".join(out) if n else text
-    if U._residual(joined):
-        raise ContextRefused("the excerpt still carries a secret after redaction — not sent")
-    return joined, n
+        msg = str(exc)
+        if "sensitive location" in msg:
+            raise ContextRefused(f"{path} is a sensitive location — it is never sent as context"
+                                 ) from None
+        if "still carries" in msg:
+            raise ContextRefused("the excerpt still carries a secret after redaction — not sent"
+                                 ) from None
+        raise ContextRefused(msg) from None
 
 
 def _key_lines(lines: Iterable[str], wanted: Set[int]) -> Tuple[Set[int], bool]:
     """(which of the 1-based line numbers `wanted` are private-key material, whether ANY line up
-    to the last of them is), reading `lines` from the first line with the shared key state
-    machine (`usages.pem_step`). Stops after the last wanted line."""
-    from .usages import pem_step
+    to the last of them is), reading `lines` from the first line with the one key walker
+    (`govern.secrets.KeyWalk`: marked, mangled, split and unmarked keys alike). Stops after the
+    last wanted line, then lets the walker judge what it still holds."""
+    from ..govern.secrets import KeyRunTooLong, KeyWalk, _body_of
     last = max(wanted, default=0)
     hit: Set[int] = set()
     seen = False
-    inside = False
-    for n, ln in enumerate(lines, start=1):
-        if n > last:
-            break
-        key, inside = pem_step(inside, ln)
-        seen = seen or key
-        if key and n in wanted:
-            hit.add(n)
+    walk = KeyWalk()
+
+    def take(decided: List[Tuple[int, bool]]) -> None:
+        nonlocal seen
+        for n, key in decided:
+            seen = seen or key
+            if key and n in wanted:
+                hit.add(n)
+    try:
+        for n, ln in enumerate(lines, start=1):
+            if n > last:
+                break
+            take(walk.feed(_body_of(ln), n))
+        take(walk.finish())
+    except KeyRunTooLong:
+        return set(wanted), True                     # fail closed: every wanted line is key
     return hit, seen
 
 
@@ -225,9 +224,14 @@ def build_item(root: str, kind: Any, path: Any, lines: Any = None,
                 raise ContextRefused(f"{rel} has only {len(all_lines)} lines")
             text = "\n".join(all_lines[span[0] - 1:span[1]])
             span = (span[0], min(span[1], len(all_lines)))
-            from .usages import pem_step
-            for ln in all_lines[:span[0] - 1]:     # does the selection start inside a key?
-                inside = pem_step(inside, ln)[1]
+            from ..govern.secrets import RUN_CHARS, KeyRunTooLong, KeyWalk
+            walk = KeyWalk()                       # does the selection start inside a key?
+            try:
+                for ln in all_lines[:span[0] - 1]:
+                    walk.feed(ln)
+                inside = walk.peek(all_lines[span[0] - 1:span[0] - 1 + RUN_CHARS // 4 + 1])
+            except KeyRunTooLong:
+                inside = True
     text, redacted = _redact(text, rel, inside)
     redacted += keyed
     truncated = len(text) > MAX_ITEM_CHARS

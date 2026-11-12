@@ -252,6 +252,36 @@ NO_BASH = ("no bash on PATH — this check drives a shell script and cannot be R
            "un-run check, not a passing one (doc 85 §7g).")
 
 
+#: The plugin route's hook launcher — what `hooks.json` runs for every hook (`HOOK-RESOLVE`).
+HOOK_LAUNCHER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src", "mokata",
+                             "hooks", "mokata-hook-launch")
+
+
+def plugin_route_hook(sub, *args, env, home):
+    """`(argv, env)` for ONE hook run the way the plugin route runs it in production — the timed
+    hook process of the budget tests (0.0.28 W5, verifier M1).
+
+    Through the launcher, from its PINNED-runtime rung (the interpreter of the plugin's
+    `uvx --from "mokata[full]==<v>"` environment, recorded in `CLAUDE_PLUGIN_DATA` by the MCP
+    server): here `sys.executable`, with `PYTHONPATH` standing in for that environment's
+    site-packages. And with `PYTHONDONTWRITEBYTECODE=1` SET, because Claude Code exports it to every
+    child it spawns, hooks included. uv installs the pinned package without bytecode, so a hook
+    that honoured the variable recompiled its ~60 modules on every call (63 ms of the prompt hook's
+    190). Bytecode is the launcher's job (`mokata-hook-launch`): a budget that set up the bytecode
+    itself graded the test's environment, not the product. Everything per-user lands under `home`:
+    the runtime record and the launcher's cache (`XDG_CACHE_HOME`)."""
+    import mokata
+    data = os.path.join(home, "plugin-data")
+    os.makedirs(data, exist_ok=True)
+    with open(os.path.join(data, f"runtime-{mokata.__version__}.txt"), "w",
+              encoding="utf-8") as fh:
+        fh.write(sys.executable + "\n")
+    out = {k: v for k, v in env.items() if k not in ("MOKATA_HOOK", "PYTHONPYCACHEPREFIX")}
+    out.update(CLAUDE_PLUGIN_DATA=data, XDG_CACHE_HOME=os.path.join(home, "cache"),
+               PYTHONDONTWRITEBYTECODE="1")
+    return bash_argv(HOOK_LAUNCHER, sub, *args), out
+
+
 def node_argv(js):
     """`[node, <file>]` running `js` — the page-logic tests' replacement for `node -e <js>`.
     Windows' CreateProcess caps a command line at 32,767 characters, and a feature module inlined

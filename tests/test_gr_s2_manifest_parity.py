@@ -127,15 +127,6 @@ class TestRouterChainSelection(unittest.TestCase):
             self.assertEqual(layer.backend_name, "ast")
             self.assertFalse(layer.uses_graph)   # AST is a floor, not the adopted graph
 
-    def test_no_hardcoded_has_python_branch(self):
-        """(d) the selection must come from the router chain, not a private _has_python
-        branch bolted onto select_backends."""
-        from mokata.knowledge import layer as layer_mod
-        self.assertFalse(
-            hasattr(layer_mod, "_has_python"),
-            "AST selection must move into the router chain (no _has_python branch)",
-        )
-
 
 class TestZeroPyByteIdentical(unittest.TestCase):
     """Negative: a repo with zero .py files resolves to the grep floor exactly as before."""

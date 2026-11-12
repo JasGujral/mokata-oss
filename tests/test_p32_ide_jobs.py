@@ -310,12 +310,12 @@ class WhoStillWantsIt(_Reg):
         self.assertEqual("cancelled", job.state)
 
     def test_a_superseded_request_leaving_keeps_the_job_for_another_watcher(self):
-        job = self.reg.start("graph.view", {"symbol": "two"}, self.spin(), client="p1")
-        self.reg.watch(job, "p2")
-        self.reg.leave(job, "p1")
+        job = self.reg.start("graph.view", {"symbol": "two"}, self.spin(), client="p1", token="r1")
+        self.reg.watch(job, "p2", "r2")
+        self.reg.leave(job, "p1", "r1")
         time.sleep(0.2)
         self.assertNotEqual("cancelled", job.state, "p2 still wants it")
-        self.reg.leave(job, "p2")
+        self.reg.leave(job, "p2", "r2")
         self.assertEqual("cancelled", job.state)
 
 

@@ -23,6 +23,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import statistics
 import subprocess
 import sys
@@ -219,29 +220,37 @@ class TheMustBeCurrentLinesAreNeverServedStale(unittest.TestCase):
                 self.assertEqual(["- r"], B._cached_rule_lines(s, 5))
             again.assert_called_once()
 
-    def test_the_resume_hint_is_re_derived_when_a_run_file_changes(self):
+    def test_the_resume_line_is_the_derivation_for_every_session_stored_or_not(self):
+        """0.0.28 F round 2 — the hook prints the refresher's stored answer when what the starting
+        session would read is unchanged, and otherwise derives it (measured to fit the budget).
+        Keyed on what the answer was derived from, never on the session that stored it: a NEW
+        session after another one stored is served the right line. Never a placeholder."""
         from mokata import bootstrap as B
+        from mokata import hints as H
+        from mokata import session_index as SI
+        from mokata.govern.resume import PipelineCheckpoint
         from mokata.tdd_state import state_dir
         with tempfile.TemporaryDirectory() as d:
             d = os.path.realpath(d)
             _repo(d)
             s = Surface.load(d)
-            with mock.patch.object(B, "build_resume_hint", return_value="A") as h:
-                self.assertEqual("A", B._cached_resume_hint(s))
-                self.assertEqual("A", B._cached_resume_hint(s))
-                self.assertEqual(1, h.call_count)
-                os.makedirs(state_dir(d), exist_ok=True)
-                with open(os.path.join(state_dir(d), "pipeline_run__r9.json"), "w",
-                          encoding="utf-8") as fh:
-                    fh.write("{}")
-                h.return_value = "B"
-                self.assertEqual("B", B._cached_resume_hint(s))
-                # a hook-written file (the session map) does NOT force a re-derive
-                with open(os.path.join(state_dir(d), "session_ancestry.json"), "w",
-                          encoding="utf-8") as fh:
-                    fh.write("{}")
-                self.assertEqual("B", B._cached_resume_hint(s))
-                self.assertEqual(2, h.call_count)
+            PipelineCheckpoint(s.state, "r9").ensure_registered()
+
+            def want(sid):
+                return B.resume_line(H.derive(d, session=sid, rules=H.PIPELINE_ONLY))
+            for sid, source in (("S1", "startup"), ("S2", "startup"), ("S2", "resume"),
+                                ("S2", "clear"), ("S2", "compact")):
+                SI.on_start(d, sid, source, d, proc=None)        # the hook's order
+                line = re.sub(r" \(derived [^()]* ago\)$", "", B._cached_resume_hint(s, sid))
+                self.assertEqual(want(sid), line, (sid, source))
+                self.assertIn("Next step for run r9", line)
+                if sid == "S1":
+                    B.refresh_resume_hint(d, "S1")
+            with open(os.path.join(state_dir(d), "pipeline_run__r9.json"), "a",
+                      encoding="utf-8") as fh:
+                fh.write("\n")
+            self.assertEqual(want("S2"), re.sub(r" \(derived [^()]* ago\)$", "",
+                                                B._cached_resume_hint(s, "S2")))
 
 
 @unittest.skipUnless(sqlite_disk_ok(), "sandbox cannot back an on-disk SQLite DB")

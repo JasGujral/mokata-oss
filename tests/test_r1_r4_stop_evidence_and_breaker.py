@@ -468,8 +468,9 @@ class R4ReviewLoopCap(_Run):
         self.assertEqual(3, code)
         self.assertIn("ESCALATE", out)
         from mokata.mcp.tools_read import review_record
-        res = review_record(path=self.d, passed=True, independent=False, blocking=0,
-                                 run="r1")
+        # 0.0.28 I2: `passed=True` -> `outcome="passed"`
+        res = review_record(path=self.d, outcome="passed", independent=False, blocking=0,
+                            run="r1")
         self.assertEqual(("escalate", False), (res["status"], res["recorded"]))
         verdicts = [e for e in PE.ProgressLog.from_surface(self.surface).read_events(tail=None)
                     if e.get("type") == PE.REVIEW_VERDICT]

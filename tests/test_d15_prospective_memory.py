@@ -29,6 +29,7 @@ from mokata import approval, hook_cli
 from mokata.config import Surface
 from mokata.init import init_repo
 from mokata.mcp import tools_memory as TM
+from mokata.mcp.validation import ValidationError
 from mokata.memory import MemoryItem, MemoryStore, normalize_kind
 from mokata.memory import intentions as I
 from mokata.memory.consolidation import _DRAFTABLE_KINDS
@@ -140,7 +141,11 @@ class HumanGated(unittest.TestCase):
         r = TM.remember(**args)
         self.assertEqual(r["status"], "proposed")
         self.assertEqual(_store(d).peek_active(), [])                      # nothing written
-        self.assertFalse(TM.remember(**args, approve=True).get("committed"))
+        # 0.0.28 I2: the self-approval guard is now structural — `approve` no longer exists, so a
+        # model cannot pass it (direct call: TypeError; over MCP: refused invalid_input).
+        with self.assertRaises(TypeError):
+            TM.remember(**args, approve=True)
+        self.assertEqual(_store(d).peek_active(), [])
         self.assertEqual(TM.remember(**args, proposal_id="p-forged0000")["status"], "refused")
         approval.approve(d, r["proposal_id"])
         # the approval was for due 2020 — it cannot be redeemed for a different due date
@@ -157,8 +162,10 @@ class HumanGated(unittest.TestCase):
                    dict(kind="decision", when_path="src"),
                    dict(kind="intention", due_at="2020-13-45")):
             with self.subTest(kw=kw):
-                r = TM.remember(path=d, subject="x", value="y", **kw)
-                self.assertEqual(r["status"], "error")
+                # 0.0.28 I2: a caller fault is RAISED (ValidationError on `due_at`), not returned
+                with self.assertRaises(ValidationError) as cm:
+                    TM.remember(path=d, subject="x", value="y", **kw)
+                self.assertEqual(cm.exception.field, "due_at")
         self.assertEqual(_store(d).peek_active(), [])
         self.assertEqual(approval.pending(d), [])
 

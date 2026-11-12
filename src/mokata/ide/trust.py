@@ -67,10 +67,13 @@ def status(root: str) -> Dict[str, Any]:
     out: Dict[str, Any] = {"trusted": False, "at": None, "by": None, "root": _real(root),
                            "why": WHY, "note": NOTE, "command": TRUST_CMD,
                            "revoke_command": UNTRUST_CMD}
+    from ..winacl import read_private
+    raw = read_private(record_path(root))          # 0.0.28 C1: ours and private, or not trust
+    if raw is None:
+        return out
     try:
-        with open(record_path(root), encoding="utf-8") as fh:
-            rec = json.load(fh)
-    except (OSError, ValueError):
+        rec = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
         return out
     if not isinstance(rec, dict) or rec.get("root") != out["root"] or not rec.get("trusted"):
         return out
@@ -100,11 +103,12 @@ def _ledger(root: str):
 
 def _write(root: str, rec: Dict[str, Any]) -> None:
     """The record, through the shared atomic primitive (`atomicfile.atomic_write_text`: temp →
-    fsync → replace) — the one sanctioned file writer, so no second mechanism grows here."""
+    fsync → replace) — the one sanctioned file writer, so no second mechanism grows here — and its
+    PRIVATE door (0.0.28 C1): the decision is the user's own, readable by them alone."""
     from ..atomicfile import atomic_write_text
     path = record_path(root)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    atomic_write_text(path, json.dumps(rec, indent=1, sort_keys=True) + "\n")
+    atomic_write_text(path, json.dumps(rec, indent=1, sort_keys=True) + "\n", private=True)
     statedir.note_repo(root)
 
 

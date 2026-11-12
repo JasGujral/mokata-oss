@@ -1159,22 +1159,6 @@ class TheThreePropertiesTheREVIEWFoundUNGRADED(unittest.TestCase):
         self.assertEqual(paths, F._source_only(paths))
 
 
-class TheSecondConstructionPathIsGone(unittest.TestCase):
-    """Fix C, doc 85 §7d: pre-1.0 there is no deprecation — scaffolding is deleted."""
-
-    def test_for_root_no_longer_exists(self):
-        """`FreshnessController.for_root` had ZERO callers: none in `src/`, none in `tests/`. The
-        doc-84 row filing it said "its only caller anywhere is a test" — that was wrong; the one
-        mention was `test_d5_sweep_register`'s register TABLE naming its `except Exception`, which
-        describes a handler rather than calling it (§7i). This guard is what stops it coming back
-        as a second construction path that bypasses `for_surface`'s ladder resolution."""
-        self.assertFalse(hasattr(F.FreshnessController, "for_root"),
-                         "for_root was deleted at 0.0.21 stage 14 — a new construction path must "
-                         "resolve its session through the ladder, as `for_surface` does")
-        self.assertTrue(hasattr(F.FreshnessController, "for_surface"),
-                        "the CONTROL: for_surface is the one that stays")
-
-
 class EVERY_WRITER_OF_A_RECORD_RECORDS_THE_CTIME(unittest.TestCase):
     """🔴 REVIEW FINDING 4-7, §7f and §7j. The ctime CLAUSE and the ctime FIELD are two
     separate things to get wrong, and the first fix graded only the clause: the mutant that deleted
@@ -1241,7 +1225,6 @@ class EVERY_WRITER_OF_A_RECORD_RECORDS_THE_CTIME(unittest.TestCase):
         self.assertAlmostEqual(recorded, os.stat(ab).st_ctime, places=5,
                                msg="and it must record the CURRENT ctime, not carry the stale one "
                                    "forward — a carried-forward value re-drifts on every pass")
-
 
 
 class SIGNAL_2b_IS_BOUNDED_AND_SAYS_SO(unittest.TestCase):
@@ -1452,7 +1435,6 @@ class THE_TOMBSTONES_DO_NOT_GROW_FOREVER(unittest.TestCase):
             fh.write(body)                            # byte-identical
         self.assertIn("kept.py", self._ctl().ensure_fresh(_Layer()).changed,
                        "the tombstone is what makes a recreate visible, and the cap did not bite")
-
 
 
 if __name__ == "__main__":

@@ -96,6 +96,9 @@ HARD_ERRORS = {
     # that cannot be answered as asked (`MergeGateError`), the full suite cannot run (`SuiteError`).
     # A merge has no floor to fall back to — a degraded merge is a wrong merge.
     "GitSafeError", "LockError", "MergeGateError", "SuiteError",
+    # 0.0.28 F — the spec legs cannot be run as merge evidence as asked (not a session worktree, no
+    # bound run, git cannot say where the tree is): HARD, named, nothing recorded.
+    "SpecLegError",
     # 0.0.26 P0 — the IDE contract and route registry. HARD: a route two features own, or a
     # contract that does not parse, refuses to build the app — there is no floor to fall back to.
     "ContractError", "RouteConflict",
@@ -236,6 +239,11 @@ HARD_ERRORS = {
     # answered as a 200 whose `state` + `note` say why in plain words (`ide/features/table.py`);
     # there is no weaker rendering to fall back to — a guess at the encoding is garbage on screen.
     "NotATable",
+    # 0.0.28 E1 — the key walker met an END that closes a base64 run longer than it could hold
+    # back (`govern/secrets.KeyRunTooLong`): the run's start already went by. HARD: every line site
+    # turns it into its own refusal (copy refused, context refused, "inside" for a window); there
+    # is no weaker-but-true answer — the rest of the key would go out.
+    "KeyRunTooLong",
 }
 
 # Hard errors that fail CLOSED (nothing degrades to a floor) but are still ABOUT a schema, so
@@ -638,7 +646,7 @@ def _live_classes():
     # 0.0.27 P46 r5 — `SpillGone` (the oversize bundle's spill), a control signal.
     from mokata.explain import spill as _xsp  # noqa: F401
     # 0.0.27 P21 — the gated merge's four hard errors.
-    from mokata import git_safe, merge_gate, merge_lock, merge_suite  # noqa: F401
+    from mokata import git_safe, merge_gate, merge_lock, merge_spec, merge_suite  # noqa: F401
     # 0.0.26 P32 — `ActionFailed` (a health action's job), `Cancelled` (a job's cancel signal).
     from mokata.ide import health as _ide_health  # noqa: F401
     # 0.0.26 P39 — `ConsentStale`, `Unavailable` (the Welcome screen's gate).
@@ -675,6 +683,8 @@ def _live_classes():
     from mokata.ide import imagediff as _ide_imagediff  # noqa: F401
     # 0.0.27 P14 — `HintRefused` (a cite-less hint) and `_Unknown` (the ladder's control signal).
     from mokata import hints as _hints  # noqa: F401
+    # 0.0.28 E1 — `KeyRunTooLong` (the key walker cannot hold a run back).
+    from mokata.govern import secrets as _secrets  # noqa: F401
 
     mods = (netguard, oslock, skills, stacks, teamdb, team_audit, team_events, team_journal,
             vault, config,
@@ -698,7 +708,8 @@ def _live_classes():
     mods += (_xb, _xr, _xs, _xst, _xsp)
     mods += (_ide_diffview, _ide_imagediff)
     mods += (_hints,)
-    mods += (git_safe, merge_gate, merge_lock, merge_suite)
+    mods += (_secrets,)
+    mods += (git_safe, merge_gate, merge_lock, merge_spec, merge_suite)
     live = {"MokataError": MokataError}
     for mod in mods:
         for name in dir(mod):

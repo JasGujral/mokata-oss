@@ -105,11 +105,6 @@ class TestTheContractIsStillShared(unittest.TestCase):
                            and cls is not BackendContractMixin]
         self.assertGreaterEqual(len(implementations), 2, implementations)
 
-    def test_the_removed_adapter_is_not_importable_from_the_memory_package(self):
-        with self.assertRaises(ImportError):
-            from mokata.memory import ObsidianBackend  # noqa: F401
-        self.assertIsNotNone(PostgresBackend)          # …and the survivors still are
-
 
 if __name__ == "__main__":
     unittest.main()

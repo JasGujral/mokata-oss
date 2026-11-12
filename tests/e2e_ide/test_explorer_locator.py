@@ -291,13 +291,21 @@ class TheExplorerHoldsAtScale(H.IdeFlow):
         self.until("window.__gate.held.length === 4", "the run to start (its listings held)")
         p.evaluate("document.getElementById('lt-files').scrollTop = 1e9")
         self.until("!!document.querySelector('#tree [data-rid=\"d|t5/m5\"]')", "t5/m5 painted")
+        self.assertTrue(p.evaluate("!MK.nav.dirs['t5/m5'] && !window.__gate.asked.includes('t5/m5')"),
+                        "t5/m5 was listed before the click: the click cannot be what serves it")
         # The click lands on t5/m5; by the time the tree repaints, the window is elsewhere (what a
         # run opening folders above it does), so neither its row nor its "loading" row is painted.
         p.evaluate("""() => { const b = document.querySelector('#tree [data-rid="d|t5/m5"]');
             document.getElementById('lt-files').scrollTop = 0; window.__t0 = performance.now(); b.click(); }""")
+        # 0.0.28 D — the race this used to lose on Linux Firefox: fresh()'s restore re-lists the
+        # folders the PREVIOUS test left open, and the run counts a folder whose listing is already
+        # here as done without asking, so `expandJob.done` at this point was however many restored
+        # listings had landed (18 of 36 in one run), not 0. What decides "served by the click" is
+        # that every one of the run's four workers is still blocked on its own held listing when
+        # t5/m5's listing lands (no worker was free to reach it), and that it was asked once.
         self.until("!!MK.nav.dirs['t5/m5']", "the hand-opened folder's listing")
         ms = p.evaluate("performance.now() - window.__t0")
-        self.assertEqual(0, p.evaluate("MK.nav.expandJob ? MK.nav.expandJob.done : -1"),
+        self.assertEqual([True, 4], p.evaluate("[!!MK.nav.expandJob, window.__gate.held.length]"),
                          "the hand-opened folder was served by the run, not by the click")
         self.assertEqual(1, p.evaluate("window.__gate.asked.filter((d) => d === 't5/m5').length"),
                          "the folder was asked for more than once (%.0f ms)" % ms)

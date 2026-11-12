@@ -29,21 +29,47 @@ MK.clientId = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
 // `opts.signal` aborts a superseded call (and leaves its job); a long answer comes back as a JOB
 // (202 + handle) that MK.jobs.follow (features/activity.js) waits on — progress and partial
 // answers go to `opts.onJob` / `opts.onPartial` — and the caller still gets the final answer.
+// 0.0.28 D — every call carries its own token (`X-Mokata-Request`): a job is wanted per REQUEST,
+// so a superseded call leaves only its own want, never another call's that asked the same thing.
+let reqSeq = 0;
+// 0.0.28 D (verifier L6) — a call superseded before its 202 reached the page: the fetch is aborted
+// (P9-FIX: a request the person left is ended, never left to run), so the page will never learn which
+// job it started — the request leaves by its own TOKEN, and the server drops that want from every job
+// it is in, and refuses it to a job the request starts later.
+function abortErr() { const e = new Error("superseded"); e.name = "AbortError"; return e; }
+function leaveRequest(token) {
+  api("/api/jobs/leave", { client: MK.clientId, token }).catch(() => null);
+}
 async function api(path, body, opts) {
   const o = opts || {};
-  const headers = { "X-Mokata-Client": MK.clientId };
+  const token = MK.clientId.slice(0, 8) + "-" + (++reqSeq).toString(36);
+  const headers = { "X-Mokata-Client": MK.clientId, "X-Mokata-Request": token };
   const opt = body === undefined ? { headers } : {
     method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify(body) };
   if (o.signal) opt.signal = o.signal;
-  const r = await fetch(path, opt);
+  let r;
+  try {
+    r = await fetch(path, opt);
+  } catch (e) {
+    // A superseded call still rejects (its caller asked for that); a fetch the BROWSER failed (the
+    // server went away, a page being torn down mid-request — Firefox rejects those as a NetworkError
+    // where Chromium stays silent) is an answer the region names, never an uncaught rejection.
+    if (e && e.name === "AbortError") { leaveRequest(token); throw e; }
+    return { error: "NetworkError", note: "the server could not be reached (" + ((e && e.message) || "no answer") + ")", status: 0 };
+  }
   let data;
   try { data = await r.json(); } catch (_e) { data = null; }
+  // superseded while a 202 was being read, so its handle was lost with it: the same token leave
+  // (a handle that was read is left by its id - `MK.jobs.follow` sees the aborted signal)
+  if (o.signal && o.signal.aborted && r.status === 202 && (data === null || typeof data !== "object")) {
+    leaveRequest(token); throw abortErr();
+  }
   if (data === null || typeof data !== "object") {
     // 0.0.26 P34 (§5.4 rule 4): a proxy's 502/503 page, a dropped connection mid-body or an empty
     // answer is an ERROR the region names — never a thrown parse error that leaves it blank.
     return { error: "HTTP " + r.status, note: `the server answered ${r.status} without a readable body`, status: r.status };
   }
-  if (r.status === 202 && data && data.job && MK.jobs) return MK.jobs.follow(data, path, body, o);
+  if (r.status === 202 && data && data.job && MK.jobs) return MK.jobs.follow(data, path, body, o, token);
   if (r.status >= 500 && !data.error) data.error = "HTTP " + r.status;
   return data;
 }
@@ -1093,6 +1119,13 @@ function live() {
     if (f !== ui.focus) { ui.focus = f; ui.view = f ? "session" : "live"; refresh(); }
   });
   es.onerror = () => $("live-dot").classList.remove("on");
+  // Leaving the page closes the stream FIRST (0.0.28 D). Firefox reports its own abort of a live
+  // stream on a navigation as a console error ("can't establish a connection" while the stream is
+  // still connecting) - the Linux runner's explorer_locator test_99 red. `beforeunload` runs before
+  // the browser stops the page's loads; a page asking "leave?" (activity.js's running-jobs confirm,
+  // registered before this) has prevented the event, and the stream stays open in case they stay.
+  window.addEventListener("beforeunload", (ev) => { if (!ev.defaultPrevented) es.close(); });
+  MK.liveState = () => es.readyState;                  // 0 connecting · 1 open · 2 closed
 }
 MK.live = live;
 

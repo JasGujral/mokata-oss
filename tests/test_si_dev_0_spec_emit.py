@@ -233,7 +233,10 @@ class TestEmitThroughTheRealGates(unittest.TestCase):
         """The persisted-approval rule: `approve=True` is a parameter the MODEL types. It must not
         commit."""
         with _Repo() as repo:
-            res = TW.spec_emit(**dict(_args(repo.path), approve=True))
+            # 0.0.28 I2: `approve` is deleted — a model-typed approval is a TypeError, not a no-op
+            with self.assertRaises(TypeError):
+                TW.spec_emit(**dict(_args(repo.path), approve=True))
+            res = TW.spec_emit(**_args(repo.path))
             self.assertEqual(res["status"], "proposed")
             self.assertFalse(res["committed"])
             self.assertFalse(check_spec_persisted(repo.surface.state, run_id="test-run").passed,

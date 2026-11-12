@@ -215,10 +215,11 @@ class TestApproveParam(unittest.TestCase):
             self.assertEqual(res["status"], "proposed")
             self.assertEqual(MemoryStore.from_surface(Surface.load(d)).all_active(), [])
 
-            # approve=True -> STILL only a proposal. It is accepted, it is not consent: it hands
-            # back a proposal_id, sets committed=False, and writes nothing.
-            res = M.remember(path=d, subject="a", value="1", approve=True)
-            self.assertEqual(res["status"], "proposed")
+            # 0.0.28 I2: `approve` is DELETED, not demoted: typing it is a TypeError on a direct
+            # call (refused `invalid_input` over MCP) and writes nothing. The plain call above is
+            # what hands back the proposal_id with committed=False.
+            with self.assertRaises(TypeError):
+                M.remember(path=d, subject="a", value="1", approve=True)
             self.assertFalse(res["committed"])
             self.assertTrue(res["proposal_id"])
             self.assertEqual(MemoryStore.from_surface(Surface.load(d)).all_active(), [])
@@ -230,15 +231,15 @@ class TestApproveParam(unittest.TestCase):
             self.assertEqual([i.value for i in
                               MemoryStore.from_surface(Surface.load(d)).recall("a")], ["1"])
 
-    def test_confirm_alias_is_accepted_but_does_not_commit(self):
-        """The deprecated `confirm` alias stays ACCEPTED (no TypeError — older callers keep working)
-        but, like `approve`, it commits nothing (SI.3 / src/mokata/approval.py)."""
+    def test_confirm_alias_is_gone(self):
+        """0.0.28 I2: the deprecated `confirm` alias was DELETED (pre-1.0: delete, not deprecate),
+        so it is no longer "accepted but demoted" — a typed `confirm` is a TypeError and writes
+        nothing."""
         from mokata import mcp_server as M
         with tempfile.TemporaryDirectory() as d:
             _repo(d).close()
-            res = M.remember(path=d, subject="b", value="2", confirm=True)   # accepted: no TypeError
-            self.assertEqual(res["status"], "proposed")                      # but NOT a commit
-            self.assertFalse(res["committed"])
+            with self.assertRaises(TypeError):
+                M.remember(path=d, subject="b", value="2", confirm=True)
             self.assertEqual(MemoryStore.from_surface(Surface.load(d)).all_active(), [])
 
     def test_record_finish_decision_spelling(self):

@@ -400,8 +400,11 @@ class TestFailClosed(_Base):
     def test_the_model_still_cannot_mint_consent_across_a_boundary(self):
         d = _pipeline_repo("runA")
         _re_enter(d, "runB")
-        out = call_planned(TS.spec_emit, path=d, title="s2", criteria=C2, tests=T2, approach="a",
-                           approve=True, confirm=True)
+        # 0.0.28 I2: `approve`/`confirm` are deleted — typing either is a TypeError, not a no-op
+        with self.assertRaises(TypeError):
+            call_planned(TS.spec_emit, path=d, title="s2", criteria=C2, tests=T2, approach="a",
+                         approve=True, confirm=True)
+        out = call_planned(TS.spec_emit, path=d, title="s2", criteria=C2, tests=T2, approach="a")
         self.assertEqual(out["status"], "proposed")
         self.assertFalse(out["committed"])
 

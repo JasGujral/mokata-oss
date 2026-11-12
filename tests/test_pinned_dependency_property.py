@@ -215,16 +215,6 @@ class TestTheResidualIsStated(unittest.TestCase):
             "`dependencies` is empty, so the residual named in this module's docstring no longer "
             "exists — say so there rather than leaving a stale warning")
 
-    def test_the_workflow_no_longer_claims_mokata_has_no_required_deps(self):
-        """⚠ The assertion is on the FALSE CLAIM's own words, and the corrected comment is written
-        so as not to reproduce them. That is not fussiness: an earlier draft of this test convicted
-        the correction for quoting what it was correcting — `PIN-SUBSTRING-COMMENT-HOLE` with the
-        sign reversed, which is exactly what defeated a second pin at stage 7."""
-        self.assertFalse(
-            "no required runtime deps" in _read(RELEASE_YML),
-            "release.yml still carries the claim that mokata has no required runtime dependencies; "
-            "pyproject.toml requires the MCP SDK, whose closure is thirty packages")
-
 
 # =================================================================================================
 # THE INSTRUMENT'S BLIND SPOT — eight sites, seven alerts, and the difference is derivable

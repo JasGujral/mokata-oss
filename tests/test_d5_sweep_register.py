@@ -2422,13 +2422,9 @@ _register("session_flow.py", {
 
 # ------------------------------------------------------------------------ MCP admin + the team DB
 _register("mcp_admin.py", {
-    "_terminate": (SUPPRESS_OK,
-        "Tearing down a DOOMED subprocess's pipes, with a `kill()` fallback right below. There is "
-        "nothing left to save and nothing to tell the user: the handshake failure itself is already "
-        "being reported by the caller."),
-    "handshake": (SUPPRESS_OK,
-        "A best-effort `wait(timeout=2)` reap before reading stderr. Failing to reap loses nothing — "
-        "the handshake verdict is decided by what was (or was not) read, not by the reap."),
+    # 0.0.28 I1 (round 2): `_terminate` and `handshake` carry no broad handler any more — the tree
+    # ends through the door (`Jobbed.close`), the pipe closes catch `OSError`, and the died-path reap
+    # catches `subprocess.TimeoutExpired`. Their rows went with the handlers (the stale-row check).
     "status_lines": (DEGRADE_CLEAN,
         "Returns `(False, ['mokata-mcp: status check skipped ({exc})'])` — not-connected AND the "
         "cause, printed."),
@@ -2622,9 +2618,22 @@ _register("atomicfile.py", {
         "`raise`. It must be BaseException so a KeyboardInterrupt mid-write also cleans up, and "
         "nothing is swallowed — every exception is re-raised unchanged."),
 })
+_register("winacl.py", {
+    "create_private_file": (SUPPRESS_OK,
+        "0.0.28 C1 — cleanup-and-re-raise: a private file whose verification failed (or a Ctrl-C "
+        "mid-verify) has its fd closed FIRST (Windows cannot unlink an open file) and the file unlinked, "
+        "then the exception is re-raised unchanged. BaseException so an interrupt cleans up too."),
+    "create_private_file.create": (SUPPRESS_OK,
+        "0.0.28 C1 — the Windows handle is closed when wrapping it in a CRT fd fails, then re-raised; "
+        "nothing is swallowed (the fd owns the handle once it exists)."),
+    "_staged_create": (SUPPRESS_OK,
+        "0.0.28 C1 — macOS staging: when linking the born-private file into place fails, its fd is "
+        "closed and the exception re-raised; the stage's own cleanup runs in the `finally`."),
+    "make_private_dir": (SUPPRESS_OK,
+        "0.0.28 C1 — a private directory that could not be verified (or a Ctrl-C) is removed, then the "
+        "exception is re-raised unchanged."),
+})
 _register("baseline.py", {
-    "baseline_status": (DEGRADE_CLEAN,
-        "Reports RED *with the reason* — the loudest possible in-band signal."),
     "mcp_test_timeout": (DEGRADE_CLEAN,
         "0.0.24 (OSS #82) — an unreadable `settings.mcp.test_timeout_seconds` falls back to the "
         "documented default budget; the setting is an optional raise, never a reason to fail."),
@@ -2633,15 +2642,6 @@ _register("mcp/server.py", {
     "_manifest_or_none": (DEGRADE_CLEAN,
         "0.0.24 — reading the repo's budget setting before the call: an unloadable repo gets the "
         "default budget, and the tool body itself then reports the real problem in-band."),
-})
-_register("mcp/tools_spec.py", {
-    "_save_emit_args": (SUPPRESS_OK,
-        "0.0.24 (OSS #82) — a convenience copy so `spec_emit` can redeem by `proposal_id` alone. "
-        "Losing it only means the redeeming call resends the payload, which the not-found reply "
-        "says; the proposal and its content hash are untouched."),
-    "_saved_emit_args": (DEGRADE_CLEAN,
-        "0.0.24 — an unreadable saved copy reads as absent, and `spec_emit` then replies with the "
-        "exact payload to resend. The content hash still decides whether anything commits."),
 })
 _register("brainstorm_impact.py", {
     "compute_impact": (DEGRADE_CLEAN,
@@ -3129,6 +3129,14 @@ _register("engine/emit.py", {
     "run_quality_gate": (DEGRADE_CLEAN,
         "0.0.23 D5 — the rules member's inputs (spec corpus, memory decisions). Unreadable means "
         "an empty input to an ADVISORY member; no blocking member depends on them."),
+})
+_register("quiet_spawn.py", {
+    "spawn_jobbed": (SUPPRESS_OK,
+        "0.0.28 lane B round 2 (verifier M1) — cleanup-then-re-raise: if the Jobbed handle cannot be "
+        "built after the process exists (a kqueue at EMFILE, a Ctrl+C), the door ends what it started "
+        "(closes the job, kills the group/process through signal_group/signal_pid, reaps it) and "
+        "re-raises unchanged. BaseException because an interrupt there must not leave an orphan "
+        "either. Nothing is swallowed."),
 })
 
 class TestTheSweepIsComplete(unittest.TestCase):

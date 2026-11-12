@@ -234,6 +234,16 @@
         result.append(el("div", "imd-note", `pixel difference decodes both images: ${(px / 1e6).toFixed(1)} MP is over the ${Math.round(info.limits.diff_pixels / 1e6)} MP budget. Side by side, swipe and onion skin still work`));
         return;
       }
+      // 0.0.28 D: an SVG is never compared pixel by pixel, in ANY browser. What an SVG draws is the
+      // browser's rendering of it (fonts, embedded HTML, references one browser refuses to load and
+      // another draws blank), so a pixel count would describe this browser, not the file — and one
+      // browser refusing to hand over the pixels (Chromium) while another compares (Firefox) made
+      // the same file say two different things. Its source is compared in the line diff below.
+      if (info.old.kind === "svg" || info.new.kind === "svg") {
+        strip.hidden = true;
+        result.append(el("div", "imd-note", "this image cannot be compared pixel by pixel: an SVG is drawn by the browser, so its pixels describe the browser, not the file (its source is compared in the line diff below). Side by side, swipe and onion skin still work"));
+        return;
+      }
       if (!window.Worker || typeof OffscreenCanvas === "undefined" || typeof createImageBitmap !== "function") {
         strip.hidden = true;
         result.append(el("div", "imd-note", "this browser cannot compare pixels off the page (no Worker + OffscreenCanvas); side by side, swipe and onion skin still work"));

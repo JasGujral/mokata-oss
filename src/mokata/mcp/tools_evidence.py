@@ -12,16 +12,33 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List
+
+from .tool_annotations import Field
+
+_PATH = "Repo root the tool operates on (default: the server's working directory)."
 
 
-def evidence_commit(path: str = ".", run: str = "", proposal_id: str = "",
-                    approve: bool = False, confirm: Optional[bool] = None) -> Dict[str, Any]:
-    """Commit a run's ledger + gate evidence to `.mokata/runs/<run>/` so the PR check can show it
-    (a CI checkout has no `.mokata/temp_local/`). HUMAN-GATED (SI.3): PROPOSE-ONLY — the proposal
-    previews every byte; a human mints the approval with `mokata approve <id>`; re-calling with that
-    `proposal_id` writes it through the WriteGate. A secret in the record is a HARD BLOCK. `run`
-    names the run (default: the resolved run; an ambiguous repo refuses and lists candidates)."""
+# Provenance (developers): G3-EVIDENCE (0.0.27), the in-harness twin of `mokata evidence commit`. The
+# approval is bound to the exact bytes (their hash is in the call's args), so a record that changed
+# after approval is re-proposed, never committed; on redeem the two re-derived values (`exported_at`,
+# `head_sha`) come from the approved preview. A secret in the projected record BLOCKS before anything
+# is proposed. The unreadable-ledger return stays `status: "error"` (a mokata-side fault). No required parameter:
+# `run` defaults to the resolved run (an ambiguous repo refuses and lists candidates).
+def evidence_commit(
+        path: Annotated[str, Field(description=_PATH)] = ".", *,
+        run: Annotated[str, Field(
+            description="Run id to commit; default is the run resolved for this repo.")] = "",
+        proposal_id: Annotated[str, Field(
+            description="Id of a proposal a human approved with `mokata approve <id>`; leave "
+                        "empty on the first call.")] = "") -> Dict[str, Any]:
+    """Save a run's ledger rows and gate evidence into `.mokata/runs/<run>/` so the pull-request check can show them.
+
+    The first call proposes and previews every byte; a human approves with `mokata approve <id>`, then re-call with `proposal_id` to write it once. A secret in the record blocks it and names the row and field. If the run has changed since the approved preview, it is re-proposed.
+
+    Returns: `proposed` with the exact preview, then `committed` with `record`; `noop`, `blocked` or `refused` say why nothing was written.
+    Errors: error when the run's local ledger or evidence cannot be read whole.
+    """
     from .. import approval
     from ..govern.ledger import AuditLedger
     from ..run_record import commit_run_record, content_hash, frozen_meta, plan_run_record
@@ -77,7 +94,7 @@ def evidence_commit(path: str = ".", run: str = "", proposal_id: str = "",
                         summary=f"commit run record {plan.rel_dir}/ "
                                 f"({plan.rows_exported} ledger row(s), "
                                 f"{plan.evidence_exported} evidence record(s))",
-                        preview=preview, approve=approve, confirm=confirm)
+                        preview=preview)
     ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
     msgs: List[str] = []
     result = commit_run_record(path, res.run_id, plan=plan, expected=digest, ledger=ledger,

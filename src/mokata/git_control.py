@@ -58,6 +58,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from .fs_identity import refuse_if_inside
 from .repo_paths import fold_component, split_path
 
 GATE_GIT_CONTROL = "git-control"
@@ -203,32 +204,12 @@ def _folded(path: str) -> List[str]:
     return [fold_component(p) for p in split_path(os.path.normcase(path))]
 
 
-def _under(path: str, base: str) -> bool:
-    """Is `path` at or below `base`, comparing folded components (a case-folding filesystem opens
-    `.GIT/HOOKS/x` as `.git/hooks/x`; the comparison must not depend on which one it runs on)?"""
-    p, b = _folded(path), _folded(base)
-    return len(p) >= len(b) and p[:len(b)] == b
-
-
 def _id(path: str) -> Optional[Tuple[int, int]]:
     try:
         st = os.stat(path)
     except OSError:
         return None
     return (st.st_dev, st.st_ino) if st.st_ino else None
-
-
-def _identity_under(path: str, base_ids: set) -> bool:
-    """Is any EXISTING ancestor of `path` (or `path` itself) one of `base_ids` on disk?"""
-    cur = path
-    while True:
-        got = _id(cur)
-        if got is not None and got in base_ids:
-            return True
-        parent = os.path.dirname(cur)
-        if parent == cur:
-            return False
-        cur = parent
 
 
 def _files_in(dirs: Sequence[str]) -> set:
@@ -266,14 +247,12 @@ def kind_of(target: str, cwd: str) -> str:
             return ""
         hooks = hooks_dirs(top, gitdirs)
         configs = config_files(gitdirs)
-        real_hooks = [os.path.realpath(h) for h in hooks]
-        if any(_under(real, h) for h in real_hooks):
+        # 0.0.28 C2: inside a hooks dir by ANY spelling or on disk (`refuse_if_inside`: the fold OR
+        # identity; an unreadable chain is inside) - the one containment door, no local `_under`.
+        if any(refuse_if_inside(real, h) for h in hooks):
             return HOOK
         if any(_folded(real) == _folded(os.path.realpath(c)) for c in configs):
             return CONFIG
-        hook_ids = {i for i in (_id(h) for h in hooks) if i}
-        if hook_ids and _identity_under(os.path.dirname(real), hook_ids):
-            return HOOK
         mine = _id(real)
         if mine is not None:
             if mine in {i for i in (_id(c) for c in configs) if i}:

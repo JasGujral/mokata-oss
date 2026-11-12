@@ -99,21 +99,70 @@ def record_name(root: str, path: str, cwd: Optional[str] = None) -> Optional[Tup
     The RECORD side of the split (verify M1): a write into `.git/hooks/` is exactly what the
     activity feed and the snapshot timeline must still show, so the private rule does not drop it
     here - it is reported as `private`, and the caller records the path and never the content.
-    Undecidable means private: the content is then not read (fail closed)."""
+    Undecidable means private: the content is then not read (fail closed).
+
+    0.0.28 C3 (`CASEFOLD-EVENT-PATH-PLATFORM-CASE`): containment is decided FIRST by identity - the
+    ancestor that IS the root on disk (`fs_identity.disk_rel`), so a root typed `REPO` on a folding
+    volume no longer drops the event - and the name is then spelled as the DISK spells each existing
+    component (`fs_identity.disk_spelling`, scandir only). A vanished tail (a delete) resolves against
+    the keys this store already holds, by fold, only where the directory folds; else it is kept as
+    typed. One file is ONE name on every OS."""
     from .. import repo_paths as RP
+    from .. import fs_identity as FI
     try:
-        real_root = os.path.realpath(root)
         ab = path if os.path.isabs(path) else os.path.join(cwd or root, path)
-        rel = str(RP.name_of(os.path.realpath(ab), real_root))
+        got = FI.disk_rel(root, ab)
     except (OSError, ValueError, TypeError):
         return None
-    if rel in (".", "..") or rel.startswith("../") or os.path.isabs(rel):
+    if got is None:
         return None
+    below, tail, deepest = got
+    if tail and FI.folds_case(deepest):
+        tail = _known_tail(root, below, tail)
+    rel = "/".join(below + tail)
+    if not rel or rel in (".", "..") or rel.startswith("../") or os.path.isabs(rel):
+        return None
+    real_root = os.path.realpath(root)
     try:
         private = bool(RP.is_private_name(rel) or RP.aliases_private(real_root, rel))
     except (OSError, ValueError, TypeError):
         private = True
     return rel, private
+
+
+#: Per store: fold key of a recorded path -> the recorded paths with that key (the delete rule's index,
+#: built once per process from the timeline and kept current by `_append`).
+_KEYS: Dict[str, Dict[str, set]] = {}
+
+
+def _fold_rel(rel: str) -> str:
+    from ..repo_paths import fold_component
+    return "/".join(fold_component(c) for c in rel.split("/") if c)
+
+
+def _key_index(root: str) -> Dict[str, set]:
+    store = os.path.realpath(store_dir(root))
+    idx = _KEYS.get(store)
+    if idx is None:
+        idx = {}
+        for d in _lines(root):
+            p = d.get("path")
+            if isinstance(p, str) and p:
+                idx.setdefault(_fold_rel(p), set()).add(p)
+        _KEYS[store] = idx
+    return idx
+
+
+def _known_tail(root: str, below: List[str], tail: List[str]) -> List[str]:
+    """The vanished tail as this store already recorded it, when exactly ONE recorded path folds equal
+    to `below + tail` and starts with `below`; otherwise the typed tail."""
+    try:
+        want = _fold_rel("/".join(below + tail))
+        hits = [p for p in _key_index(root).get(want, ())
+                if p.split("/")[:len(below)] == below]
+    except (ValueError, TypeError):
+        return tail
+    return hits[0].split("/")[len(below):] if len(hits) == 1 else tail
 
 
 #: The plain words of a read refusal for each kind of private path (0.0.27 SEC-HARDEN). A refusal
@@ -282,6 +331,9 @@ def _append(root: str, snap: Snapshot) -> None:
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(snap.facts()) + "\n")
         _maybe_prune(root, path)
+    idx = _KEYS.get(os.path.realpath(store_dir(root)))
+    if idx is not None and snap.path:
+        idx.setdefault(_fold_rel(snap.path), set()).add(snap.path)
 
 
 def _maybe_prune(root: str, path: str) -> None:

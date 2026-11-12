@@ -174,20 +174,45 @@ class TheIdeOffersTheFullWalkOnACappedImpact(unittest.TestCase):
             nav.impact(self.root, "src/app/hub.py", "1-2", ["hub", "c1"], budget=BUDGET_FULL)
 
     def test_the_route_takes_full_for_one_symbol_as_a_job_with_no_deadline(self):
+        """The full walk is slowed by 3 s here, MORE than the 2 s sync window a one-shot read used
+        to assume: the route must answer 202 (a job) and the page's way -- follow the handle -- must
+        reach the same `2 * N`. A test that read the first reply as the answer would pass or fail on
+        the speed of the box; with the delay injected it can only fail."""
+        import time
         from starlette.testclient import TestClient
         from mokata.ide import server
         _hub_files(self.root)
-        c = TestClient(server.build_app(server.AppState(self.root, "tok", 9999, None, False)),
-                       base_url="http://127.0.0.1:9999")
-        c.get("/pair?t=tok")
+        raw = TestClient(server.build_app(server.AppState(self.root, "tok", 9999, None, False)),
+                         base_url="http://127.0.0.1:9999")
+        raw.get("/pair?t=tok")
+        from _ide_follow import Following
+        seen = []
+
+        class Recorder:          # the raw status of every reply the route gives
+            def get(self, url, **kw):
+                r = raw.get(url, **kw)
+                seen.append(r.status_code)
+                return r
+
+        c = Following(Recorder())    # a page follows the job handle; a slow box is entitled to a 202
         base = "/api/impact?path=src/app/hub.py&lines=1-2"
         self.assertEqual(400, c.get(base + "&budget=full").status_code)
         self.assertEqual(400, c.get(base + "&symbols=hub,c1&budget=full").status_code)
         self.assertEqual(400, c.get(base + "&symbols=hub&budget=huge").status_code)
-        with mock.patch.object(AB, "BLAST_RADIUS_MAX_REFS", SMALL_CAP):
-            got = c.get(base + "&symbols=hub&budget=full&sync_ms=2000").json()
-        self.assertEqual(2 * N, got["symbols"][0]["blast"]["count"])
-        # 0.0.26 P32 — the route has no deadline of its own any more: a long walk is a job.
+        real = AB.AstBackend.blast_radius_full
+
+        def slow(this, *a, **k):
+            time.sleep(3)
+            return real(this, *a, **k)
+
+        with mock.patch.object(AB, "BLAST_RADIUS_MAX_REFS", SMALL_CAP), \
+                mock.patch.object(AB.AstBackend, "blast_radius_full", slow):
+            seen.clear()
+            got = c.get(base + "&symbols=hub&budget=full")
+        self.assertEqual(202, seen[0], "the slowed walk did not outlast the sync window")
+        self.assertEqual(200, got.status_code)
+        self.assertEqual(2 * N, got.json()["symbols"][0]["blast"]["count"])
+        # 0.0.26 P32 -- the route has no deadline of its own any more: a long walk is a job.
         self.assertFalse(hasattr(server, "FULL_IMPACT_DEADLINE_SECS"))
 
     def test_the_page_renders_the_action_on_a_cut_result(self):

@@ -215,6 +215,54 @@ class TestTheProbeIsShapedTheWayItsHeaderClaims(unittest.TestCase):
                 "probe job %r re-declares permissions and they are not read-only" % job_id)
 
 
+class TheMatrixProbeEditIsNarrow(unittest.TestCase):
+    """0.0.28 H, the full-matrix dev loop. A lane runs the whole `ci.yml` matrix on the mirror by
+    pushing `probe/matrix/<lane>-<n>` whose `ci.yml` carries ONE probe-only edit (never committed to
+    the dev repo): `on.push.branches` gains `probe/matrix/**`. This proves the edit is narrow: the
+    name-invariant probe still starts only `windows-probe.yml`; a matrix branch starts `ci.yml` and
+    the probe and never `release.yml`; and `probe/**` (the widening that would start the matrix on
+    every probe push) is caught."""
+
+    EDIT_FROM = "branches: [master, main]"
+
+    def _edited(self, to):
+        with open(os.path.join(WORKFLOWS, "ci.yml"), encoding="utf-8") as fh:
+            text = fh.read()
+        # On a `probe/matrix/**` branch ci.yml already carries the edit (it is how that branch
+        # started the matrix); take it back to the committed form first so both read the same.
+        text = text.replace("branches: [master, main, 'probe/matrix/**']", self.EDIT_FROM)
+        self.assertEqual(1, text.count(self.EDIT_FROM), "ci.yml's push trigger moved: the recipe is stale")
+        return wp.safe_load(text.replace(self.EDIT_FROM, to), "grade the matrix probe edit")
+
+    def _fired(self, ci, ref):
+        docs = {n: _load(n) for n in wp.workflow_files(WORKFLOWS)}
+        docs["ci.yml"] = ci
+        return sorted(n for n, d in docs.items() if _fires_on_branch_push(d, ref))
+
+    def test_the_matrix_edit_reaches_ci_and_the_probe_and_never_the_release(self):
+        ci = self._edited("branches: [master, main, 'probe/matrix/**']")
+        self.assertEqual(sorted([PROBE, "ci.yml"]),
+                         self._fired(ci, "refs/heads/probe/matrix/0028-h-1"))
+        self.assertNotIn("release.yml", self._fired(ci, "refs/heads/probe/matrix/0028-h-1"))
+
+    def test_the_name_invariant_probe_still_starts_only_the_probe_with_the_edit_applied(self):
+        ci = self._edited("branches: [master, main, 'probe/matrix/**']")
+        self.assertEqual([PROBE], self._fired(ci, PROBE_REF))
+
+    def test_widening_the_edit_to_every_probe_branch_is_caught(self):
+        ci = self._edited("branches: [master, main, 'probe/**']")
+        self.assertIn("ci.yml", self._fired(ci, PROBE_REF),
+                      "the guard cannot see a widened edit: the narrowness proof above is vacuous")
+
+    @unittest.skipIf(os.environ.get("GITHUB_REF", "").startswith("refs/heads/probe/matrix/"),
+                     "this IS a matrix probe branch: the trigger edit is its whole point")
+    def test_the_committed_ci_yml_carries_no_probe_trigger(self):
+        self.assertEqual([PROBE], sorted(
+            n for n in wp.workflow_files(WORKFLOWS)
+            if _fires_on_branch_push(_load(n), "refs/heads/probe/matrix/x")),
+            "the probe-only trigger edit leaked into the dev repo's ci.yml")
+
+
 class TestTheMatcherItself(unittest.TestCase):
     """§7i — the branch matcher decides every answer above, so it is graded on cases where a
     wrong implementation gives a DIFFERENT answer, not on cases where everything agrees."""

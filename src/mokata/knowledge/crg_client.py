@@ -872,6 +872,25 @@ def client_info() -> Dict[str, str]:
     return {"name": "mokata", "version": str(__version__)}
 
 
+def _close_quietly(stream: Any) -> None:
+    """Close a pipe if there is one; a pipe that is already closed or broken is what we want."""
+    if stream is None:
+        return
+    try:
+        stream.close()
+    except (OSError, ValueError):
+        pass
+
+
+def _close_when_released(stream: Any) -> "Optional[threading.Thread]":
+    """Close a pipe a reader may still hold, from a daemon thread, so the caller never waits on it."""
+    if stream is None:
+        return None
+    thread = threading.Thread(target=_close_quietly, args=(stream,), daemon=True)
+    thread.start()
+    return thread
+
+
 class _McpStdioSession:
     """A minimal JSON-RPC-over-stdio MCP client to `code-review-graph serve`. Stdlib-only, no
     `mcp` dependency. Validated by the opt-in real-CRG CI leg; unit tests inject `call_tool`
@@ -1052,5 +1071,21 @@ class _McpStdioSession:
                     proc.kill()
                 except OSError:
                     pass
+        # `CRG-SESSION-CLOSE-LEAKS-FDS` (0.0.28 lane A) — reaping the process does not close the
+        # three pipes `Popen` opened on it; they stayed open until the garbage collector found
+        # them and warned `ResourceWarning: unclosed file`. A long-lived owner (the IDE's per-repo
+        # layer cache) opens and drops sessions for the life of the process, so each one leaked
+        # three descriptors.
+        #
+        # ⛔ THE THREAD THAT READS A PIPE OWNS CLOSING IT. On a timeout or cancel the bounded
+        # reader is still parked in `stdout.readline()` and the stderr drain in its loop; closing a
+        # stream another thread is reading waits for that read, and the read ends only at EOF, which
+        # never comes while a grandchild (code-review-graph's process-pool workers) holds the write
+        # end. So `close()` closes only what it alone writes (stdin) and hands each READ stream to a
+        # daemon closer, which closes it the moment its reader lets go. `close()` itself never
+        # waits on a pipe somebody else may hold, and there is no timeout to tune.
+        if proc is not None:
+            _close_quietly(proc.stdin)
+            self._closers = [_close_when_released(proc.stdout), _close_when_released(proc.stderr)]
         self._proc = None
         self._stderr = None

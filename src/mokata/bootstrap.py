@@ -100,7 +100,8 @@ class BootstrapResult:
 
 
 def _render(surface: Surface, include_live: bool = True, cb: Any = None,
-            structure_line: Optional[str] = None, off_path: bool = False) -> str:
+            structure_line: Optional[str] = None, off_path: bool = False,
+            session: str = "") -> str:
     if cb is None:
         from .context_budget import context_budget
         cb = context_budget(surface.manifest)
@@ -224,12 +225,17 @@ def _render(surface: Surface, include_live: bool = True, cb: Any = None,
         lines.append("Project rules & guardrails (always honour):")
         lines.extend(rules_lines)
 
-    # Stage 54 — proactive resume surfacing: ONE line (max two) when there's a resumable run
-    # or an in-progress brainstorm, ABSENT (no noise) when there's nothing to pick up.
-    resume_hint = _cached_resume_hint(surface) if off_path else build_resume_hint(surface)
+    # Stage 54, on ONE derivation since 0.0.28 F: the next step `mokata suggest` gives, for this
+    # session's run — ABSENT (no noise) for the pinned silent set. The hook (`off_path`) prints the
+    # refresher's stored answer when it still holds for this session, else derives it.
+    if off_path:
+        resume_hint = _cached_resume_hint(surface, session)
+    else:
+        from . import hints as H
+        resume_hint = resume_line(H.derive(surface.root, session=session, rules=H.PIPELINE_ONLY))
     if resume_hint:
         lines.append("")
-        lines.extend(resume_hint.split("\n"))
+        lines.append(resume_hint)
 
     # Stage 60 — "what changed since last session": ONE bounded line, read-only/derived, ABSENT
     # (no noise) on a first session or when nothing changed. So reopening a repo tells you what
@@ -371,29 +377,102 @@ def _cached_changed_since(surface: Surface) -> "str | None":
     return derived(surface.root, "changed-since", paths, lambda: _changed_since_line(surface))
 
 
-#: State files the HOOKS write on every session start / prompt / tool call, which the resume hint
-#: never reads — left out of its freshness key so the hint is not re-derived for nothing.
-_RESUME_KEY_SKIP = ("session_ancestry.json", "graph_freshness", "harvest__", "ide_context.json")
+#: 0.0.28 F `HINTS-UNIFY-RESUME` — the briefing's next-step line IS `hints.derive`'s primary hint
+#: for this session (what `mokata suggest` says), or nothing. How each answer status is shown:
+RESUME_BY_STATUS = {"hints": "primary", "none": "silent", "unknown": "said"}
+#: The answers the briefing says nothing for: a finished run (`none`), and two rungs the briefing
+#: already covers — `init` (it offers setup) and `no-run` (there is nothing to resume).
+RESUME_SUPPRESSED_STATUS = frozenset(k for k, v in RESUME_BY_STATUS.items() if v == "silent")
+RESUME_SUPPRESSED_RULES = frozenset({"init", "no-run"})
+_RESUME_TEXT_MAX = 160
 
 
-def _cached_resume_hint(surface: Surface) -> "str | None":
-    """O12b — the resume hint, from the derived cache when NO run-state file it could read has
-    changed (every file in the state dir but the hook-written ones above, plus git HEAD), else
-    derived NOW. Never served stale."""
-    from .briefing_cache import derived
-    from .knowledge.structure_cache import _git_dir
-    from .tdd_state import state_dir
-    sd = state_dir(surface.root)
+def _clip_text(text: str, n: int) -> str:
+    """`text` cut to `n` characters; a cut never leaves an unclosed back-quote (the line's LAST
+    back-quoted span is its command, and a stray one would swallow it)."""
+    if len(text) <= n:
+        return text
+    text = text[:n - 1]
+    if text.count("`") % 2:
+        text = text[:text.rindex("`")].rstrip(" —-(")
+    return text + "…"
+
+
+def resume_line(ans: "dict | None") -> "str | None":
+    """The ONE briefing line for a `hints.derive` answer: `Next step for run <id>: <text> —
+    `<command>``; `unknown` is said with `mokata doctor` (never silence); None for the pinned
+    silent set. The command is the primary hint's — the one `mokata suggest` prints."""
+    if not isinstance(ans, dict):
+        return None
+    how = RESUME_BY_STATUS.get(str(ans.get("status")), "said")
+    if how == "silent":
+        return None
+    if how == "said":
+        reason = " ".join(str(ans.get("reason") or "a store it needed could not be read").split())
+        reason = _clip_text(reason, 200)
+        tail = "" if "`mokata doctor`" in reason else " — `mokata doctor`"
+        return f"mokata: next step unknown — {reason}{tail}"
+    from .hints import primary
+    prim = primary(ans)
+    if prim is None or prim.get("rule") in RESUME_SUPPRESSED_RULES:
+        return None
+    run = str((ans.get("subject") or {}).get("run") or "")
+    text = _clip_text(" ".join(str(prim.get("text") or "").split()), _RESUME_TEXT_MAX)
+    return f"Next step{' for run ' + run if run else ''}: {text} — `{prim.get('command')}`"
+
+
+def refresh_resume_hint(root: str, session: str, now: "float | None" = None) -> dict:
+    """The refresher's half (O12b): derive the answer for `session` and store it keyed on exactly
+    what the derivation read (`basis.inputs`) — or nothing when it read nothing, or when it is the
+    `init` answer (the hook never briefs an uninitialised repo). Returns the answer.
+
+    The key must describe the state the STORED answer was read from, and no clock can say so (a
+    write in the same timestamp tick as the read looks simultaneous; Windows' py3.12 clock is
+    ~16 ms coarse). So it is bracketed instead: derive once to learn the inputs, key them, derive
+    again, key them again. The second answer is stored only when its inputs are the first's and
+    the key did not move across it — then nothing it read changed while it read it."""
+    from . import briefing_cache as BC
+    from . import hints as H
     try:
-        names = sorted(n for n in os.listdir(sd) if not n.startswith(_RESUME_KEY_SKIP))
+        os.makedirs(BC.cache_dir(root), exist_ok=True)      # before the read: the key is stable
     except OSError:
-        names = []
-    gd = _git_dir(surface.root)
-    paths = [sd] + [os.path.join(sd, n) for n in names] + ([os.path.join(gd, "HEAD")] if gd else [])
-    # the dir itself is in the key only through its LISTING (names), not its mtime, which every
-    # hook-written file moves; a created/removed run file changes `names` and so the key.
-    paths[0] = sd + "::" + "|".join(names)
-    return derived(surface.root, "resume-hint", paths, lambda: build_resume_hint(surface))
+        pass
+
+    def read() -> "tuple":
+        ans = H.derive(root, session=session, now=now, rules=H.PIPELINE_ONLY)
+        basis = ans.get("basis") or {}
+        return ans, list(basis.get("inputs") or []), list(basis.get("listed") or [])
+    ans, inputs, listed = read()
+    if (H.primary(ans) or {}).get("rule") == H.R_INIT or not inputs:
+        return ans
+    before = BC.input_key(inputs, listed)
+    ans, again, again_listed = read()
+    if again != inputs or again_listed != listed or BC.input_key(inputs, listed) != before:
+        return ans                         # it moved while being read: the next refresh stores it
+    BC.store_resume(root, session, ans, before, resume_line(ans))
+    return ans
+
+
+def _cached_resume_hint(surface: Surface, session: str = "",
+                        now: "float | None" = None) -> "str | None":
+    """The hook's line (0.0.28 F, round 2): the refresher's stored answer when what THIS session
+    would read is what it was derived from and its `valid_until` has not passed — said with its
+    age, because its text was rendered then — else the answer derived here. One derivation, two
+    moments; never a placeholder. (Measured: deriving fits the session-start ceilings.)"""
+    import time as _t
+    from . import briefing_cache as BC
+    now = _t.time() if now is None else now
+    entry = BC.read_resume(surface.root)
+    if entry is not None:
+        until = entry["answer"].get("valid_until")
+        if not (isinstance(until, (int, float)) and now >= until) and \
+                BC.resume_holds(entry, session):
+            line = entry["line"]                 # rendered by `resume_line` when it was stored
+            if line is None:
+                return None
+            return line + f" (derived {BC.age_of(max(0.0, now - float(entry['at'])))} ago)"
+    from . import hints as H
+    return resume_line(H.derive(surface.root, session=session, now=now, rules=H.PIPELINE_ONLY))
 
 
 def _changed_since_line(surface: Surface) -> "str | None":
@@ -409,59 +488,6 @@ def _changed_since_line(surface: Surface) -> "str | None":
         return None
 
 
-# Stage 54 — proactive resume surfacing. The briefing leads off with ONE line (max two) when
-# there's something to pick up: a resumable run and/or an in-progress brainstorm. So reopening
-# a repo TELLS you there's a run mid-flight, instead of you having to remember. Read-only —
-# composes progress.list_sessions + brainstorm.restore_brainstorm_progress, which only `read`
-# the StateStore (no stat/counter bumps, no MemoryStore); deterministic; degrade-clean to None.
-_RESUME_GLYPH = "▸"
-
-
-def _resume_run_line(surface: Surface) -> "str | None":
-    """The single most-actionable resumable-run line, or None. A run is resumable when it's the
-    active run (the one `resume` would pick), has a passed gate (progress to pick up), and isn't
-    complete. A fresh run with nothing passed is not surfaced (no progress = no noise)."""
-    from .progress import list_sessions
-    active = next((s for s in list_sessions(surface.state) if s.active), None)
-    if active is None or active.complete:
-        return None
-    if active.last_passed is None or active.resume_phase is None:
-        return None
-    return (f"{_RESUME_GLYPH} Resume: pipeline at '{active.resume_phase}' "
-            f"(last passed '{active.last_passed}') — run `mokata resume`")
-
-
-def _resume_brainstorm_line(surface: Surface) -> "str | None":
-    """The in-progress-brainstorm line, or None. An already-approved checkpoint is not an
-    in-progress brainstorm, so it isn't surfaced here (the run line covers downstream work)."""
-    from .brainstorm import restore_brainstorm_progress
-    bs = restore_brainstorm_progress(surface.state)
-    if bs is None or getattr(bs, "approved", False):
-        return None
-    topic = (bs.topic or "").strip()
-    label = f" '{topic}'" if topic else ""
-    return (f"{_RESUME_GLYPH} Resume: in-progress brainstorm{label} — "
-            f"run `/brainstorm` (or `mokata brainstorm`)")
-
-
-def build_resume_hint(surface: Surface) -> "str | None":
-    """ONE line (max two) when there's something to pick up, else None. Pure + read-only +
-    degrade-clean: any error (no sessions, no brainstorm, a corrupt checkpoint) -> None, never
-    an exception. Prefers the most actionable single line; surfaces both compactly when both
-    exist (still ≤ 2 short lines — never a dump)."""
-    try:
-        lines = [ln for ln in (_resume_run_line(surface),
-                               _resume_brainstorm_line(surface)) if ln]
-        return "\n".join(lines) if lines else None
-    except (OSError, ValueError, KeyError, AttributeError):
-        # D5 — the real raisers behind `list_sessions` / `restore_brainstorm_progress`: an
-        # unreadable state dir (OSError), a torn JSON checkpoint (ValueError), a checkpoint from an
-        # older shape missing a key (KeyError), and a duck-typed/absent state store (AttributeError,
-        # which the docstring's "a corrupt checkpoint" case genuinely produces here). Unchanged
-        # behaviour — None, no noise — for every one of them.
-        return None
-
-
 # F6 — the briefing leads with a deterministic, cache-stable prefix (manifest identity +
 # always-on rules + constitution) so a prompt cache hits on it; the live, per-run content
 # (capability resolution, captured rules) follows after this boundary. Keeping the volatile
@@ -472,7 +498,7 @@ _LIVE_BOUNDARY = "\n\n=== session (live) ===\n\n"
 def build_bootstrap(
     surface: Surface, budget: "Optional[int]" = None,
     reanchor: "Optional[str]" = None, footer: "Optional[str]" = None,
-    off_path: bool = False,
+    off_path: bool = False, session: str = "",
 ) -> BootstrapResult:
     """The SessionStart briefing, inside ONE budget (H-8, 0.0.22 D3).
 
@@ -496,7 +522,7 @@ def build_bootstrap(
     # here; both lines come from the background-refreshed caches, marked when stale or pending.
     structure = _graph_structure_line(surface, inline=not off_path)
     text = prefix + _LIVE_BOUNDARY + head + _render(surface, cb=cb, structure_line=structure,
-                                                    off_path=off_path)
+                                                    off_path=off_path, session=session or "")
     tokens = estimate_tokens(text)
     offers: List[str] = []          # appended after the render; kept so a re-render can re-append
 

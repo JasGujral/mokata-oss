@@ -118,7 +118,11 @@ class TestRemedyCommand(unittest.TestCase):
         self.assertEqual("mokata approve --list",
                          AX.remedy_command("run `mokata approve --list` and say what it shows"))
         self.assertEqual("/mokata:mcp-repair", AX.remedy_command("try `/mokata:mcp-repair`."))
-        self.assertEqual("mokata doctor", AX.remedy_command("then run mokata doctor."))
+        # 0.0.28 I2: bare prose is never a command (it turned "not a mokata fault" into one) —
+        # only a backticked `mokata ...` counts.
+        self.assertIsNone(AX.remedy_command("then run mokata doctor."))
+        self.assertEqual("mokata doctor", AX.remedy_command("then run `mokata doctor`."))
+        self.assertIsNone(AX.remedy_command("this is not a mokata fault"))
         self.assertIsNone(AX.remedy_command("nothing to run here"))
         self.assertIsNone(AX.remedy_command(None))
 

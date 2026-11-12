@@ -108,7 +108,7 @@ class TestSharedConfirm(unittest.TestCase):
 # ----------------------------------------------------------------- M6: memory_type on MCP
 
 class TestMcpMemoryType(unittest.TestCase):
-    def test_remember_takes_memory_type_and_mtype_alias(self):
+    def test_remember_takes_memory_type_and_the_mtype_alias_is_gone(self):
         from mokata import mcp_server as M
         with tempfile.TemporaryDirectory() as d:
             _repo(d).close()
@@ -117,12 +117,11 @@ class TestMcpMemoryType(unittest.TestCase):
             self.assertEqual(
                 mcp_commit(M.remember, path=d, subject="a", value="1",
                            memory_type=DECISION)["status"], "committed")
-            # deprecated `mtype` alias still routes
-            self.assertEqual(
-                mcp_commit(M.remember, path=d, subject="b", value="2",
-                           mtype=DECISION)["status"], "committed")
+            # 0.0.28 I2: the deprecated `mtype` alias was DELETED (pre-1.0) — a TypeError now
+            with self.assertRaises(TypeError):
+                M.remember(path=d, subject="b", value="2", mtype=DECISION)
 
-    def test_recall_exposes_memory_type_with_mtype_alias(self):
+    def test_recall_exposes_memory_type_without_the_mtype_alias(self):
         from mokata import mcp_server as M
         with tempfile.TemporaryDirectory() as d:
             store = _repo(d)
@@ -130,7 +129,8 @@ class TestMcpMemoryType(unittest.TestCase):
             store.close()
             item = M.recall(path=d)["items"][0]
             self.assertEqual(item["memory_type"], DECISION)
-            self.assertEqual(item["mtype"], DECISION)          # back-compat alias
+            # 0.0.28 I2: the back-compat `mtype` alias key was deleted — one spelling only
+            self.assertNotIn("mtype", item)
 
 
 # ----------------------------------------------------------------- namespaced Postgres table

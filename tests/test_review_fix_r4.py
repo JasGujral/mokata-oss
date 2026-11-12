@@ -490,7 +490,7 @@ class TestNoRawExcOnTheReadPath(_NoPinnedSession):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _persist_run(d, "solo")
-            TR.review_record(path=d, failed=True, findings=CANARY)
+            TR.review_record(path=d, outcome="failed", findings=CANARY)
             _corrupt(surface, payload="second-" + CANARY)
             _rc, out = _cli(["progress", "review-status", "--path", d], d)
             self.assertNotIn(CANARY, out)
@@ -569,9 +569,9 @@ class TestMcpTwins(_NoPinnedSession):
             _repo(d)
             _persist_run(d, "solo")
             self.assertTrue(TR.review_status(path=d)["readable"])            # absent
-            TR.review_record(path=d, failed=True)
+            TR.review_record(path=d, outcome="failed")
             self.assertTrue(TR.review_status(path=d)["readable"])            # a FAIL
-            TR.review_record(path=d, passed=True, independent=True)
+            TR.review_record(path=d, outcome="passed", independent=True)
             st = TR.review_status(path=d)
             self.assertTrue(st["readable"])                                  # a PASS
             self.assertFalse(st["blocks"])
@@ -582,7 +582,7 @@ class TestMcpTwins(_NoPinnedSession):
             _persist_run(d, "solo")
             with mock.patch("mokata.progress_events.record_review_verdict",
                             side_effect=OSError("disk full")):
-                res = TR.review_record(path=d, passed=True)
+                res = TR.review_record(path=d, outcome="passed")
                 rc, out = _cli(["progress", "record-review", "--passed", "--path", d], d)
             self.assertFalse(res["recorded"])
             self.assertEqual(res["status"], "error")
@@ -754,8 +754,8 @@ class TestNothingElseMoved(_NoPinnedSession):
         import inspect
         # R4 added none; 0.0.22 C2 (SL.S3) added `blocking`, the Blocking-finding count.
         self.assertEqual(set(inspect.signature(TR.review_record).parameters),
-                         {"path", "passed", "failed", "independent", "findings", "run",
-                          "blocking"})
+                         # 0.0.28 I2: `passed`/`failed` -> one required `outcome`
+                         {"path", "outcome", "independent", "findings", "run", "blocking"})
         self.assertEqual(set(inspect.signature(TR.review_status).parameters),
                          {"path", "run", "response_format"})
 

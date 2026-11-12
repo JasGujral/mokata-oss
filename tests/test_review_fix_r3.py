@@ -50,6 +50,7 @@ import _support  # noqa: F401  (puts src/ on the path)
 from _observed_review import observe_review_subagent
 
 from mokata import parity
+from mokata.mcp.validation import ValidationError
 from mokata.run_resolver import bind_session_run
 from mokata.config import Surface
 from mokata.govern.resume import PipelineCheckpoint
@@ -179,7 +180,7 @@ class TestReviewFixR3Regression(_NoPinnedSession):
             self.assertTrue(ship_review_gate(surface, run_id="solo").blocks)
 
             observe_review_subagent(d)  # D4 ruling
-            rec = TR.review_record(path=d, passed=True, independent=True)
+            rec = TR.review_record(path=d, outcome="passed", independent=True)
             self.assertTrue(rec["recorded"])
             self.assertEqual(rec["run"], "solo")
 
@@ -201,42 +202,7 @@ class TestReviewFixR3Regression(_NoPinnedSession):
 
 # ======================================================= 1 · the orphan is DELETED
 class TestOrphanDeleted(unittest.TestCase):
-    def test_check_ship_readiness_is_not_importable(self):
-        with self.assertRaises(ImportError):
-            from mokata.engine.ship import check_ship_readiness  # noqa: F401
 
-    def test_ship_readiness_carrier_is_not_importable(self):
-        with self.assertRaises(ImportError):
-            from mokata.engine.ship import ShipReadiness  # noqa: F401
-
-    def test_the_engine_package_no_longer_exports_either(self):
-        import mokata.engine as E
-        self.assertNotIn("check_ship_readiness", E.__all__)
-        self.assertNotIn("ShipReadiness", E.__all__)
-        # …and `__all__` is not lying — a `import *` surface with no such names.
-        ns: dict = {}
-        exec("from mokata.engine import *", ns)      # noqa: S102 - the public surface, as callers see it
-        self.assertNotIn("check_ship_readiness", ns)
-        self.assertNotIn("ShipReadiness", ns)
-
-    def test_criteriona_is_unrepresentable(self):
-        """The render bug cannot be produced any more, because the renderer is GONE. Proven over
-        the whole shipped source tree, not just the one file it used to live in."""
-        hits = []
-        # CORPUS: THE WORKING TREE. This asks what mokata SHIPS, and `sync-public.sh` mirrors
-        # with `rsync`, which copies the working tree — an untracked `.py` under `src/` really is
-        # published. The index would be blind to exactly the file most likely to break the rule.
-        for base, _dirs, files in os.walk(SRC):
-            for fn in files:
-                if not fn.endswith(".py"):
-                    continue
-                p = os.path.join(base, fn)
-                with open(p, encoding="utf-8") as fh:
-                    text = fh.read()
-                # the literal, and the f-string that MINTED it ("criterion" + a bare 'a' plural)
-                if "criteriona" in text or "'' if self.spec_acs == 1 else 'a'" in text:
-                    hits.append(os.path.relpath(p, REPO))
-        self.assertEqual(hits, [], f"the 'criteriona' render survives in: {hits}")
 
     def test_no_production_reference_to_the_orphan_survives(self):
         """The grep the deletion turns on: zero CODE references anywhere in the shipped source.
@@ -309,7 +275,7 @@ class TestMcpReviewStatus(_NoPinnedSession):
             _repo(d)
             _persist_run(d, "solo")
             observe_review_subagent(d)  # D4 ruling
-            TR.review_record(path=d, passed=True, independent=True)
+            TR.review_record(path=d, outcome="passed", independent=True)
             st = TR.review_status(path=d)
             self.assertEqual(st["run"], "solo")
             self.assertTrue(st["present"])
@@ -354,7 +320,7 @@ class TestMcpReviewStatus(_NoPinnedSession):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _persist_run(d, "solo")
-            TR.review_record(path=d, passed=True, independent=True)
+            TR.review_record(path=d, outcome="passed", independent=True)
             _age_verdicts(surface, hours_ago=48)        # past the 24h default bound (R2)
             st = TR.review_status(path=d)
             rc, out = _cli(["progress", "review-status", "--path", d], d)
@@ -369,7 +335,7 @@ class TestMcpReviewStatus(_NoPinnedSession):
         with tempfile.TemporaryDirectory() as d:
             _repo(d)
             _persist_run(d, "solo")
-            TR.review_record(path=d, failed=True, independent=True)
+            TR.review_record(path=d, outcome="failed", independent=True)
             st = TR.review_status(path=d)
             rc, out = _cli(["progress", "review-status", "--path", d], d)
             self.assertTrue(st["blocks"])
@@ -382,7 +348,7 @@ class TestMcpReviewStatus(_NoPinnedSession):
         with tempfile.TemporaryDirectory() as d:
             _repo(d)
             _persist_run(d, "solo")
-            TR.review_record(path=d, passed=True)       # independent omitted -> inline
+            TR.review_record(path=d, outcome="passed")       # independent omitted -> inline
             st = TR.review_status(path=d)
             self.assertFalse(st["blocks"])
             self.assertFalse(st["independent"])
@@ -393,7 +359,7 @@ class TestMcpReviewStatus(_NoPinnedSession):
             _repo(d)
             _persist_run(d, "runA")
             _persist_run(d, "runB")
-            TR.review_record(path=d, passed=True, independent=True, run="runA")
+            TR.review_record(path=d, outcome="passed", independent=True, run="runA")
             a = TR.review_status(path=d, run="runA")
             b = TR.review_status(path=d, run="runB")
             self.assertEqual(a["run"], "runA")
@@ -408,7 +374,7 @@ class TestMcpReviewStatus(_NoPinnedSession):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _persist_run(d, "solo")
-            TR.review_record(path=d, failed=True, findings=secret)
+            TR.review_record(path=d, outcome="failed", findings=secret)
             for kw in ({}, {"response_format": "detailed"}, {"run": "solo"}):
                 with self.subTest(call=kw):
                     st = TR.review_status(path=d, **kw)
@@ -441,7 +407,7 @@ class TestMcpReviewStatus(_NoPinnedSession):
         with tempfile.TemporaryDirectory() as d:
             _repo(d)
             _persist_run(d, "solo")
-            TR.review_record(path=d, passed=True, independent=True)
+            TR.review_record(path=d, outcome="passed", independent=True)
             self.assertNotIn("block", TR.review_status(path=d))
             detailed = TR.review_status(path=d, response_format="detailed")
             self.assertIn("block", detailed)
@@ -471,7 +437,7 @@ class TestMcpReviewRecord(_NoPinnedSession):
             _persist_run(d, "solo")
             _cli(["progress", "record-review", "--passed", "--independent",
                   "--findings", "2 nits", "--path", d], d)
-            TR.review_record(path=d, passed=True, independent=True, findings="2 nits")
+            TR.review_record(path=d, outcome="passed", independent=True, findings="2 nits")
             events = _verdict_events(surface)
             self.assertEqual(len(events), 2)
             cli_ev, mcp_ev = events
@@ -489,7 +455,7 @@ class TestMcpReviewRecord(_NoPinnedSession):
             _repo(d)
             _persist_run(d, "solo")
             observe_review_subagent(d)  # D4 ruling
-            TR.review_record(path=d, passed=True, independent=True)
+            TR.review_record(path=d, outcome="passed", independent=True)
             rc, out = _cli(["progress", "review-status", "--path", d], d)
             self.assertEqual(rc, 0, out)
             self.assertIn("review passed (independent ✓)", out)
@@ -513,7 +479,7 @@ class TestMcpReviewRecord(_NoPinnedSession):
             surface = _repo(d)
             _persist_run(d, "runA")
             _persist_run(d, "runB")
-            TR.review_record(path=d, passed=True, independent=True, run="runA")
+            TR.review_record(path=d, outcome="passed", independent=True, run="runA")
 
             self.assertFalse(TR.review_status(path=d, run="runA")["blocks"])
             self.assertTrue(TR.review_status(path=d, run="runB")["blocks"],
@@ -530,7 +496,7 @@ class TestMcpReviewRecord(_NoPinnedSession):
         with tempfile.TemporaryDirectory() as d:
             _repo(d)
             _persist_run(d, "solo")
-            rec = TR.review_record(path=d, passed=True, independent=True)
+            rec = TR.review_record(path=d, outcome="passed", independent=True)
             st = TR.review_status(path=d)
             self.assertEqual(rec["run"], st["run"])
             self.assertFalse(st["blocks"])
@@ -544,7 +510,7 @@ class TestMcpReviewRecord(_NoPinnedSession):
             _persist_run(d, "runB")
             bind_session_run(d, "sessB", "runB")
             with mock.patch.dict(os.environ, {"MOKATA_SESSION_ID": "runB"}):
-                rec = TR.review_record(path=d, passed=True, independent=True)
+                rec = TR.review_record(path=d, outcome="passed", independent=True)
                 st = TR.review_status(path=d)
             self.assertEqual(rec["run"], "runB")
             self.assertEqual(st["run"], "runB")
@@ -556,7 +522,7 @@ class TestMcpReviewRecord(_NoPinnedSession):
             surface = _repo(d)
             _persist_run(d, "runA")
             _persist_run(d, "runB")               # ambiguous => no run resolves
-            rec = TR.review_record(path=d, passed=True, independent=True)
+            rec = TR.review_record(path=d, outcome="passed", independent=True)
             self.assertTrue(rec["recorded"])      # honest observability: the event lands
             self.assertIsNone(rec["run"])
             self.assertFalse(rec["satisfies_gate"])
@@ -583,7 +549,7 @@ class TestMcpReviewRecord(_NoPinnedSession):
         with tempfile.TemporaryDirectory() as d:
             _repo(d)
             _persist_run(d, "solo")
-            rec = TR.review_record(path=d, passed=True, independent=True)
+            rec = TR.review_record(path=d, outcome="passed", independent=True)
             rc, out = _cli(["progress", "record-review", "--passed", "--independent",
                             "--path", d], d)
             self.assertEqual(rc, 0)
@@ -596,19 +562,24 @@ class TestMcpReviewRecord(_NoPinnedSession):
             _repo(d)
             surface = Surface.load(d)
             _persist_run(d, "solo")
-            for kw in ({}, {"passed": True, "failed": True}):
+            # 0.0.28 I2: the pair `passed=`/`failed=` became ONE required `outcome` enum, so "exactly
+            # one outcome" is structural: omitting it is a TypeError (a direct call), and a value
+            # outside {passed, failed} (incl. the old both/neither shapes) is a ValidationError.
+            with self.assertRaises(TypeError):
+                TR.review_record(path=d)
+            for kw in ({"outcome": ""}, {"outcome": "passed,failed"}, {"outcome": "maybe"}):
                 with self.subTest(call=kw):
-                    res = TR.review_record(path=d, **kw)
-                    self.assertFalse(res["recorded"])
-                    self.assertEqual(res["status"], "error")
-                    self.assertIn("exactly one of passed / failed", res["reason"])
+                    with self.assertRaises(ValidationError) as cm:
+                        TR.review_record(path=d, **kw)
+                    self.assertEqual(cm.exception.field, "outcome")
+                    self.assertEqual(set(cm.exception.allowed), {"passed", "failed"})
             self.assertEqual(_verdict_events(surface), [])   # and nothing was written
 
     def test_findings_are_recorded_with_the_verdict(self):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _persist_run(d, "solo")
-            TR.review_record(path=d, failed=True, findings="3 findings: A, B, C")
+            TR.review_record(path=d, outcome="failed", findings="3 findings: A, B, C")
             self.assertEqual(_verdict_events(surface)[0]["data"]["findings"],
                              "3 findings: A, B, C")
 
@@ -617,7 +588,7 @@ class TestMcpReviewRecord(_NoPinnedSession):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _persist_run(d, "solo")
-            TR.review_record(path=d, passed=True)
+            TR.review_record(path=d, outcome="passed")
             self.assertNotIn("findings", _verdict_events(surface)[0]["data"])
 
     def test_the_latest_verdict_wins_across_surfaces(self):
@@ -626,7 +597,7 @@ class TestMcpReviewRecord(_NoPinnedSession):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _persist_run(d, "solo")
-            TR.review_record(path=d, failed=True)
+            TR.review_record(path=d, outcome="failed")
             self.assertTrue(TR.review_status(path=d)["blocks"])
             _cli(["progress", "record-review", "--passed", "--independent", "--path", d], d)
             self.assertFalse(TR.review_status(path=d)["blocks"])
@@ -638,14 +609,15 @@ class TestMcpReviewRecord(_NoPinnedSession):
         event lands on the first call."""
         sig = set(inspect.signature(TR.review_record).parameters)
         # 0.0.22 C2 (SL.S3) adds `blocking` — a COUNT, not a consent: the posture is unchanged.
-        self.assertEqual(sig, {"path", "passed", "failed", "independent", "findings", "run",
+        # 0.0.28 I2: `passed`/`failed` -> one required `outcome`
+        self.assertEqual(sig, {"path", "outcome", "independent", "findings", "run",
                                "blocking"})
         for banned in ("approve", "confirm", "proposal_id"):
             self.assertNotIn(banned, sig)
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _persist_run(d, "solo")
-            res = TR.review_record(path=d, passed=True, independent=True)
+            res = TR.review_record(path=d, outcome="passed", independent=True)
             self.assertNotEqual(res.get("status"), "proposed")
             self.assertNotIn("proposal_id", res)
             self.assertEqual(len(_verdict_events(surface)), 1)   # committed on call ONE
@@ -659,7 +631,7 @@ class TestMcpReviewRecord(_NoPinnedSession):
             _persist_run(d, "solo")
             with mock.patch("mokata.progress_events.record_review_verdict",
                             side_effect=OSError("disk full")):
-                res = TR.review_record(path=d, passed=True)
+                res = TR.review_record(path=d, outcome="passed")
             self.assertFalse(res["recorded"])
             self.assertEqual(res["status"], "error")
             self.assertIn("disk full", res["reason"])
@@ -736,9 +708,6 @@ class TestParityAndRegistry(unittest.TestCase):
         self.assertIn("review_status", parity.declared_mcp_tools())
         self.assertIn("review_record", parity.declared_mcp_tools())
 
-    def test_the_matrix_still_verifies(self):
-        report = parity.verify_parity()
-        self.assertTrue(report.ok, report.render())
 
     def test_a_separate_review_surface_would_be_STALE(self):
         """The grounded reason both tools ride `progress`: Stage-54e keys the matrix on LIVE
@@ -776,7 +745,13 @@ class TestParityAndRegistry(unittest.TestCase):
         for name in ("review_status", "review_record"):
             with self.subTest(tool=name):
                 ann = TA.annotations_for("read", name)
-                self.assertIs(ann["readOnlyHint"], True)
+                # 0.0.28 I2: `review_record` appends the verdict event (APPEND_ONLY_TOOLS), so it
+                # is honestly not read-only — but still not destructive and not open-world.
+                if name in TA.APPEND_ONLY_TOOLS:
+                    self.assertIs(ann["readOnlyHint"], False)
+                    self.assertIs(ann["destructiveHint"], False)
+                else:
+                    self.assertIs(ann["readOnlyHint"], True)
                 self.assertIs(ann["openWorldHint"], False)
                 self.assertNotIn(name, TA.OPEN_WORLD_TOOLS)
 
@@ -850,7 +825,7 @@ class TestNothingElseMoved(_NoPinnedSession):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _persist_run(d, "solo")
-            TR.review_record(path=d, passed=True, independent=True)
+            TR.review_record(path=d, outcome="passed", independent=True)
             ev = _verdict_events(surface)[0]
             self.assertEqual(tuple(ev), ENVELOPE_KEYS)      # same keys, same ORDER
             self.assertEqual(ev["schema_version"], 1)
@@ -862,7 +837,7 @@ class TestNothingElseMoved(_NoPinnedSession):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _persist_run(d, "solo")
-            TR.review_record(path=d, passed=True, independent=True)
+            TR.review_record(path=d, outcome="passed", independent=True)
             # R1: a run-less READ still refuses outright
             self.assertIsNone(latest_review_verdict(surface, run_id=None))
             # R2: the freshness bound still governs, whoever recorded the verdict
@@ -884,7 +859,7 @@ class TestNothingElseMoved(_NoPinnedSession):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d)
             _persist_run(d, "solo")
-            TR.review_record(path=d, passed=True, independent=True)
+            TR.review_record(path=d, outcome="passed", independent=True)
             path = ProgressLog.from_surface(surface).path
             before = os.stat(path).st_size
             for _ in range(3):

@@ -14,19 +14,33 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Annotated, Any, Dict, Literal
 
 from .consent import _consent, _gated_write, _policy, _propose, _refused
 from .registry import _mokata_dir, _surface
+from .tool_annotations import Field
+from .validation import ValidationError
+
+_PATH = "Repo root the tool operates on (default: the server's working directory)."
+_PROPOSAL = ("Id of a proposal a human approved with `mokata approve <id>`; leave empty on the "
+             "first call.")
 
 
-def worktree_clean(path: str = ".", approve: bool = False, confirm: Optional[bool] = None,
-                   proposal_id: str = "") -> Dict[str, Any]:
-    """Clean this repo's stale git worktrees: remove those whose branch is MERGED, that are clean
-    and have no live session, and prune those whose directory is gone. Everything else is KEPT and
-    listed with its reason. HUMAN-GATED (SI.3): PROPOSE-ONLY — it previews the plan and removes
-    nothing. A human mints the approval with `mokata approve <id>`; re-call with that `proposal_id`
-    to apply it. Branches are never deleted."""
+# Provenance (developers): WT.S3 FR-WT-2 (0.0.23 E3). Human-gated (SI.3): the proposal args carry the
+# plan's actionable paths, so a plan that changed between preview and re-call no longer matches the
+# approval and is re-proposed, never applied. The removal is re-checked at apply time. A plan that
+# cannot be built (git unreadable) is a genuine mokata-side fault, so it stays `status: "error"`.
+# No required parameter: it cleans the whole repo's stale worktrees.
+def worktree_clean(
+        path: Annotated[str, Field(description=_PATH)] = ".", *,
+        proposal_id: Annotated[str, Field(description=_PROPOSAL)] = "") -> Dict[str, Any]:
+    """Remove this repo's stale git worktrees: merged, clean ones with no live session, and ones whose folder is gone.
+
+    Everything else is kept and listed with its reason. Branches are never deleted. Nothing is removed until a human approves the exact plan.
+
+    Returns: `proposed` with the plan and a `proposal_id`, then the removal outcome; `noop` when nothing is stale.
+    Errors: error when git cannot list the worktrees.
+    """
     from .. import worktree_manage as WM
     surface = _surface(path)
     plan = WM.plan_worktree_clean(surface)
@@ -43,7 +57,7 @@ def worktree_clean(path: str = ".", approve: bool = False, confirm: Optional[boo
         return _propose(path, "worktree_clean", args, {"plan": plan.to_dict()},
                         target=plan.repo_root,
                         summary=f"clean {len(plan.actionable)} git worktree(s)",
-                        preview=plan.render(), approve=approve, confirm=confirm)
+                        preview=plan.render())
     box: Dict[str, Any] = {}
 
     def _apply() -> Any:
@@ -57,20 +71,27 @@ def worktree_clean(path: str = ".", approve: bool = False, confirm: Optional[boo
     return out
 
 
-def worktree_remove(path: str = ".", target: str = "", force: bool = False,
-                    approve: bool = False, confirm: Optional[bool] = None,
-                    proposal_id: str = "") -> Dict[str, Any]:
-    """Remove ONE git worktree (`target` = its path, its `worktree_list` label, or its branch). It
-    is REFUSED for the main checkout and for a worktree with a live session (nothing overrides
-    that), and for a dirty or unmerged one unless `force=true`. HUMAN-GATED (SI.3): PROPOSE-ONLY —
-    a human mints the approval with `mokata approve <id>`; re-call with that `proposal_id` to
-    remove it. The branch is kept."""
+# Provenance (developers): WT.S3 FR-WT-3. Human-gated (SI.3). Refused for the main checkout and for
+# a worktree with a live session (nothing overrides that), and for a dirty/unmerged one unless
+# `force`. The branch is kept. A refusal carries `remedyCommand` so a client can offer the next step.
+def worktree_remove(
+        path: Annotated[str, Field(description=_PATH)] = ".", *,
+        target: Annotated[str, Field(
+            description="Worktree to remove: its path, `worktree_list` label, or branch.")],
+        force: Annotated[bool, Field(
+            description="Also remove a dirty or unmerged worktree, discarding its work.")] = False,
+        proposal_id: Annotated[str, Field(description=_PROPOSAL)] = "") -> Dict[str, Any]:
+    """Remove ONE git worktree by path, label or branch; the branch itself is kept.
+
+    Refused for the main checkout and for any worktree with a live session. A dirty or unmerged worktree needs `force`, which discards its uncommitted work. Nothing is removed until a human approves.
+
+    Returns: `proposed` with a `proposal_id`, then the removal outcome; `refused` with a reason when the worktree cannot be removed.
+    Errors: refused (invalid_input) when `target` is empty.
+    """
     from .. import worktree_manage as WM
     surface = _surface(path)
     if not target:
-        return {"status": "error",
-                "message": "worktree_remove needs `target` — a path, label or branch from "
-                           "`worktree_list`."}
+        raise ValidationError("target", "is required: a path, label or branch from `worktree_list`")
     row, refusal = WM.check_remove(surface, target, force=force)
     if row is None or refusal:
         return {"status": "refused", "committed": False,
@@ -87,8 +108,7 @@ def worktree_remove(path: str = ".", target: str = "", force: bool = False,
                         {"worktree": row.to_dict()}, target=row.path,
                         summary=f"remove worktree {row.label}{forced}",
                         preview=f"remove {row.path} (branch '{row.branch or '(detached)'}' kept)"
-                                f"{forced}",
-                        approve=approve, confirm=confirm)
+                                f"{forced}")
     box: Dict[str, Any] = {}
 
     def _apply() -> Any:
@@ -102,16 +122,29 @@ def worktree_remove(path: str = ".", target: str = "", force: bool = False,
     return out
 
 
-def worktree_merge(path: str = ".", target: str = "", strategy: str = "merge-commit",
-                   message: str = "", approve: bool = False, confirm: Optional[bool] = None,
-                   proposal_id: str = "") -> Dict[str, Any]:
-    """The GATED merge (0.0.27 P21) of a session worktree's branch (`target` = its path or branch)
-    into the main checkout's branch. Without `proposal_id` it returns the plan: the evidence at the
-    branch's head (the full suite passed there, every acceptance criterion has a passing test, the
-    review passed at that head), every blocker by name, and — when nothing blocks — a proposal a
-    HUMAN approves with `mokata approve <id>` in their own terminal (an in-chat approval does not
-    license a merge). Re-call with that `proposal_id` to run it: the branch moves by compare-and-
-    swap, then the main checkout is brought to the merge. The worktree is kept. No fetch, no push."""
+# Provenance (developers): 0.0.27 P21 (ID-MERGE-GATED). Merges a session worktree's branch into the
+# main checkout's branch. Without `proposal_id` it returns the plan (evidence at the branch head: full
+# suite passed there, every AC has a passing test, review passed at that head) and, when nothing
+# blocks, a proposal a HUMAN approves in their own terminal: an in-chat approval does not license a
+# merge. Re-call with the id: the branch moves by compare-and-swap, then the main checkout is brought
+# to the merge. No fetch, no push; the worktree is kept. `target` is NOT required: the redeem call
+# reloads the worktree from the proposal, so a re-call needs only the id (hence no required param).
+def worktree_merge(
+        path: Annotated[str, Field(description=_PATH)] = ".", *,
+        target: Annotated[str, Field(
+            description="Session worktree to merge: its path or branch. Not needed with `proposal_id`.")] = "",
+        strategy: Annotated[Literal["merge-commit", "squash", "ff"], Field(
+            description="How the branch joins the main one.")] = "merge-commit",
+        message: Annotated[str, Field(
+            description="Commit message for the merge; default is generated.")] = "",
+        proposal_id: Annotated[str, Field(description=_PROPOSAL)] = "") -> Dict[str, Any]:
+    """Merge a session worktree's branch into the main checkout's branch, once its evidence passes and a human approves.
+
+    Without `proposal_id` it returns the plan: the suite, criteria and review evidence at the branch head and every blocker by name. A human must approve in their own terminal; an in-chat approval does not license a merge. Re-call with that `proposal_id` to merge. The worktree is kept; nothing is fetched or pushed.
+
+    Returns: `proposed` with the plan, `blocked` listing blockers, or `committed` once merged.
+    Errors: refused (invalid_input) when `target` is empty or unknown; refused when the merge is read-only or the approval is unusable.
+    """
     from .. import merge_gate as MG
     from ..awaiting import awaiting_block
     from ..govern.trust import MCP_SURFACE
@@ -134,13 +167,14 @@ def worktree_merge(path: str = ".", target: str = "", strategy: str = "merge-com
         return {"status": "committed" if out.merged else out.state, "committed": out.merged,
                 **out.to_dict()}
     if not target:
-        return {"status": "error", "committed": False,
-                "message": "worktree_merge needs `target` — a session worktree's path or branch "
-                           "from `worktree_list`."}
+        raise ValidationError("target", "is required without `proposal_id`: a session worktree's "
+                              "path or branch from `worktree_list`")
     try:
         plan = MG.plan_merge(path, target, strategy, message or None)
     except MG.MergeGateError as exc:
-        return {"status": "error", "committed": False, "message": str(exc)}
+        # An unknown target (or other unanswerable request) is the caller's to fix; the message
+        # says what to do.
+        raise ValidationError("target", str(exc)) from exc
     if not plan.ok:
         return {"status": "blocked", "committed": False, "state": plan.state,
                 "blocked": plan.blocked, "message": plan.render(), "plan": plan.to_dict()}
@@ -152,7 +186,4 @@ def worktree_merge(path: str = ".", target: str = "", strategy: str = "merge-com
                 "hint": (f"NOTHING was merged. Ask the human to run:  {prop['command']}  in their "
                          f"own terminal — then re-call worktree_merge with "
                          f"proposal_id=\"{prop['proposal_id']}\".")})
-    if approve or confirm:
-        out["note"] = ("`approve`/`confirm` never merge: a human approves out-of-band "
-                       "(`mokata approve <id>`).")
     return out

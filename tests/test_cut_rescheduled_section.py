@@ -105,43 +105,6 @@ class TestTheRuleCanActuallyFire(unittest.TestCase):
 class TestTheLiveNotes(unittest.TestCase):
     """The two files this cut publishes."""
 
-    def test_the_published_population_is_not_empty(self):
-        """⚠ Assert the corpus before asserting over it: a table with no entry for the release
-        being cut grades nothing and looks exactly like a table with nothing wrong in it."""
-        published = [c for c in PUBLISHED_COMMITMENTS if c.promised_for == __version__]
-        if not published:
-            # ⚠ §7h, 0.0.22 — the same correction the test below took at 0.0.21. This table holds
-            # UNKEYED promises only; a keyed one resolves through its tracking row and is never
-            # declared here (`test_b5_no_accounting_entry_is_stale` reds if it is). 0.0.22's three
-            # inherited promises were all keyed, so the live table is empty FOR THIS CUT. Said by
-            # name rather than passed: the planted corpus in `TestTheRuleCanActuallyFire` still
-            # grades the rule, and the next cut with an unkeyed promise re-arms this assertion.
-            self.skipTest("no UNKEYED commitment was published for %s — every inherited promise "
-                          "is keyed and resolves through its tracking row; the live table grades "
-                          "nothing at this cut, said here rather than passed over" % __version__)
-
-    def test_each_half_of_the_rule_has_a_live_subject_or_says_it_has_none(self):
-        """⚠ §7h — THIS USED TO ASSERT BOTH HALVES WERE PRESENT, AND THAT IS A FACT ABOUT 0.0.19.
-
-        0.0.19's cut had a slip AND a hold (the PostgreSQL floor, pinned to an upstream EOL date),
-        and the original assertion encoded that release's population as a law: *every cut has
-        something that held.* 0.0.21's does not — the one commitment published against it, the PR
-        gate, slipped — and the test reded for the release rather than for the property.
-
-        The property is that neither half of the rule is graded on NOTHING while looking like a pass.
-        So a half with no live subject is now SKIPPED, BY NAME, with the reason — a stated fact, not a
-        silence — and both halves stay graded unconditionally by the planted corpus in
-        `TestTheRuleCanActuallyFire`, which does not depend on what any one release promised.
-        """
-        published = [c for c in PUBLISHED_COMMITMENTS if c.promised_for == __version__]
-        for half, present in (("slipped", any(c.moved for c in published)),
-                              ("held", any(not c.moved for c in published))):
-            with self.subTest(half):
-                if not present:
-                    self.skipTest(
-                        "no commitment published for %s %s, so the live '%s' half of the rule "
-                        "grades nothing at this cut — said here rather than passed over. The "
-                        "planted corpus above still grades it." % (__version__, half, half))
 
     def test_every_entry_carries_a_subject(self):
         for entry in PUBLISHED_COMMITMENTS:

@@ -10,8 +10,8 @@ GRANTED — the only way in is a record a human wrote, from a terminal, in anoth
     2. the HUMAN runs `mokata approve <id>`      -> a separate process, a TTY re-confirm, ledgered.
     3. the model re-calls with proposal_id=<id>  -> verified, committed once, approval BURNED.
 
-`approve`/`confirm` are still ACCEPTED (schema stability — no caller breaks) but DEMOTED: they commit
-nothing. The consent lives in `approval.py`: content-hashed (what was approved is what commits),
+There is no consent flag a model can type: the `approve`/`confirm` booleans were deleted pre-1.0 (0.0.28
+I2) — a call carrying one is refused as an unknown argument. The consent lives in `approval.py`: content-hashed (what was approved is what commits),
 single-use, session-scoped, TTL-bounded, and recorded on the hash-chained audit ledger, which links
 proposal -> human -> the commit it licensed.
 
@@ -271,10 +271,34 @@ def _other_pending(path: str, tool: str, proposal_id: str) -> list:
         return []
 
 
+#: 0.0.28 I1 (H6) — the longest `preview` a proposal REPLY carries inline. FastMCP sends a result
+#: twice (the text block and `structuredContent`), so a 32 MB `remember` answered with 67 MB — past
+#: what Claude Code will read. The proposal itself keeps the full content for the human.
+PREVIEW_INLINE_MAX = 4096
+
+
+def _bound_preview(out: Dict[str, Any], proposal_id: str) -> None:
+    """A proposal reply carries its content ONCE and bounded: over `PREVIEW_INLINE_MAX` bytes, the
+    `preview` keeps its head plus the full content's `preview_sha256` and `preview_length`;
+    `mokata approve <id>` at the human's terminal shows all of it."""
+    import hashlib
+    text = out.get("preview")
+    if not isinstance(text, str):
+        return
+    raw = text.encode("utf-8", "replace")
+    if len(raw) <= PREVIEW_INLINE_MAX:
+        return
+    out["preview"] = raw[:PREVIEW_INLINE_MAX // 2].decode("utf-8", "ignore")
+    out["preview_truncated"] = True
+    out["preview_length"] = len(raw)
+    out["preview_sha256"] = hashlib.sha256(raw).hexdigest()
+    out["preview_note"] = (f"the preview is the head of {len(raw)} bytes; `mokata approve "
+                           f"{proposal_id}` shows the full content to the human who approves it")
+
+
 def _propose(path: str, tool: str, args: Dict[str, Any], payload: Dict[str, Any], *,
              target: str = "", summary: str = "", preview: str = "",
-             blocked_note: str = "",
-             approve: bool = False, confirm: Optional[bool] = None) -> Dict[str, Any]:
+             blocked_note: str = "") -> Dict[str, Any]:
     """Stage the write, return what WOULD change, and tell the model how a human approves it.
 
     MCP-R.D2 (B-AMEND-STUCK) — the result LEADS with the shared `awaiting_block`: the proposal-id,
@@ -299,16 +323,13 @@ def _propose(path: str, tool: str, args: Dict[str, Any], payload: Dict[str, Any]
                 "proposal_id": p.proposal_id, "expires_in": p.expires_in(),
                 "approved": p.approved})
     out.update(payload)
+    _bound_preview(out, p.proposal_id)
     if p.approved:
         out["hint"] = (f"a human has ALREADY approved this write — re-call {tool} with "
                        f"proposal_id=\"{p.proposal_id}\" to commit it (once).")
     else:
         out["hint"] = (f"NOTHING was written. Ask the human to run:  mokata approve {p.proposal_id}"
                        f"  — then re-call {tool} with proposal_id=\"{p.proposal_id}\".")
-    if approve or confirm:
-        out["note"] = ("`approve`/`confirm` no longer commit: an approval is MINTED BY A HUMAN "
-                       "out-of-band (`mokata approve <id>`) and can only be REFERENCED here by id. "
-                       "Typing approve=true is not consent — it never was.")
     # Lane F — the wait now RAISES something, not just renders something. `awaiting` made this wait
     # legible on three channels and could not make anyone look at them: the allow-grant means Claude
     # Code prompts for nothing, so no harness `Notification` fires and a correct wait is silent.
@@ -361,7 +382,7 @@ def _gated_write(mokata_dir: str, kind: str, target: str, content: str,
         # SELF-PROTECT rule (c), 0.0.16: THIS is the lane where a containment root is a fact rather
         # than a guess — every MCP write tool takes a repo `path` (guard_path'd) and hands its
         # `.mokata` dir down here, so the repo root is one dirname away. The CLI lane deliberately
-        # passes none: a human typing `mokata stack share --out ~/x.json` named that destination
+        # passes none: a human typing `mokata export ~/x.json` named that destination
         # themselves, and rules (a)/(b) (which need no root) still apply there.
         workspace_root=os.path.dirname(os.path.abspath(mokata_dir)))
     approval.record_redemption(ledger, p, write_seq=outcome.approval_seq,
