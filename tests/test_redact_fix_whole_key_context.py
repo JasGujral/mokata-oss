@@ -62,8 +62,7 @@ SHAPES = {
     "lowercase": _markers("RSA PRIVATE", case=str.lower),
     "mixed-case": _markers("Encrypted Private", case=lambda s: s.replace("BEGIN", "Begin")
                            .replace("END", "End").replace("KEY", "Key")),
-    "double-spaces": (f"{_DASH}BEGIN  RSA  PRIVATE  KEY{_DASH}",
-                      f"{_DASH}END  RSA  PRIVATE  KEY{_DASH}"),
+    "double-spaces": tuple(m.replace(" ", "  ") for m in _markers("RSA PRIVATE")),
     "spaced-dashes": _markers("RSA PRIVATE", lead=" "),
     "ssh2": _markers("SSH2 ENCRYPTED PRIVATE", dash="-" * 4, lead=" "),
 }

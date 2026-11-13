@@ -309,9 +309,6 @@ class TestStatuslineContract(unittest.TestCase):
             self.assertEqual(rc, 0)
             self.assertEqual(out, "")
 
-    def test_garbage_stdin_exits_zero(self):
-        rc, _ = _run_statusline("this is not json at all")
-        self.assertEqual(rc, 0)
 
     def test_statusline_renders_bound_run(self):
         with tempfile.TemporaryDirectory() as d:

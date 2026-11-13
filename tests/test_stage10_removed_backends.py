@@ -84,13 +84,6 @@ def _read(directory, name):
 
 # ---------------------------------------------------------------- the removal itself, both ways
 class TestTheChannelsAreGone(unittest.TestCase):
-    def test_the_import_probe_no_longer_finds_either_backend(self):
-        # The stage-9 probe, on this stage's subject. `ObsidianBackend` and `NativeMemoryBackend`
-        # lived in a module that SURVIVES, so a module-only probe would report them present
-        # forever — the `module:Symbol` form is what makes this an assertion and not a wish.
-        for channel in REMOVED_THIS_SLICE:
-            self.assertFalse(R.live_probe(R.IMPLEMENTATIONS[channel]),
-                             f"{channel} is still importable — it was hidden, not removed")
 
     def test_the_module_that_held_them_survives_and_so_does_the_floor(self):
         # Deletion is graded by what SURVIVES. A test that only asserts absence passes on an

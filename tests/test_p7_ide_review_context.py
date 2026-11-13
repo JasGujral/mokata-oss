@@ -339,9 +339,9 @@ class ReRun(unittest.TestCase):
         r = self.start({"tests": ["t_ok", "t_fail"]})
         wait_job(self.c, r.json()["id"])
         suite = read_test_record(self.d, RUN)["last_suite"]
-        self.assertEqual(("ide", ide_actor(), cmd, 1, False, ["t_fail", "t_ok"]),
+        self.assertEqual(("ide", ide_actor(), cmd, 1, "failed", ["t_fail", "t_ok"]),
                          (suite["source"], suite["actor"], suite["command"], suite["exit_code"],
-                          suite["passed"], suite["tests"]))
+                          suite["verdict"], suite["tests"]))
         self.assertGreaterEqual(suite["at"], t0)
         red, green = load(_store(self.d, RUN), RUN)
         self.assertIn("t_fail", red)
@@ -362,10 +362,11 @@ class ReRun(unittest.TestCase):
         wait_job(self.c, r.json()["id"])
         reasons = missing_evidence(self.d, RUN)
         self.assertNotIn("no test run is recorded for this run", reasons)
-        self.assertNotIn("the last recorded test run FAILED", reasons)
+        failed = lambda rs: [x for x in rs if x.startswith("the last recorded test run FAILED")]  # noqa: E731
+        self.assertEqual([], failed(reasons))
         r = self.start({"tests": ["t_fail"]})
         wait_job(self.c, r.json()["id"])
-        self.assertIn("the last recorded test run FAILED", missing_evidence(self.d, RUN))
+        self.assertTrue(failed(missing_evidence(self.d, RUN)))
         record_test_run(self.d, RUN, passed=True, command="pytest", tests=["t_fail"])
         self.assertEqual(("cli", None), (read_test_record(self.d, RUN)["last_suite"]["source"],
                                          read_test_record(self.d, RUN)["last_suite"]["exit_code"]))
@@ -398,35 +399,36 @@ class ReRun(unittest.TestCase):
         self.assertEqual("done", wait_job(self.c, nxt.json()["id"], timeout=30)["job"]["state"])
 
     def test_on_windows_what_a_test_left_behind_is_ended_through_the_runners_job(self):
-        """`taskkill /T` walks the tree from a LIVE root, so once the runner has exited it reaches
+        """`taskkill /T` walks the tree from a LIVE root, so once the runner had exited it reached
         nothing and a leftover (a server a test booted) held the project directory open. The
-        runner is put in a Job Object at spawn and the leftovers' kill terminates the JOB — also
-        when the runner is long dead — and never needs `taskkill` then. (Faked off Windows.)"""
+        runner is held in a Job Object at spawn (the process door) and the leftovers' end
+        terminates the JOB — also when the runner is long dead — and waits until it is EMPTY.
+        There is no taskkill anywhere any more (0.0.28 D2). (Faked off Windows.)"""
         from unittest import mock
-        from mokata.ide import review_context as RC
+        from mokata import quiet_spawn as Q
         ended = []
 
         class Job:
-            ok = True
-
             def terminate(self):
-                ended.append("job")
+                ended.append("terminate")
 
-        dead = mock.Mock(pid=77)
-        dead.poll.return_value = 0                         # the runner exited long ago
-        with mock.patch("mokata.ide.review_context.os.name", "nt"), \
-                mock.patch("mokata.crg_resolve._end_tree", side_effect=lambda p: ended.append("taskkill")):
-            RC._kill_tree(dead, leftovers_only=True, job=Job())
-            self.assertEqual(["job"], ended)
-            ended.clear()
-            RC._kill_tree(dead, job=Job())                 # a cancel: the job as well, not taskkill
-            self.assertEqual(["job"], ended)
-            ended.clear()
-            bad = Job()
-            bad.ok = False                                 # no job could be made: the old route
-            RC._kill_tree(dead, job=bad)
-            RC._kill_tree(dead, leftovers_only=True, job=bad)
-            self.assertEqual(["taskkill"], ended)
+            def active(self):
+                return 0
+
+            def close(self):
+                ended.append("close")
+
+        dead = mock.Mock(pid=77, returncode=3)                # the runner exited long ago
+        dead.wait.return_value = 3
+        tree = Q.Jobbed(dead, Job(), True)
+        self.assertEqual(3, tree.poll_exit())
+        self.assertTrue(tree.end(leftovers_only=True).ok)
+        self.assertEqual(["terminate"], ended)
+        tree.end()                                            # a later cancel: nothing again
+        tree.close()
+        self.assertEqual(["terminate", "close"], ended)
+        from mokata.ide import review_context as RC
+        self.assertFalse(hasattr(RC, "_kill_tree"))
 
     def test_a_test_that_leaves_a_process_behind_still_finishes(self):
         """A test whose runner exits but leaves a helper holding its output still finishes (the
@@ -1108,7 +1110,7 @@ class ATestThatNeverRanIsNeverRecordedRed(unittest.TestCase):
         red, green = tdd_state.load(_store(d, RUN), RUN)
         self.assertIn("t_a", green)
         self.assertNotIn("t_b", red | green)
-        self.assertFalse(read_test_record(d, RUN)["last_suite"]["passed"],
+        self.assertEqual("not-all-ran", read_test_record(d, RUN)["last_suite"]["verdict"],
                          "a pass cannot be claimed with a test that did not run")
 
     def test_the_panel_shows_a_test_that_did_not_run_as_not_run_not_red(self):

@@ -39,8 +39,21 @@ from .errors import MokataError
 STATE_DIRNAME = "state"
 
 
+#: `ConfigError.kind` for a repo with no `.mokata/manifest.json` (0.0.28 I1, H9). The MCP surface
+#: classifies on this attribute, never on the message text, to answer `refused` + `mokata init`.
+NOT_INITIALIZED = "not-initialized"
+
+
 class ConfigError(MokataError):
-    """Raised when the unified surface cannot be loaded (e.g. not initialized)."""
+    """Raised when the unified surface cannot be loaded (e.g. not initialized).
+
+    `kind` classifies the cause where a caller must act on it (`NOT_INITIALIZED`); it is "" for
+    every other cause. A classification, not a new class: every `except ConfigError` still
+    catches exactly what it caught before."""
+
+    def __init__(self, message: str = "", kind: str = "") -> None:
+        super().__init__(message)
+        self.kind = kind
 
 
 @dataclass
@@ -170,7 +183,8 @@ class Surface:
                 )
             raise ConfigError(
                 f"mokata is not initialized in '{os.path.abspath(root)}' "
-                f"(no {MOKATA_DIR}/{MANIFEST_FILENAME}). Run `mokata init` first."
+                f"(no {MOKATA_DIR}/{MANIFEST_FILENAME}). Run `mokata init` first.",
+                kind=NOT_INITIALIZED,
             )
         try:
             manifest = Manifest.load(manifest_path)

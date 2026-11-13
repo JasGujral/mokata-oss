@@ -132,71 +132,46 @@ def env_dist_version(dist: str = CRG_DIST, site_dirs: Optional[Iterable[str]] = 
     return None
 
 
-def probe_version(path: str, timeout: float = VERSION_PROBE_TIMEOUT) -> Optional[str]:
-    """`<path> --version`, BOUNDED (stdin closed, timeout), remembered per (path, mtime). Only the
-    explicitly named override is probed this way; the in-env copy is read from its metadata."""
+def probe_version(path: str, timeout: float = VERSION_PROBE_TIMEOUT
+                  ) -> "Tuple[Optional[str], str]":
+    """`(version, why)` from `<path> --version`, BOUNDED (stdin closed, timeout), remembered per
+    (path, mtime). `why` is empty when it answered, else the reason it did not — a door refusal
+    (`NO_JOB` on Windows), a launch failure or a timeout — so the refusal says ITSELF rather than
+    "did not report a version". Only the explicitly named override is probed this way; the in-env
+    copy is read from its metadata.
+
+    Through the process door (`quiet_spawn.run_jobbed`): output in temp files, never pipes — on
+    Windows a `.cmd` override runs cmd.exe, which starts the real program, and on timeout
+    `subprocess.run` killed cmd.exe only and then `communicate()`d with NO bound while the orphan
+    held the pipes (0.0.26 cut review: an hour, on a probe whose bound is one second). The whole
+    tree is ended (a Job Object on Windows, the process group on POSIX)."""
     import subprocess
     try:
         key = (path, os.stat(path).st_mtime_ns)
-    except OSError:
-        return None
+    except OSError as exc:
+        return None, f"cannot read {path}: {exc}"
     if key in _PROBED:
         return _PROBED[key]
-    from .quiet_spawn import hidden
+    from .quiet_spawn import run_jobbed
     from .knowledge.crg_client import parse_crg_version
     try:
-        out, err = _bounded_output([path, "--version"], timeout, hidden())
+        _rc, out, err = run_jobbed([path, "--version"], timeout=timeout)
         version = parse_crg_version(out) or parse_crg_version(err)
-    except (OSError, subprocess.SubprocessError):
-        version = None
-    _PROBED[key] = version
-    return version
+        why = ""
+    except subprocess.TimeoutExpired:
+        version, why = None, f"`--version` did not answer within {timeout:g} s"
+    except OSError as exc:
+        version, why = None, f"could not be run: {exc}"
+    _PROBED[key] = (version, why)
+    return version, why
 
 
-def _bounded_output(argv, timeout: float, extra) -> "tuple":
-    """Run `argv` with stdin closed and its output in TEMP FILES, bounded by `timeout`.
-
-    Not `subprocess.run(capture_output=True, timeout=…)`: on Windows a `.cmd` shim runs cmd.exe,
-    which starts the real program; on timeout `run` kills cmd.exe only and then `communicate()`s
-    with NO bound, so the orphaned child — still holding the pipes — blocks it until it exits
-    (0.0.26 cut review: an hour, on a probe whose bound is one second). Files are not pipes: a
-    late writer blocks nobody. On Windows the whole process tree is ended."""
-    import subprocess
-    import tempfile
-    with tempfile.TemporaryFile() as fo, tempfile.TemporaryFile() as fe:
-        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=fo, stderr=fe, **extra)
-        try:
-            proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            _end_tree(proc)
-            raise
-        fo.seek(0)
-        fe.seek(0)
-        return (fo.read().decode("utf-8", "replace"), fe.read().decode("utf-8", "replace"))
-
-
-def _end_tree(proc) -> None:
-    """Kill `proc` and, on Windows, every process it started (`taskkill /T`, by absolute path so
-    no PATH entry can stand in for it). Never raises; never waits longer than a few seconds."""
-    import subprocess
-    try:
-        if os.name == "nt":
-            exe = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32",
-                               "taskkill.exe")
-            from .quiet_spawn import hidden
-            subprocess.run([exe, "/F", "/T", "/PID", str(proc.pid)], stdin=subprocess.DEVNULL,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
-                           **hidden())
-        proc.kill()
-        proc.wait(timeout=5)
-    except (OSError, subprocess.SubprocessError):
-        pass
-
-
-def _checked(res: "CrgResolution", path: str, version: Optional[str]) -> "CrgResolution":
+def _checked(res: "CrgResolution", path: str, version: Optional[str],
+             why: str = "") -> "CrgResolution":
     if not version:
-        res.refused = (f"code-review-graph at {path} did not report a version mokata can check "
-                       f"— refused")
+        res.refused = (f"code-review-graph at {path} {why} — refused" if why.startswith("could not")
+                       else f"code-review-graph at {path} did not report a version mokata can "
+                            f"check{f' ({why})' if why else ''} — refused")
         return res
     why = version_out_of_range(version)
     if why:
@@ -227,7 +202,7 @@ def resolve_crg(*, scripts_dirs: Optional[Iterable[str]] = None,
         if hit is None:
             res.refused = f"MOKATA_CRG names {override}, which is not an executable — refused"
             return res
-        return _checked(res, hit, probe_version(hit))
+        return _checked(res, hit, *probe_version(hit))
     dirs = list(scripts_dirs if scripts_dirs is not None else env_scripts_dirs())
     res = CrgResolution(origin="env")
     in_env = None

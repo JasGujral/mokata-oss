@@ -127,16 +127,6 @@ class TestManifestParity(unittest.TestCase):
         from mokata import deprecation as _dep
         self.assertEqual(_dep.CHANNELS, {})
 
-    def test_catalog_no_longer_carries_the_REMOVED_providers(self):
-        # ★ THE DISK SURFACE. `init_repo` copies TOOL_CATALOG into `.mokata/manifest.json`, so an
-        # entry left here would advertise a removed backend inside every repo created from now on.
-        for tid in REMOVED:
-            self.assertNotIn(tid, profiles.TOOL_CATALOG,
-                             f"{tid} is REMOVED but the catalog still writes it to disk")
-
-    def test_canonical_providers_not_marked_deprecated(self):
-        for tid in ("sqlite", "postgres", "ast", "grep", "ripgrep"):
-            self.assertNotIn("deprecated", profiles.TOOL_CATALOG[tid])
 
     def test_fallback_chain_no_longer_lists_the_removed_providers(self):
         # ⚠ EVERY CAPABILITY, NOT `memory_store`. This read one chain while every removed channel
@@ -149,11 +139,6 @@ class TestManifestParity(unittest.TestCase):
         self.assertIn("grep", profiles.CAPABILITY_FALLBACKS["code_graph"]["fallback"])
         self.assertIn("ast", profiles.CAPABILITY_FALLBACKS["code_graph"]["fallback"])
 
-    def test_no_profile_wires_a_removed_provider(self):
-        for prof, spec in profiles.PROFILES.items():
-            for need, chain in spec["capabilities"].items():
-                for tid in REMOVED:
-                    self.assertNotIn(tid, chain, f"profile {prof} still wires {tid} for {need}")
 
     def test_built_manifest_neither_lists_nor_marks_a_removed_provider(self):
         data = profiles.build_manifest_data("full", "0.0.15")

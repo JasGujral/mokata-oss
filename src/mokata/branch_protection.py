@@ -60,10 +60,10 @@ import datetime as _dt
 import json
 import os
 import re
-import subprocess
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Tuple
 
+from . import quiet_spawn
 from .atomicfile import atomic_write_text
 
 DEFAULT_REPO = "JasGujral/mokata-oss"
@@ -161,13 +161,18 @@ RESTORE_ROW = "BRANCH-PROTECTION-DEGRADED-PASS — filed 2026-08-17; a 24h last-
 # corroboration it is supposed to prove.
 GhRunner = Callable[[str], Tuple[int, str, str]]
 
+#: The bound on one `gh api` read (0.0.28 I1). It had none: a `gh` waiting on auth or the network
+#: held its caller — under MCP, the per-repo write lock — forever.
+GH_TIMEOUT_SECONDS = 60
+
 
 def _default_gh_runner(path: str) -> Tuple[int, str, str]:
     """Read `gh api <path>` — gh supplies auth (login locally / GH_TOKEN in CI).
     Returns (returncode, stdout, stderr); raises FileNotFoundError when `gh` is not installed."""
-    proc = subprocess.run(["gh", "api", path], capture_output=True, text=True,
-                          encoding="utf-8", errors="replace")
-    return proc.returncode, proc.stdout, proc.stderr
+    # 0.0.28 I1 — through the process door (`run_jobbed`): bounded, an empty stdin (under the MCP
+    # server the caller's stdin is the JSON-RPC input), the whole tree ended on timeout. A timeout is
+    # an unreadable document (`_read_json`'s broad arm), never a verdict.
+    return quiet_spawn.run_jobbed(["gh", "api", path], timeout=GH_TIMEOUT_SECONDS)
 
 
 def _read_json(run: GhRunner, path: str) -> Tuple[bool, Any, str]:

@@ -423,7 +423,10 @@ class TestTheAmendGates(unittest.TestCase):
     def test_the_model_cannot_mint_its_own_amend_approval(self):
         with _Repo() as repo:
             _setup_run(repo)
-            res = call_planned(TW.spec_amend, **self._amend_args(repo, approve=True))
+            # 0.0.28 I2: `approve` is deleted — a model-typed approval is a TypeError, not a no-op
+            with self.assertRaises(TypeError):
+                call_planned(TW.spec_amend, **self._amend_args(repo, approve=True))
+            res = call_planned(TW.spec_amend, **self._amend_args(repo))
             self.assertEqual(res["status"], "proposed")
             self.assertFalse(res["committed"])
             self.assertEqual(_emitted(repo)["version"], 1,

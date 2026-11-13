@@ -10,7 +10,7 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 
 from .. import approval
 from ..awaiting import AMEND_ABORT_CMD, AMEND_REGRESSED_NOTE
@@ -21,7 +21,82 @@ from ..memory import MemoryStore
 from .consent import (_consent, _evidence_store, _gated_write, _policy, _propose,
                       _refused, _require, _trust)
 from .registry import _mokata_dir, _surface
-from .validation import validate_comma_list
+from .tool_annotations import Field, NotRequired, TypedDict
+from .validation import ValidationError, validate_comma_list
+
+_PATH = "Repo root the tool operates on (default: the server's working directory)."
+_PROPOSAL = ("Id of a proposal a human approved with `mokata approve <id>`; leave empty on the "
+             "first call.")
+
+
+# ---- the typed shapes of a spec payload: exactly the keys `engine.emit.spec_from_payload`,
+# `plan_tasks` and `spec_scope.scope_from_dict` read. NotRequired = the engine defaults it.
+class Anchor(TypedDict):
+    file: Annotated[str, Field(description="Repo-relative file the criterion changes.")]
+    symbol: NotRequired[str]
+    kind: NotRequired[Literal["impl", "test-target", "reference"]]
+    source: NotRequired[Literal["approach", "blast-radius", "graph", "scope", "spec"]]
+    confidence: NotRequired[Literal["high", "medium", "low"]]
+
+
+class UiStates(TypedDict, total=False):
+    default: str
+    loading: str
+    empty: str
+    error: str
+    disabled: str
+
+
+class Criterion(TypedDict):
+    id: Annotated[str, Field(description="Criterion id, e.g. AC1.")]
+    text: Annotated[str, Field(description="What must be true, testable.")]
+    kind: NotRequired[Annotated[Literal["behaviour", "ui"], Field(
+        description="`ui` criteria must also give all five `states` (or `n/a - why`).")]]
+    states: NotRequired[UiStates]
+    anchors: NotRequired[List[Anchor]]
+
+
+class TestRef(TypedDict):
+    name: Annotated[str, Field(description="Test name, or `tests/test_x.py::test_x`.")]
+    ac_ids: Annotated[List[str], Field(description="Criterion ids this test proves.")]
+
+
+class Task(TypedDict):
+    id: Annotated[str, Field(description="Task id, e.g. T1.")]
+    title: str
+    ac_ids: Annotated[List[str], Field(description="Criterion ids this task delivers.")]
+    scope: Annotated[List[str], Field(
+        description="Globs this task may write; inside `scope.authorized` when that is set.")]
+    files: NotRequired[List[str]]
+    depends_on: NotRequired[List[str]]
+    consumes: NotRequired[str]
+    produces: NotRequired[str]
+    parallel: NotRequired[bool]
+
+
+class DeferredItem(TypedDict):
+    id: str
+    item: NotRequired[str]
+    paths: NotRequired[List[str]]
+    markers: NotRequired[List[str]]
+
+
+class Scope(TypedDict):
+    authorized: NotRequired[Annotated[List[str], Field(
+        description="Globs writes may touch; anything else is blocked until the spec is amended.")]]
+    deferred: NotRequired[Annotated[List[DeferredItem], Field(
+        description="Work deliberately not being built, with the paths/markers that would be it.")]]
+
+
+class Clarification(TypedDict):
+    id: str
+    question: str
+    recommended: str
+    answer: NotRequired[str]
+    category: NotRequired[str]
+
+
+Assumption = TypedDict("Assumption", {"id": str, "text": str, "for": NotRequired[str]})
 
 
 def _graph_required_emit_refusal(surface: Any, store: Any, run_id: str,
@@ -186,20 +261,23 @@ def _prior_art_emit_refusal(store: Any) -> Optional[Dict[str, Any]]:
         return None
 
 
-#: 0.0.24 (OSS #82) — where a spec_emit proposal keeps the exact args it hashed, so the redeeming
-#: call may send `proposal_id` alone. Transient run-state (temp_local), never the spec itself.
+#: 0.0.24 (OSS #82, item 4), kept by the 0.0.28 round-3 ruling: where a spec_emit proposal keeps the
+#: exact args it hashed, so the redeeming call may send `proposal_id` alone. Transient run-state, never
+#: the spec itself; nothing in it is trusted — `_consent` re-hashes it against what the human approved.
 EMIT_ARGS_PREFIX = "spec_emit_args__"
+
+#: The four spec fields a call needs unless it redeems a saved proposal by id.
+EMIT_REQUIRED = ("title", "criteria", "tests", "tasks")
+_EMIT_SAVED = EMIT_REQUIRED + ("approach", "domains", "scope", "clarifications", "assumptions")
 
 
 def _save_emit_args(surface: Any, proposal_id: Any, args: Dict[str, Any]) -> None:
-    """Best-effort: a failed save only means the redeeming call must resend the payload."""
+    """Keep the args a proposal hashed. A failed save only means the redeem must re-send them."""
     if not isinstance(proposal_id, str) or not proposal_id:
         return
     try:
-        keep = {k: args.get(k) for k in ("title", "criteria", "tests", "approach", "domains",
-                                          "scope", "tasks", "clarifications", "assumptions")}
-        surface.state.write(EMIT_ARGS_PREFIX + proposal_id, keep)
-    except Exception:  # noqa: BLE001 — never fail the proposal over a convenience copy
+        surface.state.write(EMIT_ARGS_PREFIX + proposal_id, {k: args.get(k) for k in _EMIT_SAVED})
+    except (OSError, TypeError, ValueError):
         pass
 
 
@@ -207,15 +285,19 @@ def _saved_emit_args(surface: Any, proposal_id: str) -> Optional[Dict[str, Any]]
     """The args a spec_emit proposal saved, or None (unknown id, or nothing readable)."""
     try:
         data = surface.state.read(EMIT_ARGS_PREFIX + proposal_id)
-    except Exception:  # noqa: BLE001
+    except (OSError, ValueError):
         return None
     if not isinstance(data, dict) or not data.get("title"):
         return None
-    return {"title": data.get("title") or "", "criteria": data.get("criteria") or [],
-            "tests": data.get("tests") or [], "approach": data.get("approach") or "",
-            "domains": data.get("domains") or [], "scope": data.get("scope") or {},
-            "tasks": data.get("tasks") or [], "clarifications": data.get("clarifications") or [],
-            "assumptions": data.get("assumptions") or []}
+    return data
+
+
+def _emit_fields_missing(proposal_id: str) -> ValidationError:
+    """A bare `proposal_id` with no saved payload: say what to send instead."""
+    return ValidationError(
+        "proposal_id", "has no saved payload (unknown or expired id): send title, criteria, tests "
+        "and tasks with it, or call without proposal_id for a fresh proposal",
+        retry_with={"title": "string", "criteria": "array", "tests": "array", "tasks": "array"})
 
 
 def _same_spec(landed: Any, spec: Any) -> bool:
@@ -260,87 +342,82 @@ def _retry_of_redeemed(path: str, tool: str, args: Dict[str, Any], proposal_id: 
                      "`mokata approve <id>`.")}
 
 
-def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
-              tests: Optional[list] = None, approach: str = "", domains: Optional[list] = None,
-              scope: Optional[dict] = None, approve: bool = False,
-              confirm: Optional[bool] = None, proposal_id: str = "",
-              tasks: Optional[list] = None, clarifications: Optional[list] = None,
-              assumptions: Optional[list] = None) -> Dict[str, Any]:
-    """SI-DEV.0 — EMIT the spec: persist it as this run's `emitted_spec` and append it to the
-    shared `spec_corpus`, in ONE human-gated commit. The in-harness half of `/mokata:spec`, and the
-    only way a spec reaches disk.
+# Provenance (developers): the in-harness half of `/mokata:spec` (SI-DEV.0) and the only way a spec
+# reaches disk: `emitted_spec` + the shared `spec_corpus` in ONE human-gated commit (SI.3). Gates run
+# BEFORE the consent boundary, in order: completeness, GR.S3 graph.required, GR-PA-WIRE prior-art,
+# code-anchor freshness, SPEC-REEMIT-CLOBBER (work in flight -> route to `spec_amend`), SQ.S1 quality.
+# OSS #82 item 4 (kept by the 0.0.28 round-3 ruling): `proposal_id` ALONE reloads the payload the
+# proposal saved; the four spec fields are required only when no `proposal_id` is given (in-body).
+# R2 (0.0.26) tasks are the plan, sealed by a SHA-256 plan hash; R3 clarifications <= 5. SI-DEV scope
+# is the machine-checkable boundary the gate hook enforces. The description was 5107 chars and Claude
+# Code truncates at 4096 (0.0.28 I2), hence the short contract below.
+def spec_emit(
+        path: Annotated[str, Field(description=_PATH)] = ".", *,
+        title: Annotated[str, Field(description=(
+            "Short spec title. Required unless `proposal_id` alone redeems an approved proposal."))] = "",
+        criteria: Annotated[Optional[List[Criterion]], Field(description=(
+            "Acceptance criteria, each {id, text}; every one needs a test and a task. Required "
+            "unless `proposal_id` alone redeems an approved proposal."))] = None,
+        tests: Annotated[Optional[List[TestRef]], Field(description=(
+            "Tests, each {name, ac_ids}; together they must cover every criterion. Required "
+            "unless `proposal_id` alone redeems an approved proposal."))] = None,
+        tasks: Annotated[Optional[List[Task]], Field(description=(
+            "The plan: tasks {id, title, ac_ids, scope}; every criterion in >= 1 task. Required "
+            "unless `proposal_id` alone redeems an approved proposal."))] = None,
+        approach: Annotated[str, Field(
+            description="Name of the approved approach this spec implements; empty if standalone.")] = "",
+        domains: Annotated[Optional[List[str]], Field(
+            description="Routing domains for the spec; usually derived, so omit.")] = None,
+        scope: Annotated[Optional[Scope], Field(
+            description="Machine-checkable boundary; omit and the spec is not policed.")] = None,
+        clarifications: Annotated[Optional[List[Clarification]], Field(
+            description="At most 5 recorded clarifying questions with their answers.")] = None,
+        assumptions: Annotated[Optional[List[Assumption]], Field(
+            description="Assumptions covering any unanswered clarification.")] = None,
+        proposal_id: Annotated[str, Field(description=_PROPOSAL)] = "") -> Dict[str, Any]:
+    """Emit the spec for this run: record acceptance criteria, their tests and the task plan as one human-approved write.
 
-    `criteria` is `[{"id": "AC1", "text": "..."}]` and `tests` is `[{"name": "tests/test_x.py::test_x",
-    "ac_ids": ["AC1"]}]` (a repo that commits its specs records each test as `file::test`, a path
-    relative to the repo root: a bare name is resolved to its one file, and refused if it is in none
-    or in several) — every acceptance criterion must map to a test or the COMPLETENESS GATE
-    refuses the emit outright (no proposal: a human approving an incomplete spec could not make it
-    complete). A UI criterion is `{"id", "text": "Given/When/Then", "kind": "ui", "states":
-    {"default", "loading", "empty", "error", "disabled"}}` — what the user sees in each state (or
-    `n/a — why`); the gate refuses a UI criterion without the full matrix. A passing gate then
-    goes through the normal human gate: no `proposal_id` -> a
-    proposal and NOTHING written; a human mints the approval with `mokata approve <id>`; re-call
-    with that id to commit it, once. The re-call may carry `proposal_id` ALONE: the approved
-    payload is reloaded from where the proposal saved it, and the content hash still proves it is
-    exactly what the human approved (OSS #82). Re-sending the full payload works too.
+    Call it once the approach is agreed and before any implementation. Every criterion needs a test (`tests[].ac_ids`) and a task (`tasks[].ac_ids`); each task scope must sit inside `scope.authorized`. A `ui` criterion also needs all five `states`. Re-emitting supersedes the earlier version, unless work is already in flight; then use `spec_amend`. To commit after a human approves, call again with `proposal_id` ALONE: the approved payload is committed exactly as approved (re-sending it is optional; a payload that differs is refused as `content-changed`).
 
-    Emitting is what unblocks implementation: the `spec-persisted` run-state gate reads exactly the
-    key this writes, and `spec-check`'s regression guard reads exactly the corpus this appends to.
-
-    RE-EMITTING (a refined spec on the same brainstorm) is supported and never destructive: the
-    spec already on the run is SUPERSEDED — archived at `spec_archive__<run>__v<N>`, named on the
-    audit ledger — and the new one lands as vN+1. The proposal tells the human exactly which
-    version and which criteria they are replacing. But once this run has WORK IN FLIGHT (any test
-    recorded RED, or an amendment already open) a re-emit is REFUSED and routed to `spec_amend`:
-    changing a spec that is already being enforced is a scope change, and it goes through amend's
-    ladder (regression, blast radius, ledgered diff, RED owed for new criteria) — not around it.
-
-    SI-DEV — `scope` is the spec's MACHINE-CHECKABLE boundary, and it is what makes the spec bind:
-    `{"authorized": ["src/api/*"], "deferred": [{"id": "D1", "item": "batch update/delete",
-    "paths": ["src/api/batch*.py"], "markers": ["batch_update"]}]}`. The gate hook enforces exactly
-    what is declared here — a write outside `authorized`, or one spelling a deferred `marker`, is
-    blocked until the spec is AMENDED (`spec_amend`). Declare what you are NOT building, in the
-    words the code would use. Omit `scope` and the spec is not policed at all (the honest default —
-    but then "we deferred that" is a note, not a gate).
-
-    R2 (0.0.26) — `tasks` is the PLAN, required: `[{"id": "T1", "title": "...", "ac_ids": ["AC1"],
-    "scope": ["src/api/items.py"], "files"?, "depends_on"?, "consumes"?, "produces"?,
-    "parallel"?}]` — every criterion in >= 1 task, each task with its write scope (a subset of
-    `scope.authorized` when one is declared). It is approved WITH the criteria and sealed by a
-    SHA-256 plan hash; develop then works task by task inside the ACTIVE task's scope, and every
-    later stage refuses a plan whose hash changed. R3 — `clarifications` (AT MOST 5: `{id,
-    question, recommended, answer}`) and `assumptions` (`{id, text, for?}`) record the capped
-    clarify; a sixth question is refused, and an unanswered one needs an assumption."""
+    Returns: `proposed` with a `proposal_id` (nothing written yet), then `committed` with `version` and `ac_count`; or `blocked` naming the gate that refused.
+    Errors: refused (invalid_input) when the payload is malformed, a required field is missing with no `proposal_id`, or a bare `proposal_id` has no saved payload.
+    """
     from ..engine.emit import (EMIT_KIND, EMIT_TARGET, EMIT_TOOL, REEMIT_GATE, note_supersede,
                                preview_content, reemit_verdict, replacement_preview, spec_commit,
                                spec_for_emit)
     from ..engine.completeness import run_completeness_gate, standalone_note
 
     surface = _surface(path)
-    # 0.0.24 (OSS #82, item 4) — `proposal_id` alone redeems the proposal it names: reload the
-    # exact args that proposal hashed. Nothing is trusted from the reload — `_consent` below still
-    # re-hashes them and refuses on any mismatch, expiry, reuse or wrong run.
-    if proposal_id and not (title or criteria or tests):
+    given: Dict[str, Any] = {"title": title, "criteria": criteria, "tests": tests, "tasks": tasks}
+    absent = [k for k in EMIT_REQUIRED if given[k] is None or given[k] == ""]
+    if proposal_id and len(absent) == len(EMIT_REQUIRED):
+        # OSS #82 item 4 — the bare id redeems: reload exactly the args that proposal hashed.
+        # Nothing is trusted from the reload — `_consent` below re-hashes them against the approval.
         saved = _saved_emit_args(surface, proposal_id)
         if saved is None:
-            return {"status": "error", "committed": False,
-                    "reason": f"no saved spec payload for proposal {proposal_id}",
-                    "hint": ("re-call spec_emit with the same title + criteria + tests (+ approach, "
-                             "domains, scope) and this proposal_id.")}
-        title, criteria, tests = saved["title"], saved["criteria"], saved["tests"]
-        approach, domains, scope = saved["approach"], saved["domains"], saved["scope"] or None
-        tasks, clarifications = saved["tasks"], saved["clarifications"]
-        assumptions = saved["assumptions"]
+            raise _emit_fields_missing(proposal_id)
+        title, criteria, tests, tasks = (saved.get("title") or "", saved.get("criteria") or [],
+                                         saved.get("tests") or [], saved.get("tasks") or [])
+        approach, domains = saved.get("approach") or "", saved.get("domains") or []
+        scope = saved.get("scope") or None
+        clarifications, assumptions = saved.get("clarifications"), saved.get("assumptions")
+    else:
+        # Absent, not empty: an explicit `tests=[]` is a GIVEN (wrong) answer, and the completeness
+        # gate below refuses it with the criteria it leaves uncovered — more than "missing" says.
+        missing = absent
+        if missing:
+            raise ValidationError(
+                missing[0], "is required unless `proposal_id` alone redeems an approved proposal "
+                "(missing: " + ", ".join(missing) + ")",
+                retry_with={k: ("string" if k == "title" else "array") for k in missing})
     payload = {"title": title, "criteria": criteria or [], "tests": tests or [],
                "approach": approach, "domains": domains or [], "scope": scope,
                "tasks": tasks, "clarifications": clarifications, "assumptions": assumptions}
     try:
         spec, test_refs = spec_for_emit(payload, surface.root)
     except ValueError as exc:
-        return {"status": "error", "committed": False, "reason": str(exc),
-                "hint": ("send the spec as title + criteria [{id, text}] + tests "
-                         "[{name, ac_ids}] + tasks [{id, title, ac_ids, scope}] — every "
-                         "criterion mapped to a test and covered by a task.")}
+        # A spec the engine cannot parse is the caller's fault; its message says which part.
+        raise ValidationError("spec", str(exc)) from exc
 
     # STATE-SCOPE — resolve the PIPELINE's run ONCE, here, and use its store for every run-scoped
     # read and for the write. This is the same run `_consent`/`_propose` file the proposal under
@@ -514,8 +591,7 @@ def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
                                            _committed_line(store, run_id, surface.root)) if b)
         proposed = _propose(
             path, EMIT_TOOL, args, payload,
-            target="state/emitted_spec.json", summary=summary, preview=preview,
-            approve=approve, confirm=confirm)
+            target="state/emitted_spec.json", summary=summary, preview=preview)
         _save_emit_args(surface, proposed.get("proposal_id"), args)
         return proposed
 
@@ -557,29 +633,40 @@ def spec_emit(path: str = ".", title: str = "", criteria: Optional[list] = None,
     return out
 
 
-def spec_amend(path: str = ".", title: str = "", criteria: Optional[list] = None,
-               tests: Optional[list] = None, approach: str = "", domains: Optional[list] = None,
-               scope: Optional[dict] = None, reason: str = "", item: str = "",
-               approve: bool = False, confirm: Optional[bool] = None,
-               proposal_id: str = "", tasks: Optional[list] = None,
-               clarifications: Optional[list] = None,
-               assumptions: Optional[list] = None) -> Dict[str, Any]:
-    """SI-DEV — AMEND the spec. The ONE road back when a write is out of scope, and deliberately
-    NOT a text edit: it is a FORCED PHASE REGRESSION.
+# Provenance (developers): SI-DEV. The ONE road back when a write is out of scope: a FORCED PHASE
+# REGRESSION (`develop -> SPEC`) that blocks development writes from the moment it is called until
+# the amendment is approved or aborted (`mokata spec amend --abort`). Lands as vN+1 with vN archived
+# and the diff on the audit ledger; new criteria owe a RED test. MCP-R.D2 B-AMEND-STUCK: the
+# regression note rides the shared awaiting head (`blocked_note`), not a trailing `note`.
+def spec_amend(
+        path: Annotated[str, Field(description=_PATH)] = ".", *,
+        reason: Annotated[str, Field(description="Why the spec or its scope must change.")],
+        title: Annotated[str, Field(description="Spec title (send the whole amended spec).")] = "",
+        criteria: Annotated[Optional[List[Criterion]], Field(
+            description="All acceptance criteria after the amendment, old and new.")] = None,
+        tests: Annotated[Optional[List[TestRef]], Field(
+            description="All tests after the amendment; every criterion must map to one.")] = None,
+        tasks: Annotated[Optional[List[Task]], Field(
+            description="The task plan after the amendment; every criterion in >= 1 task.")] = None,
+        approach: Annotated[str, Field(description="Approved approach name; empty if standalone.")] = "",
+        domains: Annotated[Optional[List[str]], Field(
+            description="Routing domains for the spec; usually derived, so omit.")] = None,
+        scope: Annotated[Optional[Scope], Field(
+            description="The amended scope: authorized globs and deferred items.")] = None,
+        item: Annotated[str, Field(
+            description="Id of the deferred item this amendment releases, if any.")] = "",
+        clarifications: Annotated[Optional[List[Clarification]], Field(
+            description="At most 5 recorded clarifying questions with their answers.")] = None,
+        assumptions: Annotated[Optional[List[Assumption]], Field(
+            description="Assumptions covering any unanswered clarification.")] = None,
+        proposal_id: Annotated[str, Field(description=_PROPOSAL)] = "") -> Dict[str, Any]:
+    """Amend the emitted spec when work needs to change what was approved; the run drops back to the spec phase until a human approves.
 
-    Calling this regresses the run `develop -> SPEC` IMMEDIATELY — development writes are blocked
-    from this moment until the amendment is approved (or aborted with `mokata spec amend --abort`).
-    The new spec must then re-earn every gate: completeness (every criterion, old and new, maps to a
-    test), the blast radius (re-computed when the scope WIDENS), and a HUMAN approval — which the
-    model cannot mint. It lands as vN+1 with vN superseded (never deleted) and the diff on the audit
-    ledger, and its new criteria then OWE a failing test before implementation resumes.
+    Calling it blocks development writes at once. Send the WHOLE amended spec (title, criteria, tests, tasks, scope) plus `reason`; `item` names a deferred item being released. The amendment must re-pass completeness and, if scope widens, the blast radius. It lands as the next version with the diff recorded; new criteria then owe a failing test. A request for deferred work is permission to ask, never to build.
 
-    Send the WHOLE amended spec (not a patch): title + criteria + tests + the `scope` section
-    (`{"authorized": [globs], "deferred": [{"id", "item", "paths", "markers"}]}`). `reason` is why
-    the scope must change, and `item` names the deferred item being released, if any.
-
-    A user asking for something the spec deferred is authorization to ASK — which is this tool —
-    never authorization to build. Do not work around a block; amend, or stop."""
+    Returns: `proposed` with a `proposal_id` and the diff, then `committed` with `version`; or `blocked` naming the gate and how to abort.
+    Errors: refused (invalid_input) when the amended spec is malformed.
+    """
     from ..committed_specs import resolution_lines
     from ..engine.amend import AMEND_TOOL, begin_amend, finish_amend
     from ..engine.emit import spec_for_emit
@@ -591,7 +678,7 @@ def spec_amend(path: str = ".", title: str = "", criteria: Optional[list] = None
     try:
         spec, test_refs = spec_for_emit(payload, surface.root)
     except ValueError as exc:
-        return {"status": "error", "committed": False, "reason": str(exc)}
+        raise ValidationError("spec", str(exc)) from exc
 
     # STATE-SCOPE — the PIPELINE's run and its store (see `consent._evidence_store`). This was
     # `current_run_id()` + `surface.state`, and that is the live wedge this stage closes: the spec
@@ -658,13 +745,9 @@ def spec_amend(path: str = ".", title: str = "", criteria: Optional[list] = None
                                                         for x in resolution_lines(test_refs)),
                                               _committed_line(store, run_id, surface.root)) if b)),
             # MCP-R.D2 (B-AMEND-STUCK): the regression rides the SHARED awaiting head, as
-            # `awaiting_blocks`, instead of being appended afterwards as `note`. Two reasons, both
-            # bugs in the old line: (1) it landed LAST, under the payload, which is exactly how the
-            # headline P22 flow came to read as wedged; (2) `_propose` already uses `note` for the
-            # approve/confirm demotion, so an amend call passing approve=true SILENTLY LOST that
-            # warning to this overwrite.
-            blocked_note=AMEND_REGRESSED_NOTE,
-            approve=approve, confirm=confirm)
+            # `awaiting_blocks`, instead of being appended afterwards as `note`: it landed LAST,
+            # under the payload, which is how the headline flow came to read as wedged.
+            blocked_note=AMEND_REGRESSED_NOTE)
         return out
 
     wgate = WriteGate(ledger=ledger, trust=_trust(path, surface))
@@ -741,16 +824,29 @@ def _spec_preview(spec: Any, tests: List[Any]) -> str:
     return "\n".join(lines)
 
 
-def spec_check(path: str = ".", symbols: str = "", files: str = "", text: str = "",
-               phase: str = "develop", approve: bool = False,
-               confirm: Optional[bool] = None, proposal_id: str = "") -> Dict[str, Any]:
-    """Stage 37 regression guard: check a change's touch-set (comma-separated `symbols`/`files`)
-    against the SAVED specs + decision memory. If it would affect one, this is HUMAN-GATED (SI.3):
-    it SURFACES the conflict and records nothing but the surfaced-deviation entry (status 'blocked'),
-    returning a proposal_id. A human mints the confirmation with `mokata approve <id>`; re-calling
-    with that `proposal_id` records the amend/supersede through the deviation gate. No saved corpus →
-    'skipped'; no graph → lexical/file overlap (the result says so). Frugal: only the touch-set is
-    checked."""
+# Provenance (developers): Stage 37 regression guard. Human-gated (SI.3): a conflict records only the
+# surfaced-deviation entry (status "blocked") and a proposal; re-calling with the approved
+# `proposal_id` records the amend/supersede through the deviation gate. No saved corpus -> "skipped".
+# D1d: the two comma-lists are validated BEFORE any corpus/graph work. `phase` is descriptive (it is
+# written to the ledger and the deviation text), not a closed set, so it stays a free string.
+def spec_check(
+        path: Annotated[str, Field(description=_PATH)] = ".",
+        symbols: Annotated[str, Field(
+            description="Comma-separated symbols the change touches, e.g. `parse,load`.")] = "",
+        files: Annotated[str, Field(
+            description="Comma-separated repo-relative files the change touches.")] = "",
+        text: Annotated[str, Field(
+            description="Free-text description of the change, matched against saved specs.")] = "",
+        phase: Annotated[str, Field(
+            description="Pipeline phase the change is made in, recorded on the ledger.")] = "develop",
+        proposal_id: Annotated[str, Field(description=_PROPOSAL)] = "") -> Dict[str, Any]:
+    """Check a change's touched symbols and files against saved specs and decisions before making it.
+
+    Give `symbols`, `files` and/or `text`. If the change would affect a saved spec or decision, the conflict is surfaced as a proposal that a human confirms with `mokata approve <id>`; re-call with that `proposal_id` to record the amend or supersede. No saved specs gives `skipped`; without a code graph the check falls back to file overlap and says so.
+
+    Returns: `ok`, `skipped`, or `blocked` with the `conflicts` and a `proposal_id`; `confirmed` once approved.
+    Errors: refused (invalid_input) when a comma-list holds only separators.
+    """
     from ..engine import ChangeSet, check_change, load_decisions, load_spec_corpus
     from ..govern.deviation import ACCEPTANCE_CRITERIA, DeviationGate, DeviationRequest
     # D1d — validate the two comma-lists BEFORE the surface load and the corpus/graph work: a list
@@ -794,7 +890,7 @@ def spec_check(path: str = ".", symbols: str = "", files: str = "", text: str = 
                         "degraded": report.degraded, "render": report.render()},
                        target="spec:acceptance-criteria",
                        summary=f"confirm a change that affects saved {refs}",
-                       preview=report.render(), approve=approve, confirm=confirm)
+                       preview=report.render())
         out["status"] = "blocked"       # the conflict IS the headline; the proposal rides along
         return out
     outcome = dgate.submit(req, assume_yes=True)             # human-approved (SI.3)

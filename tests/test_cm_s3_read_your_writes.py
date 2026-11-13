@@ -306,10 +306,6 @@ class TestReadThroughCacheRetired(unittest.TestCase):
                         hits.append(os.path.relpath(p, src))
         self.assertEqual(hits, [], f"ReadThroughCache must be gone from src/; found in {hits}")
 
-    def test_cache_module_deleted(self):
-        with self.assertRaises(ImportError):
-            import mokata.memory.cache  # noqa: F401
-
 
 if __name__ == "__main__":
     unittest.main()

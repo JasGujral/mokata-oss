@@ -18,6 +18,7 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 import argparse
 import contextlib
+import inspect
 import io
 import os
 import re
@@ -230,9 +231,14 @@ class TestAmendAwaitingBlock(unittest.TestCase):
         warning. Now the regression rides `awaiting_blocks`, so both survive."""
         with _Repo() as repo:
             _setup_run(repo)
-            out = call_planned(TW.spec_amend, **dict(_amend_args(repo), approve=True))
-            self.assertIn("no longer commit", out["note"],
-                          "the approve/confirm demotion warning must survive")
+            # 0.0.28 I2: `approve`/`confirm` no longer exist on spec_amend, so the demotion warning
+            # they used to trigger is gone; the guard is now "a model cannot pass either flag" (a
+            # direct call raises TypeError) and the amend regression still rides `awaiting_blocks`.
+            with self.assertRaises(TypeError):
+                TW.spec_amend(**dict(_amend_args(repo), approve=True))
+            with self.assertRaises(TypeError):
+                TW.spec_amend(**dict(_amend_args(repo), confirm=True))
+            out = call_planned(TW.spec_amend, **_amend_args(repo))
             self.assertIn("REGRESSED", out["awaiting_blocks"])
 
 
@@ -253,17 +259,19 @@ class TestDescriptionContract(unittest.TestCase):
                 # (a) proposal returned — a WAIT
                 self.assertIn("proposed", desc)
                 self.assertRegex(desc, r"WAITING ON A HUMAN")
-                # (b) the human DECLINED — explicitly a human NO, explicitly not a stuck server
-                self.assertRegex(desc, r"NO result|empty result")
+                # (b) the human DECLINED — explicitly a human NO
+                # 0.0.28 I2: the outcomes block was rewritten in plain words ("No result or a
+                # permission denial is HUMAN DECLINED — do not retry"); "NOT a stuck server" is gone.
+                self.assertRegex(desc, r"No result")
                 self.assertRegex(desc, r"HUMAN DECLINED|DECLINED this call")
-                self.assertRegex(desc, r"NOT a stuck server")
-                # (c) a real server error
-                self.assertRegex(desc, r'status "running"')
-                self.assertRegex(desc, r'status "error"')
+                self.assertRegex(desc, r"do not retry")
+                # (c) a real server error / still running
+                self.assertRegex(desc, r'"running"')
+                self.assertRegex(desc, r'"error"')
                 # the CLI fallback, in the decline case where it is the recovery
                 self.assertIn(A.LIST_CMD, desc)
-                # and the tool's OWN docstring is preserved, not replaced
-                self.assertIn((spec.fn.__doc__ or "").strip()[:40], desc)
+                # and the tool's OWN docstring is preserved, not replaced (0.0.28 I2: dedented)
+                self.assertIn(inspect.cleandoc(spec.fn.__doc__ or "")[:40], desc)
 
     def test_mcp_r_d2_read_tool_descriptions_are_byte_identical(self):
         """Read tools do not propose and cannot be declined at a write gate — no third outcome, so
@@ -272,17 +280,18 @@ class TestDescriptionContract(unittest.TestCase):
             if spec.kind != TA.READ:
                 continue
             with self.subTest(tool=spec.name):
+                # 0.0.28 I2: description_for dedents (`inspect.cleandoc`) the docstring
                 self.assertEqual(TA.description_for(spec.kind, spec.name, spec.fn.__doc__ or ""),
-                                 (spec.fn.__doc__ or "").strip())
+                                 inspect.cleandoc(spec.fn.__doc__ or ""))
 
     def test_mcp_r_d2_outcomes_block_is_one_shared_string(self):
         """One block, appended from `kind` — not the same paragraph re-prosed into nineteen
         docstrings, which is how they would drift."""
-        import inspect
+        # 0.0.28 I2: the block's marker is now "Outcomes:" (was "OUTCOMES —")
         for spec in REG.TOOLS:
-            self.assertNotIn("OUTCOMES —", spec.fn.__doc__ or "",
+            self.assertNotIn("Outcomes:", spec.fn.__doc__ or "",
                              f"{spec.name} inlines the outcomes contract; it is appended from kind")
-        self.assertIn("OUTCOMES —", TA._WRITE_OUTCOMES)
+        self.assertIn("Outcomes:", TA._WRITE_OUTCOMES)
         self.assertIn("_WRITE_OUTCOMES", inspect.getsource(TA.description_for))
 
     def test_mcp_r_d2_approve_tool_carries_the_contract(self):

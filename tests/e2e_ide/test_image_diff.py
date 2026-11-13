@@ -313,8 +313,11 @@ class TheImageDiffWorks(H.IdeFlow):
         self.assertEqual([], HITS, "the SVG's external href / iframe fetched nothing")
         self.assertEqual(0, p.locator("#diff .imd svg, #diff .imd object, #diff .imd iframe, #diff .imd embed").count())
         self.assertEqual(0, p.locator("#diff script, #diff foreignObject, #diff iframe").count())
-        self.mode("diff")                                   # the browser will not let a page read its pixels
+        # an SVG's pixels are the browser's rendering, never compared — in every browser (0.0.28 D:
+        # this used to lean on Chromium tainting the canvas; Firefox does not taint, and compared)
+        self.mode("diff")
         self.text_until("#diff .imd-result", "cannot be compared", "the SVG's pixels are refused, in words")
+        self.assertIn("its source is compared in the line diff", p.text_content("#diff .imd-result"))
         self.assertEqual(0, p.locator("#diff .imd canvas").count())
         self.assertTrue(p.evaluate("document.activeElement !== document.body"))
         self.mode("side")

@@ -61,6 +61,12 @@ def mcp_test_timeout(manifest=None) -> float:
 GREEN = "green"
 RED = "red"
 UNKNOWN = "unknown"
+#: 0.0.28 lane B (refute H1): the command exists but did not run to a result — the door refused it,
+#: it could not start, or it timed out. NOT ok: a run that did not happen never reads as a pass.
+#: (`UNKNOWN` keeps exactly one meaning: no command configured, degrade clean.)
+NOT_RUN = "not-run"
+#: The states that are ok — an allow-list, so a future state is not-ok until someone says it is.
+OK_STATES = (GREEN, UNKNOWN)
 
 NO_COMMAND_MESSAGE = (
     "baseline: no test command known — set `settings.baseline.test_command` (or pass one) "
@@ -70,7 +76,7 @@ NO_COMMAND_MESSAGE = (
 
 @dataclass
 class BaselineResult:
-    state: str                 # green | red | unknown
+    state: str                 # green | red | unknown | not-run
     command: Optional[str] = None
     detail: str = ""
     returncode: Optional[int] = None
@@ -80,8 +86,8 @@ class BaselineResult:
 
     @property
     def ok(self) -> bool:
-        # green is good; unknown degrades clean (not a hard failure); only red is "not ok".
-        return self.state != RED
+        # green is good; unknown (no command) degrades clean; red and not-run are not ok.
+        return self.state in OK_STATES
 
     def render(self) -> str:
         where = f"\n  tests ran in: {self.env_line}" if self.env_line else ""
@@ -91,6 +97,10 @@ class BaselineResult:
             return (f"baseline: RED — `{self.command}` is already failing (rc "
                     f"{self.returncode}). Fix or acknowledge before starting, so new "
                     "failures are attributable to your change." + where)
+        if self.state == NOT_RUN:
+            return (f"baseline: NOT RUN — `{self.command}` did not run to a result: {self.detail}."
+                    " Nothing about the suite is known; fix that and run `mokata baseline` "
+                    "again." + where)
         return NO_COMMAND_MESSAGE
 
 
@@ -112,35 +122,40 @@ def baseline_status(command: Optional[str], cwd: Optional[str] = None,
                     timeout: int = BASELINE_TIMEOUT_SECONDS, *,
                     settings_python: Optional[str] = None,
                     environ: Optional[Dict[str, str]] = None) -> BaselineResult:
-    """Run the test command and report green/red; UNKNOWN (degrade-clean) when none given.
-    Never raises — a command that can't run reports red with the reason, not an exception.
+    """Run the test command and report green/red; UNKNOWN (degrade-clean) when none given;
+    NOT_RUN (not ok) when it could not run or did not finish. Never raises.
 
     0.0.23 B2: the command runs in the PROJECT's Python env (`project_env.resolve`), not in
-    whatever environment mokata's own process happened to inherit."""
+    whatever environment mokata's own process happened to inherit.
+    0.0.28 lane B: it runs through the process door (`quiet_spawn.run_jobbed`) — its output goes to
+    temp files and on a timeout its whole tree is ended, so a grandchild that holds the output
+    cannot hang `mokata baseline` or the MCP `baseline` tool past the bound."""
     if not command:
         return BaselineResult(state=UNKNOWN, detail=NO_COMMAND_MESSAGE)
     from . import project_env
+    from .quiet_spawn import run_jobbed
     base_env = os.environ if environ is None else environ
     penv = project_env.resolve(cwd or os.getcwd(), settings_python, base_env)
     env_line = project_env.describe(penv)
     run_env = project_env.activated(base_env, penv)
     try:
-        # Justification for the B602 suppression: `command` is the USER's OWN test command (their
-        # `settings.baseline` config / CLI arg), run in their own shell exactly as they'd run it;
-        # not attacker-controlled input. A shell is required so a normal test one-liner
-        # (`pytest -q && ruff .`, pipes, globs) works. Bounded by `timeout`; degrade-clean.
-        # `stdin=DEVNULL`, not inherited. A test command is a BATCH command: if it asks a
-        # question it must get EOF and decide, never sit on a fd nobody is going to write to.
-        # Inheriting mokata's stdin makes the bound above a lie — `timeout` bounds the wait, but
-        # only after the caller has already lost `timeout` seconds to a prompt no one can see.
-        # (0.0.18 round 2: an inherited stdin on a shell subprocess is what wedged the Windows
-        # unit leg for 54 minutes; the class is swept in `tests/_windows_portability.py`.)
-        proc = subprocess.run(command, shell=True, cwd=cwd, capture_output=True,  # nosec B602
-                              stdin=subprocess.DEVNULL, text=True, timeout=timeout, env=run_env)
-    except Exception as exc:  # missing binary, timeout, etc. — report, don't crash
-        return BaselineResult(state=RED, command=command,
-                              detail=f"could not run test command: {exc}", env_line=env_line)
-    state = GREEN if proc.returncode == 0 else RED
-    return BaselineResult(state=state, command=command, returncode=proc.returncode,
-                          detail=(proc.stderr or proc.stdout or "").strip()[-500:],
-                          env_line=env_line)
+        # The baseline one-liner from the repo's committed manifest (or the user's CLI arg),
+        # still run by a SHELL (Jas B-Q2): shell syntax (`pytest -q && ruff .`, pipes, globs) is
+        # its documented use. The door's `shell_line` is Python's own `shell=True` — `/bin/sh`
+        # hard-coded on POSIX, never a `sh` looked up on the project-activated PATH; on Windows
+        # the parent's `ComSpec /c "…"`, which (cmd.exe's rule) also searches the cwd for the
+        # first word, so a repo can plant `pytest.cmd` there (disclosed, 0.0.28 Low L5). stdin is
+        # an empty file, never mokata's: a batch command that asks a question gets EOF (0.0.18
+        # round 2: an inherited stdin wedged the Windows leg for 54 minutes).
+        rc, out, err = run_jobbed(shell_line=command, cwd=cwd, timeout=timeout,  # nosec B602
+                                  env=dict(run_env))
+    except subprocess.TimeoutExpired:
+        return BaselineResult(state=NOT_RUN, command=command,
+                              detail=f"timed out after {timeout:g} s — the suite did not finish; "
+                                     "nothing about its result is known", env_line=env_line)
+    except OSError as exc:               # could not start, or the door refused it (NO_JOB)
+        return BaselineResult(state=NOT_RUN, command=command,
+                              detail=f"could not run the test command: {exc}", env_line=env_line)
+    state = GREEN if rc == 0 else RED
+    return BaselineResult(state=state, command=command, returncode=rc,
+                          detail=(err or out or "").strip()[-500:], env_line=env_line)

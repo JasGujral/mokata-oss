@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import ast
 import os
+import subprocess
 import tempfile
 import unittest
 
@@ -59,6 +60,29 @@ _head, _, _tail = REMOVAL.rpartition(".")
 OTHER = "%s.%d" % (_head, int(_tail) + 1)   #: a release that is definitionally not the derived one
 
 
+def _git(root, *args):
+    return subprocess.run(["git", "-C", root, *args], capture_output=True, text=True,
+                          stdin=subprocess.DEVNULL)
+
+
+def untracked_by_design(root, path):
+    """⭐ THE FOURTH ANSWER (0.0.28 lane A, `TEST-PRUNE-0028`). A denied path that is absent, has
+    ZERO tracked files, AND is matched by `.gitignore` is local-only by design: `docs/marketing/`
+    exists in the author's own checkout and in no worktree and no fresh clone, and the deny entry is
+    live in the one tree that has it (`release_claim_corpus` walks the working tree). A TRACKED
+    path that disappears still answers False, so it still reds.
+
+    ⚠ The ignore probe asks about `<path>/`, WITH the slash: the rule is the directory pattern, and
+    on an absent directory `git check-ignore <path>` answers "not ignored" (measured), while
+    `git check-ignore <path>/` matches it. `--no-index` makes the probe ask ONLY "does a rule match",
+    because without it git never calls a TRACKED path ignored and the `ls-files` clause above would
+    be dead code; the two questions are asked separately so each can be mutated."""
+    listed = _git(root, "ls-files", "--", path)
+    if listed.returncode != 0 or listed.stdout.strip():
+        return False
+    return _git(root, "check-ignore", "--no-index", "-q", path + "/").returncode == 0
+
+
 class TheDenyListIsTheReviewableArtefact(unittest.TestCase):
     """An exclusion nobody can read is indistinguishable from a directory somebody forgot."""
 
@@ -66,7 +90,7 @@ class TheDenyListIsTheReviewableArtefact(unittest.TestCase):
         """⭐ The clause that keeps the list live. A deny-list entry for a path that is gone
         excludes nothing and quietly certifies a rule that no longer applies to anything.
 
-        ⛔ THREE ANSWERS, NOT TWO, AND THIS SHIPPED TEST LEARNED THAT THE EXPENSIVE WAY. A bare
+        ⛔ THREE ANSWERS, NOT TWO (a FOURTH since 0.0.28 — see `untracked_by_design`), AND THIS SHIPPED TEST LEARNED THAT THE EXPENSIVE WAY. A bare
         `os.path.exists` is a claim about the DEV TREE, and half this deny-list is internal —
         `docs/build`, `docs/talks`, `docs/marketing`, `docs/launch` are excluded from the public
         mirror TWICE. So on the mirror this assertion failed for four paths whose absence is the
@@ -83,6 +107,8 @@ class TheDenyListIsTheReviewableArtefact(unittest.TestCase):
         for maps in (R.DENIED_FROM_RELEASE_CLAIMS, R.DENIED_FROM_USER_SURFACES):
             for path in maps:
                 state = isub.subject_state(ROOT, (path,))
+                if state == isub.UNDECIDABLE and untracked_by_design(ROOT, path):
+                    continue    # the fourth answer: local-only by design (see the helper)
                 self.assertIn(
                     state, (isub.GRADED, isub.ABSENT_BY_DESIGN),
                     "%r is excluded from the sweep and does not exist. This tree is not a coherent "
@@ -107,6 +133,45 @@ class TheDenyListIsTheReviewableArtefact(unittest.TestCase):
         self.assertTrue(callable(getattr(R, "notice_pins", None)),
                         "`tests` is excluded because `notice_pins` grades it, and that function "
                         "is gone — the exclusion is now a hole")
+
+
+class TheFourthAnswerIsGradedBothWays(unittest.TestCase):
+    """§7i — `untracked_by_design` is graded against SUPPLIED repos, so it does not depend on which
+    tree this suite happens to run in."""
+
+    def _repo(self, tmp, ignore=""):
+        _git(tmp, "init", "-q")
+        _git(tmp, "config", "user.email", "t@example.invalid")
+        _git(tmp, "config", "user.name", "t")
+        with open(os.path.join(tmp, ".gitignore"), "w", encoding="utf-8") as fh:
+            fh.write(ignore)
+        _git(tmp, "add", ".gitignore")
+        _git(tmp, "commit", "-q", "-m", "init")
+
+    def test_absent_untracked_and_ignored_is_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._repo(tmp, "docs/marketing/\n")
+            self.assertTrue(untracked_by_design(tmp, "docs/marketing"))
+
+    def test_absent_untracked_and_NOT_ignored_still_reds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._repo(tmp, "something/else/\n")
+            self.assertFalse(untracked_by_design(tmp, "docs/marketing"))
+
+    def test_a_TRACKED_path_that_disappears_still_reds_even_if_ignored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._repo(tmp, "docs/gone/\n")
+            os.makedirs(os.path.join(tmp, "docs", "gone"))
+            with open(os.path.join(tmp, "docs", "gone", "a.md"), "w", encoding="utf-8") as fh:
+                fh.write("x\n")
+            _git(tmp, "add", "-f", "docs/gone/a.md")
+            _git(tmp, "commit", "-q", "-m", "track it")
+            os.remove(os.path.join(tmp, "docs", "gone", "a.md"))
+            self.assertFalse(untracked_by_design(tmp, "docs/gone"))
+
+    def test_a_non_repo_answers_no(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertFalse(untracked_by_design(tmp, "docs/marketing"))
 
 
 class TheCorpusIsDerivedFromTheTree(unittest.TestCase):
@@ -191,6 +256,22 @@ class TheSurfaceScanReadsTheAstNotTheProse(unittest.TestCase):
             with open(os.path.join(src, name), "w", encoding="utf-8") as fh:
                 fh.write(body)
             return R.user_facing_release_claims(tmp, REMOVAL)
+
+    def test_the_one_declared_not_a_surface_path_is_skipped_and_its_neighbour_is_not(self):
+        """The deny-list entry is graded BOTH ways on supplied files: the same hand-typed release
+        is an offender in a sibling module and is not one in the denied path. Without this, the
+        entry is an exclusion nothing exercises (the `J05` mutant survived 0.0.20 because the live
+        tree no longer carries the string the entry was written for)."""
+        (denied,) = tuple(R.DENIED_FROM_USER_SURFACES)
+        body = 'NOTE = "removed in %s"\n' % OTHER
+        with tempfile.TemporaryDirectory() as tmp:
+            for rel in (denied, "src/mokata/not_denied.py"):
+                path = os.path.join(tmp, *rel.split("/"))
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(body)
+            found = R.user_facing_release_claims(tmp, REMOVAL)
+        self.assertEqual(["src/mokata/not_denied.py"], [rel for rel, _line, _v in found])
 
     def test_a_release_in_HELP_TEXT_is_an_offender(self):
         """The row's own instance, reproduced: a hand-typed release in `--help`."""

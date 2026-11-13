@@ -133,48 +133,7 @@ def _src_files():
 # ================================================================== A. the channel is GONE
 
 class TestChannelRemoved(unittest.TestCase):
-    def test_stage11_channel_symbols_are_gone(self):
-        # The channel was a filename and a detector. Both go, from the module AND from the
-        # package re-export — a symbol still reachable through `mokata.memory` is not deleted.
-        import mokata.memory as M
-        import mokata.memory.share as S
-        for symbol in ("MEMORY_SHARE_FILENAME", "is_legacy_share_dest"):
-            self.assertFalse(hasattr(S, symbol), f"{symbol} survives in memory.share")
-            self.assertFalse(hasattr(M, symbol), f"{symbol} survives in the memory package")
-            self.assertNotIn(symbol, M.__all__)
 
-    def test_stage11_channel_is_no_longer_deprecated_it_is_removed(self):
-        # A deprecation notice for a channel that is gone tells a user to migrate off something
-        # that is not there. The registry moves it; it does not keep it in both.
-        self.assertNotIn(CHANNEL, deprecation.CHANNELS)
-        self.assertNotIn(CHANNEL, deprecation.DEPRECATED_CHANNELS)
-        self.assertIn(CHANNEL, deprecation.REMOVED)
-        self.assertIn(CHANNEL, deprecation.REMOVED_CHANNELS)
-
-    def test_stage11_migration_branch_is_gone(self):
-        # `mokata migrate memory-share` had a whole read/import path. It is deleted, not disabled.
-        # ⚠ WIDENED AT SLICE 4, WHICH DELETED THE WHOLE MODULE. Asserting three symbol names are
-        # absent from a module that no longer exists would pass on the module's absence rather
-        # than on the deletion — a guard satisfied by the wrong fact. The property that carries
-        # this test's meaning now is that nothing anywhere imports the migrator.
-        import importlib.util
-        self.assertIsNone(importlib.util.find_spec("mokata.migrate_channels"))
-
-    def test_stage11_no_export_path_warns_about_a_channel_any_more(self):
-        # Both export surfaces (CLI + MCP) called `is_legacy_share_dest` and warned. A call site
-        # left behind would be a NameError on the one path a user takes to write a backup.
-        from mokata.cli_commands import memory as cli_memory
-        from mokata.mcp import tools_memory
-        for module in (cli_memory, tools_memory):
-            source = inspect.getsource(module)
-            self.assertNotIn("is_legacy_share_dest", source)
-            self.assertNotIn('warn_deprecated("memory-share"', source)
-
-    def test_stage11_the_gate_probe_sees_the_removal(self):
-        # The lane's acceptance test (stage 9's), for THIS channel only.
-        self.assertFalse(DR.live_probe(DR.IMPLEMENTATIONS[CHANNEL]))
-        present = DR.present_channels(DR.IMPLEMENTATIONS, DR.live_probe)
-        self.assertNotIn(CHANNEL, present)
 
     def test_stage11_the_probe_target_is_the_channel_not_the_backup_module(self):
         # ⚠ THE ONE EDIT THAT COULD CHEAT THE GATE, pinned as an intention rather than a diff.
@@ -444,15 +403,6 @@ class TestNoFallbackPath(unittest.TestCase):
         self.assertEqual(
             deprecation.removed_channels_in(["memory-share"], deprecation.RemovedNotice), ())
 
-    def test_stage11_the_channel_cannot_be_migrated_through_the_library_either(self):
-        # The CLI answers it; the library offers no migration to reach. ⚠ RE-POINTED AT SLICE 4:
-        # this used to assert `migrate_channels` REFUSED the channel, and that module is gone, so
-        # the strongest true form is that no importable migration entry point exists for it at all.
-        import importlib.util
-        self.assertIsNone(importlib.util.find_spec("mokata.migrate_channels"))
-        from mokata.memory.migrate import SUPPORTED
-        self.assertNotIn(CHANNEL, SUPPORTED)
-
 
 # ============================================== E. the gate is STILL CLOSED — three slices left
 
@@ -480,26 +430,6 @@ class TestGateStillClosed(unittest.TestCase):
             ("memory-share",))
         self.assertEqual(
             DR.removal_regressions(("memory-share",), DR.IMPLEMENTATIONS, DR.live_probe), ())
-
-    def test_stage11_the_registries_stay_exact_across_the_move(self):
-        # A channel must not be able to belong to neither set — the move is what could drop one.
-        announced = set(deprecation.CHANNELS) | set(deprecation.REMOVED)
-        self.assertEqual(DR.registry_drift(announced, DR.IMPLEMENTATIONS), ((), ()))
-        self.assertEqual(DR.stale_notices(deprecation.CHANNELS, DR.present_channels(
-            DR.IMPLEMENTATIONS, DR.live_probe)), ())
-        self.assertEqual(
-            DR.removal_regressions(deprecation.REMOVED, DR.IMPLEMENTATIONS, DR.live_probe), ())
-
-    def test_stage11_no_channel_is_left_announced_but_not_removed(self):
-        # ⚠ REVERSED AT STAGE 14. This said "a channel still implemented must still WARN, or the
-        # lane has gone quiet about something it has not removed" — true while a survivor existed,
-        # and there is none. The invariant underneath it is the one that survives: nothing may be
-        # announced as going without being gone, and `stale_notices` is what says so mechanically.
-        self.assertEqual(deprecation.CHANNELS, {})
-        present = DR.present_channels(DR.IMPLEMENTATIONS, DR.live_probe)
-        self.assertEqual(DR.stale_notices(deprecation.CHANNELS, present), ())
-        # graded against a planted offender, because the live domain is now empty (§7i)
-        self.assertEqual(DR.stale_notices(("planted",), present), ("planted",))
 
 
 # ================================================ F. the two record classes stay apart

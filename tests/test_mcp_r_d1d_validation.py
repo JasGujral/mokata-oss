@@ -552,10 +552,11 @@ class TestSchemaUnchanged(unittest.TestCase):
         # (`limit`/`offset`), the guard is in-body, so every tool's inputSchema is byte-identical
         # to post-D1c. This is the pin.
         expected = {
-            "query": ["path", "kind", "target", "depth"],
+            # 0.0.28 I2: `query(path, *, target, kind, depth)` — `target` is required, so it leads
+            "query": ["path", "target", "kind", "depth"],
             "ci_check": ["path", "files", "symbols"],
-            "spec_check": ["path", "symbols", "files", "text", "phase", "approve", "confirm",
-                           "proposal_id"],
+            # 0.0.28 I2: `approve`/`confirm` deleted — consent is `proposal_id` only
+            "spec_check": ["path", "symbols", "files", "text", "phase", "proposal_id"],
             "doctor": ["path", "response_format"],
             "status": ["path"],
         }

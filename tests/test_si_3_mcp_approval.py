@@ -102,8 +102,14 @@ class TestTheRegression(unittest.TestCase):
         self.addCleanup(self.repo.close)
 
     def test_model_typed_approve_commits_nothing_and_returns_a_proposal(self):
-        res = TW.remember(path=self.repo.path, subject="db", value="postgres", approve=True)
-        self.assertEqual(res["status"], "proposed", "approve=true MUST NOT commit (P2)")
+        # 0.0.28 I2: `approve`/`confirm` are DELETED from every write tool, so a model-typed
+        # approval is not merely ignored, it cannot be expressed: a direct call raises TypeError
+        # (over MCP the front door refuses it `invalid_input`). Nothing is written either way.
+        for flag in ("approve", "confirm"):
+            with self.assertRaises(TypeError):
+                TW.remember(path=self.repo.path, subject="db", value="postgres", **{flag: True})
+        res = TW.remember(path=self.repo.path, subject="db", value="postgres")
+        self.assertEqual(res["status"], "proposed", "a plain call MUST NOT commit (P2)")
         self.assertFalse(res.get("committed", False))
         self.assertTrue(res.get("proposal_id", "").startswith("p-"))
         self.assertIn("mokata approve", res.get("hint", ""),
@@ -113,11 +119,6 @@ class TestTheRegression(unittest.TestCase):
         from mokata.memory import MemoryStore
         store = MemoryStore.from_surface(Surface.load(self.repo.path))
         self.assertEqual([i for i in store.scoped_active() if i.subject == "db"], [])
-
-    def test_confirm_true_the_deprecated_alias_also_commits_nothing(self):
-        res = TW.remember(path=self.repo.path, subject="db", value="pg", confirm=True)
-        self.assertEqual(res["status"], "proposed")
-        self.assertFalse(res.get("committed", False))
 
     def test_the_full_human_round_trip_commits(self):
         proposed = TW.remember(path=self.repo.path, subject="db", value="postgres")
@@ -141,14 +142,14 @@ class TestTheRegression(unittest.TestCase):
         """The sweep. Not one sampled tool — EVERY tool the registry calls a write."""
         for spec in _write_tools():
             with self.subTest(tool=spec.name):
-                res = spec.fn(path=self.repo.path, approve=True, confirm=True)
-                self.assertIsInstance(res, dict)
-                self.assertFalse(
-                    res.get("committed", False),
-                    f"{spec.name} COMMITTED on a model-typed approve=true — P2 violated")
-                self.assertNotEqual(
-                    res.get("status"), "committed",
-                    f"{spec.name} reported 'committed' on a model-typed approve=true")
+                # 0.0.28 I2: the flags no longer exist on ANY write tool (it used to be "accepted
+                # but demoted"); a model-typed approval is a TypeError, so it cannot commit.
+                import inspect
+                params = inspect.signature(spec.fn).parameters
+                self.assertNotIn("approve", params, f"{spec.name} still takes `approve`")
+                self.assertNotIn("confirm", params, f"{spec.name} still takes `confirm`")
+                with self.assertRaises(TypeError):
+                    spec.fn(path=self.repo.path, approve=True, confirm=True)
 
 
 class TestInjectionHonesty(unittest.TestCase):

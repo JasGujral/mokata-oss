@@ -152,7 +152,7 @@
         "approvals": {"type": "array", "items": {"$ref": "#/schemas/ProofApproval"}},
         "risk": {"$ref": "#/schemas/ProofRisk"},
         "record": {"type": "object", "required": ["last_suite", "red", "green", "timed", "recorded_acs", "planned_acs"],
-                   "properties": {"last_suite": {"type": ["object", "null"]}, "red": {"type": "integer"},
+                   "properties": {"last_suite": {"type": ["object", "null"], "required": ["said"], "properties": {"verdict": {"enum": ["passed", "failed", "cancelled", "not-all-ran"]}, "said": {"type": "string"}, "reason": {"type": "string"}, "failed": {"type": "array"}, "not_run": {"type": "array"}}}, "red": {"type": "integer"},
                                   "green": {"type": "integer"}, "timed": {"type": "integer"},
                                   "recorded_acs": {"type": "integer"}, "planned_acs": {"type": "integer"}}},
         "graph": {"type": "object", "required": ["basis", "backend", "bases", "note"],

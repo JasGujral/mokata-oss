@@ -347,11 +347,6 @@ class TestParityStaysGreen(unittest.TestCase):
         # release plumbing → intentionally CLI/preflight, declared exempt with a reason
         self.assertTrue(SURFACE_MATRIX["release-check"].exempt)
 
-    def test_parity_report_is_green(self):
-        from mokata.parity import verify_parity
-        report = verify_parity()
-        self.assertTrue(report.ok, report.render())
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -37,6 +37,15 @@ NEVER: a hint writes, spawns, calls git / the graph / the proof trace / a model,
 is text plus a command string; the human runs the command, and that command asks for its own
 consent (P2). No caching anywhere in here — the cost is bounded by the run's state, not the repo.
 
+WHAT AN ANSWER DEPENDS ON (0.0.28 F `HINTS-UNIFY-RESUME`) — so a cache of it (the SessionStart
+resume line, `bootstrap.refresh_resume_hint`) needs no hand-typed key:
+  * `basis.inputs` — every path the derivation READ, captured while it ran (a Python audit hook,
+    armed only inside `derive_batch`): file opens for reading, directory listings (`basis.listed`)
+    and SQLite databases (+ their `-wal`), under the repo. A file it never read cannot be in it.
+  * `valid_until` — the earliest moment the SAME inputs give a different answer: a heartbeat
+    leaving the 15-minute liveness window, a passed review leaving its age bound, a proposal
+    expiring. None when no such boundary applies (the inputs alone decide).
+
 READS (each three-state — ABSENT / UNREADABLE / OK — and read-only):
   run identity `run_resolver.resolve_run` · approach `approved_approach__<run>` · spec
   `emitted_spec__<run>` · amendment `spec_amend__<run>` · RED set `tdd_phase__<run>` · test record
@@ -53,11 +62,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .errors import ControlSignal, MokataError
+from .gate_blocks import epoch_of     # stdlib-only; per line of the log scan, so not per call
 from .plugin_runtime import slash_command
 
 HINTS_VERSION = 1
@@ -160,7 +172,6 @@ def _ago(t: Optional[float], now: float) -> str:
 
 
 def _epoch(ts: Any) -> float:
-    from .gate_blocks import epoch_of
     if isinstance(ts, (int, float)) and not isinstance(ts, bool):
         return float(ts)
     return epoch_of(ts)
@@ -232,6 +243,8 @@ class _Run:
     now: float
     log: Dict[str, Any] = field(default_factory=dict)        # filled by the batch log scan
     _cache: Dict[str, Any] = field(default_factory=dict)
+    #: the time boundaries the ladder crossed a rule at (`valid_until` is the earliest)
+    bounds: List[float] = field(default_factory=list)
 
     def get(self, name: str, fn: Any) -> Any:
         if name not in self._cache:
@@ -328,7 +341,8 @@ def _scan_log(root: str, runs: Dict[str, "_Run"], rd: _Read) -> None:
     finished" ABSENT rather than unknown. A corrupt line inside the window, an unreadable log or
     the byte bound reached before a run's start are recorded per run as the reason; the ladder
     raises it only if it needs that fact."""
-    from .progress_events import (PROGRESS_EVENTS_FILENAME, REVIEW_VERDICT, RUN_FINISHED)
+    from .progress_events import (DAMAGED, PROGRESS_EVENTS_FILENAME, REVIEW_VERDICT,
+                                  RUN_FINISHED, shared_scan)
     path = os.path.join(_state_dir(root), PROGRESS_EVENTS_FILENAME)
     want: Dict[str, Dict[str, Any]] = {}
     for rid, r in runs.items():
@@ -345,7 +359,9 @@ def _scan_log(root: str, runs: Dict[str, "_Run"], rd: _Read) -> None:
     if not want:
         return
     try:
-        fh = open(path, "rb")
+        # inside the SessionStart hook the log is parsed ONCE for the whole start-up (0.0.28 F r3)
+        shared = shared_scan(path, LOG_BYTE_CAP)
+        fh = open(path, "rb") if shared is None else None
     except FileNotFoundError:
         for st in want.values():
             st["settled"] = True                       # no log at all: nothing was recorded
@@ -356,8 +372,11 @@ def _scan_log(root: str, runs: Dict[str, "_Run"], rd: _Read) -> None:
         return
     open_runs = set(want)
     try:
-        fh.seek(0, os.SEEK_END)
-        size = fh.tell()
+        if shared is None:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+        else:
+            size, rows = shared
         floor = max(0, size - LOG_BYTE_CAP)
         pos, carry = size, b""
 
@@ -369,13 +388,30 @@ def _scan_log(root: str, runs: Dict[str, "_Run"], rd: _Read) -> None:
                 e = json.loads(line)
             except ValueError:
                 e = None
+            see(e)
+
+        def see(e: Any) -> None:
             if not isinstance(e, dict):
                 for rid in list(open_runs):
                     want[rid]["fault"] = ("the progress log has a damaged line in the window "
                                           "read — `mokata doctor`")
                     open_runs.discard(rid)
                 return
-            t = _epoch(e.get("ts"))
+            ts = e.get("ts")
+            t = epoch_of(ts) if ts.__class__ is str else _epoch(ts)
+            if hi[0] != len(open_runs):
+                latest_start()
+            if not (t and t < hi[1]):
+                # 0.0.28 F round 4 — no open run can settle on this line (it is not older than
+                # any open run's start), so the loop below would touch only the run it names,
+                # and `own` changes nothing for a line that is neither a finish nor a verdict:
+                # do just that. On a log at its bound this is every line, 64.5k of them.
+                typ = e.get("type")
+                if typ == RUN_FINISHED or typ == REVIEW_VERDICT:
+                    rv = e.get("run_id")
+                    if isinstance(rv, str) and rv in open_runs:
+                        own(rv, want[rv], e)
+                return
             for rid in list(open_runs):
                 st = want[rid]
                 if st["start"] is not None and t and t < st["start"]:
@@ -384,15 +420,38 @@ def _scan_log(root: str, runs: Dict[str, "_Run"], rd: _Read) -> None:
                     continue
                 if e.get("run_id") != rid:
                     continue
-                if e.get("type") == RUN_FINISHED and st["finished"] is None:
-                    st["finished"] = e
-                elif e.get("type") == REVIEW_VERDICT and st["verdict"] is None and \
-                        isinstance(e.get("data"), dict):
-                    st["verdict"] = e
-                if st["finished"] is not None:
-                    st["settled"] = True               # C0 decides; nothing older matters
-                    open_runs.discard(rid)
+                own(rid, st, e)
 
+        def own(rid: str, st: Dict[str, Any], e: Dict[str, Any]) -> None:
+            if e.get("type") == RUN_FINISHED and st["finished"] is None:
+                st["finished"] = e
+            elif e.get("type") == REVIEW_VERDICT and st["verdict"] is None and \
+                    isinstance(e.get("data"), dict):
+                st["verdict"] = e
+            if st["finished"] is not None:
+                st["settled"] = True                   # C0 decides; nothing older matters
+                open_runs.discard(rid)
+
+        hi = [-1, float("-inf")]                       # [len(open_runs) it was taken at, value]
+
+        def latest_start() -> float:
+            """The latest START among the open runs (-inf when none has one): a line older than
+            it settles some run; a line not older settles none. Re-taken only when a run closes
+            (`open_runs` only shrinks)."""
+            if hi[0] != len(open_runs):
+                starts = [want[r]["start"] for r in open_runs if want[r]["start"] is not None]
+                hi[0], hi[1] = len(open_runs), max(starts) if starts else float("-inf")
+            return hi[1]
+
+        if shared is not None:
+            low = size
+            for off, e in rows:
+                low = off
+                see(None if e is DAMAGED else e)
+                if not open_runs:
+                    break
+            rd.log_bytes += size - low
+            pos = floor                                # every line above the bound was seen
         while pos > floor and open_runs:
             step = min(_BLOCK, pos - floor)
             pos -= step
@@ -418,7 +477,26 @@ def _scan_log(root: str, runs: Dict[str, "_Run"], rd: _Read) -> None:
         for rid in open_runs:
             want[rid]["fault"] = f"the progress log could not be read ({type(exc).__name__})"
     finally:
-        fh.close()
+        if fh is not None:
+            fh.close()
+
+
+_SCAN_ONCE = json.decoder.JSONDecoder().scan_once
+
+
+def _loads_line(s: str) -> Any:
+    """`json.loads(s)` for one line, without its Python wrappers when the C scanner's answer is
+    already the whole of it (0.0.28 F round 4: per line of a 20k-line timeline). A line the fast
+    path does not settle — not an object at its first character, trailing text, a scanner error —
+    goes to `json.loads` itself, which returns or raises exactly as it always did."""
+    if s[:1] == "{":
+        try:
+            obj, end = _SCAN_ONCE(s, 0)
+        except (ValueError, StopIteration):  # what scan_once raises; json.loads raises the real one
+            return json.loads(s)
+        if end == len(s) or not s[end:].strip(" \t\n\r"):
+            return obj
+    return json.loads(s)
 
 
 def timeline_path(root: str) -> str:
@@ -450,7 +528,7 @@ def _scan_timeline(root: str, runs: Dict[str, "_Run"], rd: _Read) -> Dict[str, A
                     continue
                 lines += 1
                 try:
-                    d = json.loads(raw)
+                    d = _loads_line(raw)
                 except ValueError:
                     out["fault"] = "the snapshot timeline has a damaged line — `mokata doctor`"
                     break
@@ -502,6 +580,15 @@ def session_live(root: str, chain: Sequence[str], run: str, now: float) -> Tuple
     """(live?, basis) for a session chain — from records only, no process spawn: a SessionEnd
     marker on the newest session's last segment = ended; its recorded Claude pid gone = ended;
     otherwise a heartbeat within `LIVE_SECS`, or the run's MCP process registered alive, = live."""
+    live, basis, _until = _session_live(root, chain, run, now)
+    return live, basis
+
+
+def _session_live(root: str, chain: Sequence[str], run: str, now: float
+                  ) -> Tuple[bool, str, Optional[float]]:
+    """`session_live` plus the moment its answer flips with no file changing: a heartbeat-live
+    session is live until heartbeat + `LIVE_SECS`. (A run's MCP registration and a recorded pid
+    are not time boundaries the records state — disclosed in the 0.0.28 F report.)"""
     from . import session_index as SI
     from .run_resolver import live_runs
     from .session_registry import pid_alive
@@ -511,16 +598,16 @@ def session_live(root: str, chain: Sequence[str], run: str, now: float) -> Tuple
         if segs and isinstance(segs[-1], dict):
             seg = segs[-1]
             if seg.get("end"):
-                return False, "SessionEnd recorded"
+                return False, "SessionEnd recorded", None
             proc = seg.get("proc")
             if isinstance(proc, list) and proc and not pid_alive(proc[0]):
-                return False, "its Claude Code process is gone"
+                return False, "its Claude Code process is gone", None
         hb = float(rec.get("heartbeat") or 0.0)
         if hb and now - hb <= LIVE_SECS:
-            return True, f"activity {_ago(hb, now)}"
+            return True, f"activity {_ago(hb, now)}", hb + LIVE_SECS
     if run and live_runs(root, {run}):
-        return True, "its run's MCP process is registered alive"
-    return False, "no SessionEnd, and no activity recorded in the last 15 min"
+        return True, "its run's MCP process is registered alive", None
+    return False, "no SessionEnd, and no activity recorded in the last 15 min", None
 
 
 # ----------------------------------------------------------------------------- the ladder
@@ -755,6 +842,8 @@ def _ladder(r: _Run, tl: Dict[str, Any], bridge: Tuple[bool, str], live: bool,
         return STATUS_HINTS, [Hint(C_REVIEW, f"the review is older than {max_age:g} h "
                                    f"(recorded {_ago(vt, r.now)}) — review again",
                                    "/mokata:review", (vcite,))], ""
+    if max_age > 0:
+        r.bounds.append(vt + max_age * 3600.0)        # past it, this rung becomes "review again"
     n_since, why_v = _writes_after(tl, r.run, vt)
     bash_v: Optional[List[float]] = []
     if bridge[0]:
@@ -910,10 +999,96 @@ def _resolve(root: str, s: Subject) -> Tuple[Optional[str], str, Optional[Hint],
     return res.run_id, res.basis, None, ""
 
 
-def derive_batch(root: str, subjects: Sequence[Subject], *, now: Optional[float] = None
-                 ) -> List[Dict[str, Any]]:
+#: `rules=` for a caller that wants only the pipeline step and its proposals (the SessionStart
+#: resume line): the code-graph check (R12) is not run. `primary()` is the same either way.
+PIPELINE_ONLY = "pipeline"
+
+#: The capture box `derive_batch` arms while it runs: (files read, directories listed).
+_CAPTURE: "ContextVar[Optional[Tuple[set, set]]]" = ContextVar("mokata_hints_inputs", default=None)
+_AUDIT_INSTALLED = [False]
+_WRITE_FLAGS = (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_TRUNC)
+
+
+def _audit(event: str, args: Tuple[Any, ...]) -> None:
+    """The audit hook: a no-op unless THIS context is inside `derive_batch`. It cannot raise —
+    every step below is a type-checked read of the event's own arguments (an audit hook that
+    raised would break the open it observes, anywhere in the process)."""
+    box = _CAPTURE.get()
+    if box is None:
+        return
+    path: Any = None
+    if event == "open" and len(args) == 3:
+        path, mode, flags = args
+        if isinstance(mode, str) and any(c in mode for c in "wax+"):
+            return
+        if mode is None and isinstance(flags, int) and flags & _WRITE_FLAGS:
+            return
+        if isinstance(path, (str, bytes)):
+            box[0].add(os.fsdecode(path))
+    elif event in ("os.listdir", "os.scandir") and args:
+        path = "." if args[0] is None else args[0]
+        if isinstance(path, (str, bytes)):
+            box[1].add(os.fsdecode(path))
+    elif event == "sqlite3.connect" and args and isinstance(args[0], (str, bytes)):
+        db = os.fsdecode(args[0])
+        if db.startswith("file:"):
+            db = db[5:].split("?", 1)[0]
+        if db and db != ":memory:":
+            box[0].update((db, db + "-wal"))
+
+
+def _inputs(root: str, files: set, dirs: set) -> Tuple[List[str], List[str]]:
+    """The captured paths that are the REPO's (this tree or its main checkout): never the
+    interpreter's, never a bytecode cache."""
+    from .repo_identity import canonical_repo_root
+    bases = {os.path.realpath(root), os.path.realpath(canonical_repo_root(root))}
+    skip = {os.path.realpath(p) for p in (sys.prefix, sys.base_prefix, sys.exec_prefix)}
+
+    def keep(p: str) -> Optional[str]:
+        a = os.path.abspath(p)
+        rp = os.path.realpath(a)
+        if "__pycache__" in rp.split(os.sep):
+            return None
+        if any(rp == s or rp.startswith(s + os.sep) for s in skip):
+            return None
+        if any(rp == b or rp.startswith(b + os.sep) for b in bases):
+            return a
+        return None
+    listed = sorted({k for k in map(keep, dirs) if k})
+    read = sorted({k for k in map(keep, files) if k} - set(listed))
+    return sorted(set(read) | set(listed)), listed
+
+
+def derive_batch(root: str, subjects: Sequence[Subject], *, now: Optional[float] = None,
+                 rules: Optional[str] = None) -> List[Dict[str, Any]]:
     """Every subject's answer, reading each SHARED store once for the whole batch (the progress
-    log and the timeline, backward). Pure read: nothing is written, spawned or cached."""
+    log and the timeline, backward). Pure read: nothing is written, spawned or cached. Each answer
+    carries what it read (`basis.inputs`, `basis.listed`) and `valid_until` (module doc)."""
+    if rules not in (None, PIPELINE_ONLY):
+        raise ValueError(f"rules must be None or {PIPELINE_ONLY!r}, not {rules!r}")
+    if not _AUDIT_INSTALLED[0]:
+        _AUDIT_INSTALLED[0] = True
+        sys.addaudithook(_audit)
+    box: Tuple[set, set] = (set(), set())
+    token = _CAPTURE.set(box)
+    try:
+        out = _derive_batch(root, subjects, now=now, rules=rules)
+    finally:
+        _CAPTURE.reset(token)
+    inputs, listed = _inputs(root, *box)
+    for a in out:
+        a["basis"]["inputs"] = inputs
+        a["basis"]["listed"] = listed
+    return out
+
+
+def _until(bounds: Iterable[float], now: float) -> Optional[float]:
+    later = [b for b in bounds if b > now]
+    return min(later) if later else None
+
+
+def _derive_batch(root: str, subjects: Sequence[Subject], *, now: Optional[float],
+                  rules: Optional[str]) -> List[Dict[str, Any]]:
     from .repo_identity import is_initialized, state_root
     now = time.time() if now is None else now
     rd = _Read()
@@ -933,7 +1108,7 @@ def derive_batch(root: str, subjects: Sequence[Subject], *, now: Optional[float]
     _scan_log(root, runs, rd)
     tl = _scan_timeline(root, runs, rd)
     bridge = _bridge(root)
-    graph, graph_note = _graph_hint(root)
+    graph, graph_note = (None, "") if rules == PIPELINE_ONLY else _graph_hint(root)
     try:
         from .approval import pending_strict
         proposals, bad = pending_strict(root, now)
@@ -955,11 +1130,14 @@ def derive_batch(root: str, subjects: Sequence[Subject], *, now: Optional[float]
         for p in proposals:
             if p.approved or not in_chain(run, r.chain, p.run_id, p.run_id):
                 continue
+            r.bounds.append(p.expires_at)            # it stops waiting on you when it expires
             hints.append(Hint(R_APPROVE, f"proposal {p.proposal_id} ({_clip(p.tool, 40)}) is "
                               "waiting on you", f"mokata approve {p.proposal_id}",
                               (Cite("approvals", p.proposal_id, p.created_at),)))
         try:
-            live, live_basis = session_live(root, r.chain, run, now)
+            live, live_basis, live_until = _session_live(root, r.chain, run, now)
+            if live_until is not None:
+                r.bounds.append(live_until)
             status, pipe, none_reason = _ladder(r, tl, bridge, live, live_basis)
         except _Unknown as exc:
             out.append(_answer(STATUS_UNKNOWN, [], subject=s, run=run, basis=basis, now=now,
@@ -972,20 +1150,22 @@ def derive_batch(root: str, subjects: Sequence[Subject], *, now: Optional[float]
             hints.append(graph)
         out.append(_answer(status, hints, subject=s, run=run, basis=basis, now=now, rd=rd,
                            reason=none_reason, note=graph_note,
-                           bash="observed" if bridge[0] else "unobserved (IDE bridge off)"))
+                           bash="observed" if bridge[0] else "unobserved (IDE bridge off)",
+                           valid_until=_until(r.bounds, now)))
     return out
 
 
 def derive(root: str, *, session: str = "", run: str = "", chain: Iterable[str] = (),
-           now: Optional[float] = None) -> Dict[str, Any]:
+           now: Optional[float] = None, rules: Optional[str] = None) -> Dict[str, Any]:
     """One subject's answer (see `derive_batch`)."""
-    return derive_batch(root, [Subject(session or "", run or "", tuple(chain))], now=now)[0]
+    return derive_batch(root, [Subject(session or "", run or "", tuple(chain))], now=now,
+                        rules=rules)[0]
 
 
 def _answer(status: str, hints: List[Hint], *, subject: Subject, run: Optional[str],
             basis: str, now: float, rd: _Read, reason: str = "", note: str = "",
-            bash: str = "") -> Dict[str, Any]:
-    return {"version": HINTS_VERSION, "status": status,
+            bash: str = "", valid_until: Optional[float] = None) -> Dict[str, Any]:
+    return {"version": HINTS_VERSION, "status": status, "valid_until": valid_until,
             "hints": [h.to_dict() for h in hints], "count": len(hints),
             "reason": reason,
             "subject": {"session": subject.session, "run": run or "",
@@ -1034,5 +1214,5 @@ def render(ans: Dict[str, Any]) -> str:
 
 
 __all__ = ["HINTS_VERSION", "STATUS_HINTS", "STATUS_NONE", "STATUS_UNKNOWN", "ADVICE", "Cite",
-           "Hint", "HintRefused", "Subject", "derive", "primary", "derive_batch", "render", "session_live",
-           "timeline_path", "TIMELINE_KEEP"]
+           "Hint", "HintRefused", "PIPELINE_ONLY", "Subject", "derive", "primary", "derive_batch",
+           "render", "session_live", "timeline_path", "TIMELINE_KEEP"]

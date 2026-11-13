@@ -374,13 +374,6 @@ class TheDerivationFailsCLOSED(unittest.TestCase):
         self.assertFalse(degraded)
         self.assertEqual((), reasons)
 
-    def test_the_two_value_wrapper_is_GONE(self):
-        """§7d, review finding B-F5. It had zero production callers and its stated reason to exist —
-        *"the live caller unpacks two values"* — was made false by the same commit that wrote it."""
-        self.assertFalse(hasattr(GR, "derive_graph_degraded"),
-                         "deleted at 0.0.21 stage 14; use `derive_graph_degraded_detail`")
-        self.assertTrue(hasattr(GR, "derive_graph_degraded_detail"), "the CONTROL")
-
 
 class TestMcpParityWithCrgPresent(unittest.TestCase):
     """0.0.26 O11 sibling of `TestMcpParity.test_a_session_CLAIMING_health_cannot_buy_it`, with

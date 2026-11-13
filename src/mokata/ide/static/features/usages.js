@@ -6,7 +6,12 @@
 //   * the Review hunk's ⋯ menu (MK.hunkMenu; new side, live working-tree view only).
 // 0.0.27 UX-SIMPLIFY #40: Copy Ref is no longer its own command — it is the "ref" shape of Copy
 // with Context (path:line and symbol id, copied at once, no job): ONE copy, its shapes inside.
-// Find Usages answers in the Code inspector's References tab. Copy with Context opens a small popover where the
+// Find Usages answers in the Code inspector's References tab. 0.0.28 G (ID-LSP-CALL-HIERARCHY): the box is
+// three tabs — Usages · Callers · Callees — one tabpanel; Callers/Callees are a tree (the function
+// at the root, one level per question, any row expands) answered by the project's language server
+// through /api/lsp/calls, or by the call graph (callers only) while it cannot answer, labelled.
+// No keybinding (G-Q4): the palette (Find Callers / Find Callees), the Code right-click menu (the
+// same two items, after Find Usages), or the box's tabs. Copy with Context opens a small popover where the
 // mouse was. The popover shows the job (progress and Cancel), then the size, token estimate and
 // cut/lexical state of each shape. NOTHING is copied until the human picks a shape. A cancelled job
 // copies nothing, and a click on Cancel stops any write that is still pending.
@@ -17,7 +22,9 @@
   if (typeof window === "undefined" || !window.mokataIDE || typeof document === "undefined") return;
   const MK = window.MK;
   const el = MK.el;
-  const P = { view: null, box: null, head: null, cursors: [], page: null, pageSize: 50, pop: null };
+  const P = { view: null, box: null, head: null, cursors: [], page: null, pageSize: 50, pop: null,
+              mode: "usages", target: null, tabs: null, live: new Set() };
+  const MODES = [["usages", "Usages"], ["in", "Callers"], ["out", "Callees"]];
 
   function btn(label, cls, fn, title) {
     const b = el("button", cls || "btn ghost small", label);
@@ -237,27 +244,131 @@
     P.view = view;
     P.box = el("section", "p4-usages");
     P.box.setAttribute("aria-label", "Find Usages");
-    P.box.append(el("h3", "", "Usages"));
+    // ONE tablist, ONE tabpanel (WAI-ARIA tabs, manual activation): ←/→/Home/End move, Enter/Space
+    // or a click selects; the selected tab is the one tab stop.
+    P.tabs = el("div", "p4-tabs");
+    P.tabs.setAttribute("role", "tablist");
+    P.tabs.setAttribute("aria-label", "Find Usages: usages, callers, callees");
+    for (const [mode, label] of MODES) {
+      const t = el("button", "pill itab p4-tab", label);
+      t.type = "button";
+      t.id = "p4-tab-" + mode;
+      t.dataset.mode = mode;
+      t.setAttribute("role", "tab");
+      t.setAttribute("aria-controls", "p4-usages-panel");
+      t.onclick = () => pickTab(mode);
+      t.onkeydown = (ev) => tabKey(ev, t);
+      P.tabs.append(t);
+    }
+    P.box.append(P.tabs);
     P.body = el("div", "p4-usages-body");
-    P.body.append(el("p", "small dim", "Shift+F12 on a name in Code (or right-click → Find Usages): every usage, paged, with the backend that answered and what it covers."));
+    P.body.id = "p4-usages-panel";
+    P.body.setAttribute("role", "tabpanel");
+    P.body.append(el("p", "small dim", "Shift+F12 on a name in Code (or right-click → Find Usages): every usage, paged, with the backend that answered and what it covers. Callers / Callees: Find Callers / Find Callees in the palette or the right-click menu, or these tabs — the language server's answer, one level at a time."));
     P.box.append(P.body);
     view.append(P.box);
+    paintTabs();
+  }
+
+  function paintTabs() {
+    if (!P.tabs) return;
+    for (const t of P.tabs.querySelectorAll("[role=tab]")) {
+      const on = t.dataset.mode === P.mode;
+      t.setAttribute("aria-selected", String(on));
+      t.classList.toggle("active", on);
+      t.tabIndex = on ? 0 : -1;
+    }
+    P.body.setAttribute("aria-labelledby", "p4-tab-" + P.mode);
+  }
+
+  function tabKey(ev, t) {
+    const all = [...P.tabs.querySelectorAll("[role=tab]")];
+    const i = all.indexOf(t);
+    let j = -1;
+    if (ev.key === "ArrowRight") j = (i + 1) % all.length;
+    else if (ev.key === "ArrowLeft") j = (i - 1 + all.length) % all.length;
+    else if (ev.key === "Home") j = 0;
+    else if (ev.key === "End") j = all.length - 1;
+    else if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); pickTab(t.dataset.mode); return; }
+    if (j < 0) return;
+    ev.preventDefault();
+    all.forEach((x, k) => { x.tabIndex = k === j ? 0 : -1; });
+    all[j].focus();
+  }
+
+  // A tab asks the box's current question in its own way; with none yet, it says how to ask one.
+  function pickTab(mode) {
+    const back = document.activeElement;
+    P.mode = mode;
+    paintTabs();
+    const t = P.target;
+    if (!t) {
+      supersede();
+      P.body.replaceChildren(el("p", "small dim", "Put the caret in a function in Code, then pick a tab or use the palette (Find Callers / Find Callees)."));
+    } else if (mode === "usages") findUsages(t);
+    else findCalls(mode, t);
+    if (back && back.getAttribute && back.getAttribute("role") === "tab" && document.contains(back)) {
+      const sel = P.tabs.querySelector("[aria-selected=true]");
+      if (sel) sel.focus();
+    }
+  }
+
+  // A newer question CANCELS the older one's jobs (rule F11), not only drops its answer.
+  function supersede() {
+    const gen = (P.gen = (P.gen || 0) + 1);
+    for (const id of P.live) MK.jobs.cancel(id);
+    P.live.clear();
+    return gen;
+  }
+  function track(gen) {
+    let mine = null;
+    return {
+      onJob: (j) => {
+        const active = j.state === "queued" || j.state === "running" || j.state === "partial";
+        if (active && gen !== P.gen) {
+          // superseded before its id was known (the 202 lost the race with the newer question):
+          // cancel it the moment it names itself
+          if (j.id && j.id !== mine) { mine = j.id; MK.jobs.cancel(j.id); }
+        } else if (active) { mine = j.id; P.live.add(j.id); }
+        else if (j.id) P.live.delete(j.id);
+      },
+      done: () => { if (mine) P.live.delete(mine); },
+    };
+  }
+
+  function ensureBox() {
+    if (MK.showCodeAnswer) MK.showCodeAnswer();
+    const host = document.getElementById("insp-usages");
+    if (host) mountBox(host);
+    if (!P.box) { toast("The Code inspector is not available."); return false; }
+    return true;
+  }
+
+  // Focus is never left on <body>: an answer that replaced what held focus hands it to the tree
+  // (or the selected tab); focus the person moved elsewhere is left where it is.
+  function keepFocus() {
+    const a = document.activeElement;
+    if (a && a !== document.body && document.contains(a)) return;
+    const f = P.body.querySelector("[role=treeitem][tabindex='0']") || P.tabs.querySelector("[aria-selected=true]");
+    if (f) f.focus();
   }
 
   async function findUsages(target, opts) {
     const o = opts || {};
-    if (MK.showCodeAnswer) MK.showCodeAnswer();
-    const host = document.getElementById("insp-usages");
-    if (host) mountBox(host);
-    if (!P.box) { toast("The Code inspector is not available."); return; }
+    if (!ensureBox()) return;
+    if (!target.ref) P.target = { path: target.path, line: target.line };
+    P.mode = "usages";
+    paintTabs();
     const body = target.ref ? { ref: target.ref } : { path: target.path, line: target.line };
     if (o.lexical) body.mode = "lexical";
+    const gen = supersede();                    // a later question wins; an older answer is dropped
     P.body.replaceChildren();
     const strip = MK.jobs.strip(P.body, "p4-strip");
     strip.say(`finding usages of ${target.ref || target.path + ":" + target.line}…`);
     P.cursors = []; P.head = null;
-    const gen = (P.gen = (P.gen || 0) + 1);    // a later Find Usages wins; an older answer is dropped
-    const r = await MK.api("/api/usages", body, { onJob: (j) => { if (gen === P.gen) strip.set(j); } }).catch((e) => ({ error: "fetch", note: String(e) }));
+    const tr = track(gen);
+    const r = await MK.api("/api/usages", body, { onJob: (j) => { tr.onJob(j); if (gen === P.gen) strip.set(j); } }).catch((e) => ({ error: "fetch", note: String(e) }));
+    tr.done();
     if (gen !== P.gen) return;
     strip.done();
     if (!r || r.error) {
@@ -267,6 +378,228 @@
     P.head = r;
     renderHead(r);
     await loadPage(null);
+    keepFocus();
+  }
+
+  // ------------------------------------------------------------------ Callers / Callees (0.0.28 G)
+  function callsUrl(dir, t) {
+    return `/api/lsp/calls?path=${encodeURIComponent(t.path)}&line=${t.line}` + (t.col ? `&col=${t.col}` : "") + `&dir=${dir}`;
+  }
+  const WORD = { in: ["caller", "callers"], out: ["callee", "callees"] };
+
+  async function findCalls(dir, target) {
+    if (!ensureBox()) return;
+    P.target = { path: target.path, line: target.line, col: target.col || null };
+    P.mode = dir;
+    paintTabs();
+    const gen = supersede();
+    P.body.replaceChildren();
+    const strip = MK.jobs.strip(P.body, "p4-strip");
+    strip.say(`finding the ${WORD[dir][1]} of ${target.path}:${target.line}…`);
+    const tr = track(gen);
+    const r = await MK.api(callsUrl(dir, P.target), undefined, { onJob: (j) => { tr.onJob(j); if (gen === P.gen) strip.set(j); } }).catch((e) => ({ error: "fetch", note: String(e) }));
+    tr.done();
+    if (gen !== P.gen) return;
+    strip.done();
+    P.body.replaceChildren();
+    if (!r || r.error) {
+      P.body.append(el("p", "region-msg error", r && r.cancelled ? "Cancelled — no list." : `No answer: ${(r && (r.note || r.error)) || "?"}`));
+      keepFocus();
+      return;
+    }
+    renderCalls(r, dir, gen);
+    keepFocus();
+  }
+
+  function sourceChip(r) {
+    if (r.source === "lsp") return el("span", "chip small ok", `language server (${r.lsp.server || r.backend || ""})`);
+    if (r.source === "graph") return el("span", "chip small warn", "call graph" + (r.basis ? ` · ${r.basis}` : ""));
+    return el("span", "chip small warn", "no answer");
+  }
+
+  // The facts an answer must say about itself (rule M-E/M-F/F9): who answered, how many, what was
+  // cut, what was skipped, and why a side is empty.
+  function callsFacts(r, dir) {
+    const out = [];
+    const shown = (r.groups || []).reduce((n, g) => n + g.rows.length, 0);
+    if (r.source !== "lsp" && r.lsp) out.push(["dim", `language server: ${r.lsp.state}${r.lsp.note ? " — " + r.lsp.note : ""}`]);
+    if (r.groups && r.groups.length) {
+      out.push(["", r.truncated ? `showing ${shown.toLocaleString()} of ${r.total.toLocaleString()} ${WORD[dir][1]} — narrow by opening a ${WORD[dir][0]}`
+                              : plural(r.total, WORD[dir][0], WORD[dir][1])]);
+    }
+    if (r.skipped) out.push(["warn", `${plural(r.skipped, "entry", "entries")} the server sent malformed ${r.skipped === 1 ? "was" : "were"} skipped`]);
+    if (r.items_named > r.items_asked) out.push(["warn", `the server named ${r.items_named.toLocaleString()} functions here; the first ${r.items_asked} were asked`]);
+    if (r.note) out.push(["dim", r.note]);
+    return out;
+  }
+
+  function renderCalls(r, dir, gen) {
+    const h = el("div", "p4-head p4-calls-head");
+    const title = el("div", "row");
+    title.append(el("b", "", `${dir === "in" ? "Callers" : "Callees"} of ${r.symbol || "?"}`), document.createTextNode(" "), sourceChip(r));
+    h.append(title);
+    for (const [cls, text] of callsFacts(r, dir)) h.append(el("div", "small " + cls, text));
+    P.body.append(h);
+    const tree = el("ul", "lsp-results p4-tree");
+    tree.setAttribute("role", "tree");
+    tree.setAttribute("aria-label", `${WORD[dir][1]} of ${r.symbol || "the function"}`);
+    tree.onkeydown = (ev) => treeKey(ev, tree, dir, gen);
+    const groups = r.groups || [];
+    groups.forEach((g, i) => {
+      const li = treeItem(g.item, 1, i + 1, groups.length, dir, r.source, gen, false);
+      tree.append(li);
+      addChildren(li, g.rows, g.truncated ? g.total : g.rows.length, 2, dir, r.source, gen);
+    });
+    if (!groups.length) tree.append(el("li", "dim small", r.callable === false ? (r.note || "no function here") : r.asked ? `no ${WORD[dir][1]} found by ${r.backend || "the server"}` : (r.note || `no ${WORD[dir][1]}`)));
+    P.body.append(tree);
+    const first = tree.querySelector("[role=treeitem]");
+    if (first) first.tabIndex = 0;
+  }
+
+  function treeItem(x, level, pos, size, dir, source, gen, expandable) {
+    const li = el("li", "ref-card p4-node" + (x.test ? " is-test" : ""));
+    li.setAttribute("role", "treeitem");
+    li.setAttribute("aria-level", String(level));
+    li.setAttribute("aria-posinset", String(pos));
+    li.setAttribute("aria-setsize", String(size));
+    li.setAttribute("aria-label", `${x.name || "?"} — ${x.shown || x.path}:${x.line}${x.outside ? " (outside the repository)" : ""}${x.test ? " (test)" : ""}`);
+    li.tabIndex = -1;
+    li.dataset.name = x.name || "";
+    li._row = x; li._dir = dir; li._gen = gen;
+    if (x.outside) li.setAttribute("aria-disabled", "true");
+    if (expandable && !x.outside) li.setAttribute("aria-expanded", "false");
+    const row = el("div", "p4-call-row");
+    const exp = el("span", "p4-exp", expandable && !x.outside ? "▸" : "");
+    exp.setAttribute("aria-hidden", "true");
+    exp.onclick = (ev) => { ev.stopPropagation(); li.focus(); toggle(li); };
+    row.append(exp, el("b", "p4-name", x.name || "?"), el("span", "mono dim p4-where", ` ${x.shown || x.path}:${x.line}${x.col ? ":" + x.col : ""}`));
+    if (x.test) row.append(el("span", "chip small", "test"));
+    if (x.outside) row.append(el("span", "chip small warn", "outside the repository"));
+    if (x.calls != null && level > 1) row.append(el("span", "chip small", `${x.calls} call${x.calls === 1 ? "" : "s"}`));
+    if (level > 1 && source === "graph") row.append(el("span", "chip small warn", "call graph"));
+    row.append(el("span", "small dim p4-status"));
+    row.onclick = () => { li.focus(); openRow(li); };
+    li.append(row);
+    if (x.snippet) li.append(el("div", "ref-snip mono", x.snippet));
+    return li;
+  }
+
+  function addChildren(li, rows, size, level, dir, source, gen) {
+    const ul = el("ul", "p4-group");
+    ul.setAttribute("role", "group");
+    rows.forEach((x, i) => ul.append(treeItem(x, level, i + 1, size, dir, source, gen, true)));
+    li.append(ul);
+    li.setAttribute("aria-expanded", "true");
+    const exp = li.querySelector(":scope > .p4-call-row > .p4-exp");
+    if (exp) exp.textContent = rows.length ? "▾" : "";
+    if (!rows.length && level > 2) {
+      li.removeAttribute("aria-expanded");
+      say(li, `no ${WORD[dir][1]} found`);
+    }
+  }
+
+  function say(li, text) {
+    const s = li.querySelector(":scope > .p4-call-row > .p4-status");
+    if (s) s.textContent = text ? ` ${text}` : "";
+  }
+
+  function openRow(li) {
+    const x = li._row;
+    if (!x || x.outside) return;
+    if (MK.openFile) MK.openFile(x.path, x.line, null, x.col ? { col: x.col } : undefined);
+  }
+
+  function collapse(li) {
+    const g = li.querySelector(":scope > ul[role=group]");
+    if (!g) return;
+    const a = document.activeElement;
+    const inside = a && a !== li && li.contains(a);
+    g.remove();                                           // collapsed = gone; expanding asks again (fresh)
+    li.setAttribute("aria-expanded", "false");
+    const exp = li.querySelector(":scope > .p4-call-row > .p4-exp");
+    if (exp) exp.textContent = "▸";
+    if (inside) { li.tabIndex = 0; li.focus(); }          // focus inside a collapsed group moves up
+  }
+
+  // One more level for this row: a NEW question at the row's own position (stateless — a cycle
+  // cannot loop). Its answer lands under the row; a tree that was replaced meanwhile drops it.
+  async function expand(li) {
+    if (li.getAttribute("aria-disabled") === "true" || !li.hasAttribute("aria-expanded")) return;
+    if (li.querySelector(":scope > ul[role=group]") || li._busy) return;
+    li._busy = true;
+    li.setAttribute("aria-busy", "true");
+    say(li, "loading…");
+    const x = li._row, gen = li._gen, dir = li._dir;
+    const tr = track(gen);
+    const r = await MK.api(callsUrl(dir, { path: x.path, line: x.line, col: x.col }), undefined, { onJob: tr.onJob }).catch((e) => ({ error: "fetch", note: String(e) }));
+    tr.done();
+    li._busy = false;
+    li.removeAttribute("aria-busy");
+    if (gen !== P.gen || !document.contains(li)) return;
+    if (!r || r.error) {
+      say(li, r && r.cancelled ? "Cancelled — no list" : `no answer: ${(r && (r.note || r.error)) || "?"}`);
+      return;
+    }
+    const rows = [];
+    let size = 0;
+    for (const grp of r.groups || []) { rows.push(...grp.rows); size += grp.truncated ? grp.total : grp.rows.length; }
+    const facts = callsFacts(r, dir).filter(([cls]) => cls === "warn" || r.truncated).map(([, t]) => t);
+    say(li, facts.join(" · "));
+    const level = +li.getAttribute("aria-level") + 1;
+    if (!rows.length) {
+      li.removeAttribute("aria-expanded");
+      const exp = li.querySelector(":scope > .p4-call-row > .p4-exp");
+      if (exp) exp.textContent = "";
+      say(li, r.source === "lsp" || r.source === "graph" ? `no ${WORD[dir][1]} found` : (r.note || "no answer"));
+      return;
+    }
+    addChildren(li, rows, size, level, dir, r.source, gen);
+  }
+
+  function toggle(li) {
+    if (li.getAttribute("aria-expanded") === "true") collapse(li); else expand(li);
+  }
+
+  function visibleItems(tree) {
+    return [...tree.querySelectorAll("[role=treeitem]")];
+  }
+
+  function treeKey(ev, tree) {
+    const li = ev.target.closest && ev.target.closest("[role=treeitem]");
+    if (!li || !tree.contains(li)) return;
+    const items = visibleItems(tree);
+    const i = items.indexOf(li);
+    let next = null;
+    if (ev.key === "ArrowDown") next = items[Math.min(items.length - 1, i + 1)];
+    else if (ev.key === "ArrowUp") next = items[Math.max(0, i - 1)];
+    else if (ev.key === "Home") next = items[0];
+    else if (ev.key === "End") next = items[items.length - 1];
+    else if (ev.key === "ArrowRight") {
+      ev.preventDefault();
+      if (li.getAttribute("aria-disabled") === "true") return;
+      if (li.getAttribute("aria-expanded") === "false") { expand(li); return; }
+      if (li.getAttribute("aria-expanded") === "true") next = li.querySelector(":scope > ul[role=group] > [role=treeitem]");
+    } else if (ev.key === "ArrowLeft") {
+      ev.preventDefault();
+      if (li.getAttribute("aria-expanded") === "true") { collapse(li); return; }
+      const parent = li.parentElement && li.parentElement.closest("[role=treeitem]");
+      if (parent) next = parent;
+    } else if (ev.key === "Enter" || ev.key === " ") {
+      ev.preventDefault();
+      openRow(li);
+      return;
+    }
+    if (!next) return;
+    ev.preventDefault();
+    for (const n of tree.querySelectorAll("[role=treeitem][tabindex='0']")) n.tabIndex = -1;
+    next.tabIndex = 0;
+    next.focus();
+  }
+
+  function callsHere(dir) {
+    const s = selection();
+    if (!s) { toast("Open a file in Code and put the caret in a function."); return; }
+    findCalls(dir, { path: s.path, line: s.lo });
   }
 
   function renderHead(r) {
@@ -398,6 +731,10 @@
     const items = [
       ["Copy with Context…", () => copyWithContext(sel, at)],
       ["Find Usages", () => findUsages({ path: sel.path, line: sel.lo })],
+      // 0.0.28 G (coordinator ruling, after lane D): the call hierarchy, asked about the
+      // function enclosing the line — the same question as the palette's commands
+      ["Find Callers", () => findCalls("in", { path: sel.path, line: sel.lo })],
+      ["Find Callees", () => findCalls("out", { path: sel.path, line: sel.lo })],
     ];
     for (const [label, fn] of items) {
       const b = el("button", "tab-menu-item", label);
@@ -414,8 +751,9 @@
       else if (k.key === "ArrowUp") { k.preventDefault(); all[(i - 1 + all.length) % all.length].focus(); }
     };
     document.body.append(box);
-    box.style.left = `${Math.max(4, Math.min(at.x, window.innerWidth - 220))}px`;
-    box.style.top = `${Math.max(4, Math.min(at.y, window.innerHeight - 120))}px`;
+    // kept on screen by its MEASURED size (four items since 0.0.28 G; a fixed 120 px clipped them)
+    box.style.left = `${Math.max(4, Math.min(at.x, window.innerWidth - Math.max(220, box.offsetWidth) - 4))}px`;
+    box.style.top = `${Math.max(4, Math.min(at.y, window.innerHeight - box.offsetHeight - 4))}px`;
     box.querySelector("button").focus();
     setTimeout(() => document.addEventListener("click", (e) => { if (menu && !menu.el.contains(e.target)) closeMenu(false); }, { once: true }), 0);
   }
@@ -462,12 +800,15 @@
     if (host) mountBox(host);
   }
 
-  MK.usages = { copyWithContext, findUsages, selection, hunkRange };
+  MK.usages = { copyWithContext, findUsages, findCalls, selection, hunkRange };
   window.mokataIDE.register({
     id: "usages",
     commands: [
       { id: "usages.copyContext", title: "Copy with Context (selection, ACs, blast radius)", keys: "Alt+Shift+X", run: () => copyWithContext() },
       { id: "usages.find", title: "Find Usages (paged, every backend labelled)", keys: "Shift+F12", run: usagesHere },
+      // G-Q4: palette only — no keybinding.
+      { id: "usages.callers", title: "Find Callers (who calls the function at the caret)", run: () => callsHere("in") },
+      { id: "usages.callees", title: "Find Callees (what the function at the caret calls)", run: () => callsHere("out") },
     ],
   });
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", mount); else mount();

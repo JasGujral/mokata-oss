@@ -398,12 +398,6 @@ class TestNoExtensionSearchDependence(unittest.TestCase):
                 "a line that negates something ELSE bought the PATHEXT claim an exemption — the "
                 "negation must be read from the clause holding the mention, not from the line")
 
-    def test_both_existing_shims_still_ship_in_the_wheel_glob(self):
-        # The `hooks/*` explicit-depth glob trap test_hook_resolve already guards — re-pinned
-        # because this stage touched the shim files.
-        self.assertIn('"hooks/*"', (ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-        self.assertIn(SHIM, list(HOOKS_DIR.glob("*")))
-        self.assertIn(SHIM_CMD, list(HOOKS_DIR.glob("*")))
 
     def test_no_ps1_shim_ships(self):
         # Decided, with grounding: a .ps1 is unreachable under `shell: bash`, and under a

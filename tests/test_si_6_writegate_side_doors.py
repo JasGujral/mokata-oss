@@ -900,6 +900,20 @@ UNGATED_BY_DESIGN = {
         "mode — a monotonic counter has no CAS conflict to resolve, and un-approved rows do not "
         "belong in an approval ledger.",
     ("atomicfile.py", "atomic_write_text"): "the write PRIMITIVE itself — no target of its own",
+    ("winacl.py", "make_private_dir"): "0.0.28 C — the born-private DIRECTORY primitive (a 0700 / "
+        "one-ACE-DACL mkdir); no target of its own — every caller names the directory and is "
+        "registered for it (`safedir._step`, `usages.SpillWriter`)",
+    ("winacl.py", "_staged_create"): "0.0.28 C — macOS only: the private file is created in an "
+        "ACL-stripped stage directory under the SAME parent and linked into place; the "
+        "`create_private_file` primitive's own mechanism, no target of its own",
+    ("winacl.py", "_unlink"): "0.0.28 C — removes a file this module JUST created when it could "
+        "not be verified private (nothing left behind), or the volume probe's own two scratch files "
+        "(`_probe`, round 2: decided by behaviour); never a pre-existing entry",
+    ("cli_commands/diagnostics.py", "privacy_lines"): "0.0.28 C — `mokata doctor --fix`: the "
+        "human typed the flag. Re-creates mokata's OWN private-set records (server/bridge/trust "
+        "run-state, the mokata-written settings.local.json) born private with the EXACT bytes they "
+        "held — a permission repair, no content change; a file owned by another user is refused, "
+        "never adopted",
     ("atomicfile.py", "_replace"): "0.0.23 cut — the primitive's own rename, retried on Windows "
         "while another process holds the target; called only by `atomic_write_text`, no target "
         "of its own",
@@ -1068,9 +1082,13 @@ UNGATED_BY_DESIGN = {
         "stat-signature key and when it was taken) under temp_local/briefing/, written atomically by "
         "the detached refresher. Entirely derived; deleting it costs one 'being checked' briefing.",
     ("briefing_cache.py", "derived"):
-        "0.0.26 O12b — the memory-derived briefing lines (rules, the resume hint, 'changed since "
-        "last session') cached against EXACTLY the files they read (`derived.json` under "
-        "temp_local/briefing/). Never served stale: a moved input re-derives them. Derived only.",
+        "0.0.26 O12b — the memory-derived briefing lines (rules, 'changed since last session') "
+        "cached against EXACTLY the files they read (`derived.json` under temp_local/briefing/). "
+        "Never served stale: a moved input re-derives them. Derived only.",
+    ("briefing_cache.py", "store_resume"):
+        "0.0.28 F — the next-step answer (`resume.json` under temp_local/briefing/: one entry per "
+        "repo), keyed on exactly the paths `hints.derive` read; written atomically by the detached "
+        "refresher. Entirely derived; deleting it costs one derive in the hook.",
     ("briefing_cache.py", "_acquire"):
         "0.0.26 O12b — the briefing refresher's one-per-repo O_EXCL lock file under "
         "temp_local/briefing/; a stale one is taken over. Run-state only.",
@@ -1559,7 +1577,10 @@ DECLARED_CALLERS = {
     # which added four lines above this call site. RE-DERIVED by reading the line, not by
     # nudging the number until the sweep went quiet — which is what the failure message asks
     # for, and it is asking because somebody once did the other thing.
-    ("vault.py", "commit_push"): (("cli_commands/collab.py", 130), ("mcp/tools_share.py", 69)),
+    # ⚠ 69 -> 101 at 0.0.28 I2: `tools_share.py`'s tool signatures/docstrings were rewritten (schema
+    # metadata + Returns/Errors sections), which moved the call. RE-DERIVED with an AST walk for the
+    # `commit_push` call in that file (the `lambda: commit_push(...)` inside `_gated_write`).
+    ("vault.py", "commit_push"): (("cli_commands/collab.py", 130), ("mcp/tools_share.py", 101)),
     ("memory/vector.py", "PgVectorBackend.put"): (("memory/reembed.py", 124),),
 }
 
@@ -1774,16 +1795,35 @@ CALLER_PINS = {
     ("atomicfile.py", "_replace"): (
         ("atomicfile.py", "atomic_write_text"),
     ),
+    ("cli_commands/diagnostics.py", "privacy_lines"): (
+        ("cli_commands/diagnostics.py", "cmd_doctor"),
+    ),
+    ("winacl.py", "_staged_create"): (
+        ("winacl.py", "create_private_file"),
+    ),
+    ("winacl.py", "_unlink"): (
+        ("winacl.py", "_probe"),
+        ("winacl.py", "_staged_create"),
+        ("winacl.py", "create_private_file"),
+    ),
+    ("winacl.py", "make_private_dir"): (
+        ("explain/safedir.py", "_step"),
+        ("ide/usages.py", "SpillWriter.__init__"),
+    ),
     ("atomicfile.py", "atomic_write_text"): (
         ("branch_protection.py", "ProtectionCache.store"),
         ("briefing_cache.py", "derived"),
         ("briefing_cache.py", "store"),
+        ("briefing_cache.py", "store_resume"),
+        ("cli_commands/diagnostics.py", "privacy_lines"),
         ("committed_specs.py", "write_committed"),
         ("config_cmd.py", "config_set._commit"),
         ("flush_liveness.py", "store_state"),
         ("flush_liveness.py", "update_state"),
         ("govern/calibration.py", "save_cursor"),
         ("govern/secret_ignore.py", "_gated_write._commit"),
+        ("ide/bus.py", "ensure_bridge"),
+        ("ide/server.py", "_write_record"),
         ("ide/trust.py", "_write"),
         ("init.py", "InitPlan.write_files"),
         ("knowledge/anchor_fingerprints.py", "_write_record"),
@@ -1852,8 +1892,10 @@ CALLER_PINS = {
     ),
     ("briefing_cache.py", "derived"): (
         ("bootstrap.py", "_cached_changed_since"),
-        ("bootstrap.py", "_cached_resume_hint"),
         ("bootstrap.py", "_cached_rule_lines"),
+    ),
+    ("briefing_cache.py", "store_resume"): (
+        ("bootstrap.py", "refresh_resume_hint"),
     ),
     ("briefing_cache.py", "_acquire"): (
         ("briefing_cache.py", "refresh_main"),
@@ -2757,14 +2799,46 @@ class TestZeroBypass(unittest.TestCase):
         # summed): exactly 1 new receiver edge, `review_context.run_tests` calling `job.terminate()`
         # on the `WinJob` it just built (a Windows Job Object handle: TerminateJobObject/CloseHandle,
         # no file write); `productive` below is unchanged.
-        self.assertEqual(graph.receiver_calls, 217,
+        # 217 -> 216 AT 0.0.28 lane B (one process door), re-derived from `_write_closure()` (not
+        # summed; edge lists of master c83512d and the branch diffed): exactly 1 receiver edge
+        # gone, `ide/lsp.spawn_jobbed -> WinJob.terminate` — that second Job Object door was
+        # deleted and the one door (`quiet_spawn`) holds its job as an attribute, not a resolved
+        # receiver. The four `Host.start` edges only moved lines. No edge reaches a write, so
+        # `productive` below is unchanged.
+        # 216 -> 226 AT 0.0.28 lane G (LSP call hierarchy), re-derived from `_write_closure()` (not
+        # summed; edge lists of 4f45542 and the branch diffed): exactly 10 new receiver edges, all
+        # in `ide/features/lsp.py` / `ide/lsp.py` — `CallLines.want`/`.load` x2 each and `.line` x1
+        # (the bounded line reader: a read), `Host.recheck_trust` x4 (the trust re-read; stopping a
+        # server is a process signal, no file write) and `Host.server_for` x1. None reaches a
+        # write, so `productive` below is unchanged.
+        # 226 unchanged AT 0.0.28 lane C (file privacy), re-derived from `_write_closure()`: no
+        # receiver edge added or removed, but the spill directory is now born private —
+        # `SpillWriter.__init__` calls `winacl.make_private_dir` (UNGATED_BY_DESIGN, the owner-only
+        # mkdir primitive) — so `explain/runner.start`, which already resolved `SpillWriter(...)`,
+        # now reaches a registered writer and joins `productive`. No new write target: the same
+        # spill directory under temp_local/, created owner-only instead of 0700-after-the-fact.
+        # 226 -> 227 AT 0.0.28 lane F (spec leg), re-derived from `_write_closure()` (not summed;
+        # edge lists of bef5a59 and the branch diffed): exactly 1 new receiver edge,
+        # `merge_spec.corpus_fp -> StateStore.path` (a path computation for a read; no write), so
+        # `productive` below is unchanged.
+        # 227 AT the lane F rebase onto 0ac9554 (lane C landed), re-derived from `_write_closure()`
+        # on the rebased tree: C's change moved no receiver edge (226 on C) and F's one edge stands.
+        # 227 -> 240 AT 0.0.28 lane E1 (one key detector), re-derived from `_write_closure()` (not
+        # summed; edge lists of e4e1463 and the branch diffed): 13 new receiver edges over 11
+        # caller/target pairs, every one a call into the in-memory key walker
+        # `govern/secrets.KeyWalk` (`feed`/`peek`/`finish`/`hot`/`ran`, from `ide/context.py`
+        # `_key_lines` + `build_item` and `ide/usages.py` `pem_lines` + `pem_state_before`) or its
+        # run classifier `UnmarkedRun` (`feed`/`close`, from `_scan_key_material`). They hold
+        # lines and decide state; none writes, so `productive` below is unchanged.
+        self.assertEqual(graph.receiver_calls, 240,
                          "rule (e)'s resolution count moved; re-derive its yield before trusting "
                          "any number in the audit report that depends on it")
         productive = sorted({caller for caller, _ln, target in graph.receiver_edges
                              if target in reaching})
         self.assertEqual(
             productive,
-            [("explain/spill.py", "write"),        # P46 r5: P4's SpillWriter -> P4's _unlink
+            [("explain/runner.py", "start"),       # 0.0.28 C: SpillWriter.__init__ -> winacl.make_private_dir
+             ("explain/spill.py", "write"),        # P46 r5: P4's SpillWriter -> P4's _unlink
              ("govern/calibration.py", "observe"), ("harvest.py", "decide"),
              ("harvest.py", "harvest"), ("hook_cli.py", "user_prompt_submit_main"),
              ("ide/features/usages.py", "routes.store.close"),

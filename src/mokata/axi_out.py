@@ -29,22 +29,21 @@ _TEXT_FIELDS = ("remedy", "fix", "hint", "next", "message", "reason", "note", "n
 # A backticked mokata command (`mokata doctor`, `mokata approve --list`) — the exact-command form
 # every mokata remediation sentence already uses. The `/mokata:<name>` slash form counts too.
 _CMD = re.compile(r"`((?:mokata(?:-[a-z]+)?|/mokata:)[^`\n]*)`")
-_BARE = re.compile(r"(?<![\w/-])(mokata [a-z][a-z0-9-]*(?: [a-z][a-z0-9-]*)?(?: --?[a-z][\w-]*)*)")
 
 # The keys an empty result may explain itself with.
 _EMPTY_EXPLAINERS = ("message", "note", "reason", "hint", "empty_reason")
 
 
 def remedy_command(text: Any) -> Optional[str]:
-    """The first exact mokata command in `text` (backticked preferred), or None."""
+    """The first backticked mokata command in `text`, or None. Bare prose is never a command:
+    the old bare-text match turned the prose "not a mokata fault" into a command (0.0.28 lane I2)."""
     if not isinstance(text, str) or "mokata" not in text:
         return None
     m = _CMD.search(text)
     if m:
         cmd = m.group(1).strip().rstrip(".,;:")
         return cmd or None
-    m = _BARE.search(text)
-    return m.group(1).strip() if m else None
+    return None
 
 
 def _first_remedy(payload: Dict[str, Any], fields: Iterable[str] = _TEXT_FIELDS) -> Optional[str]:

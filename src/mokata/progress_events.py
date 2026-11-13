@@ -38,7 +38,7 @@ import os
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .errors import MokataError
 
@@ -136,6 +136,296 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# 0.0.28 F (round 3) — ONE parse of the progress log per SessionStart hook process. The start-up
+# path asks the log several "latest X" questions (the re-anchor's working set and position, the
+# current stage, the resume record, the next-step derivation's `hints._scan_log`) and each was a
+# fresh backward walk; on a log at its read bound that is the whole 8 MiB parsed five times. Inside
+# this scope every one of them shares one cache: the lines read so far (with their byte offsets,
+# parsed a block at a time — `_parse_rows`), extended DOWNWARD as a reader walks further than any
+# before it, and UPWARD by reading only the bytes appended since (the log is append-only —
+# `append_event` opens it "a"); the "latest stage of run R" readers share an index over it
+# (`ProgressLog.latest`) instead of a walk each. Anything else — a
+# new inode, a shorter file, an append that did not land on a line boundary — drops the cache and
+# re-reads, so the answer is always the uncached one. Scoped, not global: a long-lived process
+# (the IDE, the MCP server) never holds it, and the hook process exits right after.
+# The scope's flag lives in `log_read_scope` (the hook opens it without importing this module).
+from . import log_read_scope as _scope  # noqa: E402
+
+#: A non-blank line that is not a JSON object. `read_events_backward` skips it (degrade-clean);
+#: the next-step derivation (`hints._scan_log`) must SEE it — a damaged line in its window is a
+#: fault it reports — so the shared cache keeps it in place, marked.
+DAMAGED = object()
+
+
+def _cached_row(raw: bytes) -> Any:
+    """One line as the shared cache keeps it: the event, `DAMAGED`, or None for a blank line —
+    exactly what `_parse_line` decides, line by line. The reference `_parse_rows` must match."""
+    obj = _parse_line(raw)
+    if obj is not None:
+        return obj
+    return DAMAGED if raw.strip() else None
+
+
+_SCAN_ONCE = json.decoder.JSONDecoder().scan_once   # what `json.loads` runs, without its wrappers
+_EDGE_WS = " \t\r"                                 # json's own whitespace, less "\n" (no line has one)
+
+
+def _parse_rows(parts: List[bytes], off: int) -> List[Any]:
+    """`(offset, value)` for every non-blank line in `parts` (complete lines, oldest-first, the
+    first starting at byte `off`), each value exactly `_cached_row(line)`.
+
+    0.0.28 F round 4 — the per-line cost is the session-start budget on a log of short lines (8
+    MiB of 130-byte lines is 64.5k of them), and most of it was `json.loads`'s Python wrappers and
+    one UTF-8 decode per line. Here the block is decoded ONCE and split into its lines (a line
+    holds no newline, and UTF-8 never encodes one inside a multi-byte character, so the block
+    decodes iff every line does and splits into exactly these lines), and a line that starts with
+    `{` goes straight to the C scanner `json.loads` itself runs. That is `json.loads`'s own answer
+    whenever the scanner reads the whole line (trailing JSON whitespace allowed, as it allows): no
+    leading whitespace or BOM to skip, and an object is a dict. Every other line — and any line the
+    scanner raises on or does not finish — is decided by `_cached_row` itself."""
+    out: List[Any] = []
+    app = out.append
+    try:
+        lines = b"\n".join(parts).decode("utf-8").split("\n")
+    except UnicodeDecodeError:
+        lines = None
+    if lines is None:
+        for raw in parts:
+            val = _cached_row(raw)
+            if val is not None:
+                app((off, val))
+            off += len(raw) + 1
+        return out
+    scan = _SCAN_ONCE
+    for raw, line in zip(parts, lines):
+        val = _FALLBACK
+        if line[:1] == "{":
+            try:
+                obj, end = scan(line, 0)
+            except (ValueError, StopIteration):  # what scan_once raises; `_cached_row` decides
+                pass
+            else:
+                if end == len(line) or not line[end:].strip(_EDGE_WS):
+                    val = obj
+        if val is _FALLBACK:
+            val = _cached_row(raw)
+            if val is None:
+                off += len(raw) + 1
+                continue
+        app((off, val))
+        off += len(raw) + 1
+    return out
+
+
+_FALLBACK = object()
+
+
+def _index_row(ix: Dict[Any, List[Any]], row: Any) -> None:
+    obj = row[1]
+    if obj is not DAMAGED:
+        rid, typ = obj.get("run_id"), obj.get("type")
+        if isinstance(rid, str) and isinstance(typ, str):
+            ix.setdefault((rid, typ), []).append(row)
+
+
+def _fresh_entry(st: os.stat_result) -> Dict[str, Any]:
+    """`body`: the file's lines from its size at first read DOWNWARD, newest-first, extended a
+    block at a time. `head`: lines appended since, oldest-first. `ixb`/`ixh` index both by
+    `(run_id, type)` in the same orders; `ixn` is how many `body` rows `ixb` covers."""
+    return {"key": (st.st_dev, st.st_ino), "size": st.st_size, "lo": st.st_size, "carry": b"",
+            "body": [], "head": [], "ixb": {}, "ixh": {}, "ixn": 0}
+
+
+def _shared_entry(cache: Dict[str, Dict[str, Any]], path: str) -> Optional[Dict[str, Any]]:
+    """The cache entry for `path` brought up to the file's current size, or None if unreadable."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        cache.pop(path, None)
+        return None
+    ent = cache.get(path)
+    if ent is not None and (ent["key"] != (st.st_dev, st.st_ino) or st.st_size < ent["size"]):
+        ent = None
+    if ent is not None and st.st_size > ent["size"]:
+        old = ent["size"]
+        try:
+            with open(path, "rb") as fh:
+                fh.seek(max(0, old - 1))
+                data = fh.read(st.st_size - max(0, old - 1))
+        except OSError:
+            cache.pop(path, None)
+            return None
+        if old > 0:
+            lead, data = data[:1], data[1:]
+        else:
+            lead = b"\n"
+        if lead != b"\n" or not data.endswith(b"\n") or len(data) != st.st_size - old:
+            ent = None                              # not a clean append: read it again
+        else:
+            # appended rows go on the HEAD; a reader mid-walk keeps the size and head length it
+            # started with, so it sees the file as it was when it began, as uncached
+            rows = _parse_rows(data.split(b"\n")[:-1], old)
+            ent["head"].extend(rows)
+            for row in rows:
+                _index_row(ent["ixh"], row)
+            ent["size"] = st.st_size
+    if ent is None:
+        ent = _fresh_entry(st)
+    cache[path] = ent
+    return ent
+
+
+def _floor(size: int, byte_cap: Optional[int]) -> int:
+    return max(0, size - byte_cap) if byte_cap and byte_cap > 0 else 0
+
+
+def _below(off: int, floor: int) -> bool:
+    """A line starting here is outside the window: before the floor, or AT it when the floor is not
+    byte 0 (the uncached reader cannot tell that line from one the cap cut in half, so drops it)."""
+    return off < floor or (off == floor and floor > 0)
+
+
+def _extend_down(ent: Dict[str, Any], path: str, floor: int) -> bool:
+    """Read and parse one more block below everything cached (never below `floor`). False when the
+    cache already reaches the floor. Raises OSError as the read does."""
+    pos = ent["lo"]
+    if pos <= floor:
+        return False
+    step = min(_SCAN_BLOCK, pos - floor)
+    pos -= step
+    with open(path, "rb") as fh:
+        fh.seek(pos)
+        buf = fh.read(step) + ent["carry"]
+    parts = buf.split(b"\n")
+    carry = parts.pop(0)
+    rows = _parse_rows(parts, pos + len(carry) + 1)
+    if pos == 0 and carry:
+        rows[:0] = _parse_rows([carry], 0)
+    if pos == 0:
+        carry = b""
+    rows.reverse()
+    ent["body"].extend(rows)
+    ent["lo"], ent["carry"] = pos, carry
+    return True
+
+
+def shared_scan(path: str, byte_cap: Optional[int]):
+    """Inside `shared_backward_reads()`: `(size, rows)` — the log's size and a newest-first
+    iterator of its lines under `byte_cap`, each `(offset, event dict or DAMAGED)`. Outside it:
+    None (the caller reads the file itself). Raises OSError exactly as opening the file would."""
+    if _scope.SHARED is None:
+        return None
+    os.stat(path)                                   # absent / unreadable: the caller's own except
+    ent = _shared_entry(_scope.SHARED, path)
+    if ent is None:
+        raise OSError(f"{path} could not be read")
+    return ent["size"], _walk(None, path, byte_cap, True, ent)
+
+
+def _walk(cache: Optional[Dict[str, Dict[str, Any]]], path: str, byte_cap: Optional[int],
+          damaged: bool, ent: Optional[Dict[str, Any]] = None):
+    """`read_events_backward` over the shared cache — the same events, in the same order, under
+    the same byte cap. With `damaged`, `(offset, value)` pairs, `DAMAGED` lines included."""
+    if ent is None:
+        ent = _shared_entry(cache, path)
+        if ent is None:
+            return
+    size, head = ent["size"], ent["head"]
+    floor = _floor(size, byte_cap)
+    k = len(head)
+    while k:                                        # appended since: newest first
+        k -= 1
+        off, obj = head[k]
+        if _below(off, floor):
+            return
+        if damaged:
+            yield off, obj
+        elif obj is not DAMAGED:
+            yield obj
+    body = ent["body"]
+    i = 0
+    while True:
+        while i < len(body):
+            off, obj = body[i]
+            if _below(off, floor):
+                return
+            if damaged:
+                yield off, obj
+            elif obj is not DAMAGED:
+                yield obj
+            i += 1
+        try:
+            if not _extend_down(ent, path, floor):
+                return
+        except OSError:
+            if damaged:
+                raise                               # the derivation reports it, as uncached
+            return
+
+
+def _shared_latest(cache: Dict[str, Dict[str, Any]], path: str, run_id: str,
+                   types: Tuple[str, ...], byte_cap: Optional[int],
+                   where: Optional[Callable[[Dict[str, Any]], Any]]) -> Optional[Dict[str, Any]]:
+    """`ProgressLog.latest` over the shared cache's `(run_id, type)` index: the rows already
+    indexed answer in a lookup; only when none of them matches does the index grow (row by row,
+    newest-first, stopping at the first match) — so every row is indexed once per process, however
+    many readers ask."""
+    ent = _shared_entry(cache, path)
+    if ent is None:
+        return None
+    floor = _floor(ent["size"], byte_cap)
+
+    def newest(lists, rev):
+        best = None
+        for t in types:
+            rows = lists.get((run_id, t))
+            if not rows:
+                continue
+            for off, obj in (reversed(rows) if rev else rows):
+                if _below(off, floor):
+                    break
+                if where is None or where(obj):
+                    if best is None or off > best[0]:
+                        best = (off, obj)
+                    break
+        return best
+
+    hit = newest(ent["ixh"], True) or newest(ent["ixb"], False)
+    if hit is not None:
+        return hit[1]
+    body, ixb = ent["body"], ent["ixb"]
+    while True:
+        n = ent["ixn"]
+        try:
+            while n < len(body):                    # `_index_row`, inline: once per row
+                row = body[n]
+                n += 1
+                off, obj = row
+                if obj is DAMAGED:
+                    if _below(off, floor):
+                        return None
+                    continue
+                rid, typ = obj.get("run_id"), obj.get("type")
+                if rid.__class__ is str and typ.__class__ is str:
+                    k = (rid, typ)
+                    got = ixb.get(k)
+                    if got is None:
+                        ixb[k] = [row]
+                    else:
+                        got.append(row)
+                if _below(off, floor):
+                    return None
+                if rid == run_id and typ in types and (where is None or where(obj)):
+                    return obj
+        finally:
+            ent["ixn"] = n
+        try:
+            if not _extend_down(ent, path, floor):
+                return None
+        except OSError:
+            return None
+
+
 class ProgressLog:
     """Append-only progress-event log — the observability twin of `AuditLedger`."""
 
@@ -215,7 +505,30 @@ class ProgressLog:
 
         Bounded: never more than `byte_cap` bytes (falsy `byte_cap` = no cap). A line sliced in half
         by the cap is DROPPED rather than half-parsed. Degrade-clean, matching `read_events`: an
-        absent/unreadable file yields nothing, a corrupt line is skipped, nothing raises."""
+        absent/unreadable file yields nothing, a corrupt line is skipped, nothing raises.
+
+        Inside `log_read_scope.shared_backward_reads()` the parse is SHARED by every reader in the
+        process (see `_walk`); the answer is the same, only the work is not repeated."""
+        if _scope.SHARED is not None:
+            return _walk(_scope.SHARED, self.path, byte_cap, False)
+        return self._read_backward(byte_cap)
+
+    def latest(self, run_id: Optional[str], types: Tuple[str, ...],
+               byte_cap: Optional[int] = SCAN_BYTE_CAP,
+               where: Optional[Callable[[Dict[str, Any]], Any]] = None) -> Optional[Dict[str, Any]]:
+        """The NEWEST event of `run_id` whose `type` is one of `types` (and, given `where`, for
+        which `where(event)` is true), or None — the question every "what stage is this run in?"
+        reader asks. Exactly the first match of `read_events_backward`; inside the shared scope it
+        is answered from an index the readers share instead of a walk each (0.0.28 F round 4)."""
+        if _scope.SHARED is not None and isinstance(run_id, str):
+            return _shared_latest(_scope.SHARED, self.path, run_id, tuple(types), byte_cap, where)
+        for e in self.read_events_backward(byte_cap=byte_cap):
+            if e.get("run_id") == run_id and e.get("type") in types and \
+                    (where is None or where(e)):
+                return e
+        return None
+
+    def _read_backward(self, byte_cap: Optional[int]):
         try:
             fh = open(self.path, "rb")
         except OSError:
@@ -466,9 +779,10 @@ def current_stage(state_root: str, run_id: Optional[str], default: str = "develo
     if not run_id:
         return default
     try:
-        for e in ProgressLog.from_state_dir(state_root).read_events_backward():
-            if e.get("type") == STAGE_ENTER and e.get("run_id") == run_id and e.get("stage"):
-                return str(e["stage"])
+        e = ProgressLog.from_state_dir(state_root).latest(run_id, (STAGE_ENTER,),
+                                                         where=lambda e: e.get("stage"))
+        if e is not None:
+            return str(e["stage"])
     except Exception:
         return default
     return default

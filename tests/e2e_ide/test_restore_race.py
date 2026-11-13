@@ -49,6 +49,19 @@ class TheRestoreNeverLosesTheScreenThePersonPicked(H.IdeFlow):
         return self.page.evaluate("document.body.dataset.mode")
 
     def test_1_a_screen_picked_while_the_workspace_loads_survives_a_reload(self):
+        # 0.0.28 D — the race this lost 1 in 3 on the Linux runner: the restore put the SAVED screen
+        # back over the one picked meanwhile. It lost only when a saved screen existed — i.e. when
+        # the boot page's own debounced save had landed before the reload. That precondition is
+        # now made, not hoped for: the server holds "review" before the reload.
+        self.page.evaluate("MK.setMode('review')")
+        self.until("!!(window.MK && MK.ui && MK.ui.restored)", "the first restore")
+        self.page.evaluate("MK.saveView()")                 # one save (debounced 500 ms)
+        for _ in range(200):
+            if self.page.evaluate("fetch('/api/workspace').then(r => r.json()).then(w => w.mode)") == "review":
+                break
+            self.page.wait_for_timeout(50)
+        else:
+            self.fail("the server never held a saved screen")
         self.page.evaluate("localStorage.clear()")
         held, release = self._hold("**/api/workspace")
         self.page.reload()

@@ -71,25 +71,38 @@ def _replace(tmp: str, path: str, *, retries: Optional[int] = None,
 _TEMP_SEQ = [0]
 
 
-def _exclusive_temp(parent: str, prefix: str, suffix: str) -> "tuple":
-    """`tempfile.mkstemp`'s contract — a NEW file, created exclusively (O_EXCL), owner-only (0600),
+def _exclusive_temp(parent: str, prefix: str, suffix: str, private: bool = False) -> "tuple":
+    """`tempfile.mkstemp`'s contract — a NEW file, created exclusively (O_EXCL), 0600 on POSIX,
     binary, not inherited by children — without importing `tempfile` (which drags in `random`,
     `shutil`, `hashlib`…: ~8 ms of the synchronous `run-bind` hook's 50, 0.0.26 O3). The name is
-    pid + clock + a per-process counter; a collision just tries the next one."""
-    flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0) \
-        | getattr(os, "O_NOINHERIT", 0)
+    pid + clock + a per-process counter; a collision just tries the next one.
+
+    `private=True` (0.0.28 C1) creates it through `winacl.create_private_file` instead: readable by
+    this user ONLY from its first instant on every OS (a Windows file otherwise inherits its folder's
+    ACL; a macOS one an inheritable allow entry), verified on the handle. `winacl` is imported only
+    then, so an ordinary write (every hook) pays nothing for it."""
+    if private:
+        from . import winacl
+        create = winacl.create_private_file
+    else:
+        flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0) \
+            | getattr(os, "O_NOINHERIT", 0)
+
+        def create(name):
+            return os.open(name, flags, 0o600)
     for _ in range(10000):
         _TEMP_SEQ[0] += 1
         tmp = os.path.join(parent, f"{prefix}{os.getpid()}-{time.time_ns()}-{_TEMP_SEQ[0]}{suffix}")
         try:
-            return os.open(tmp, flags, 0o600), tmp
+            return create(tmp), tmp
         except FileExistsError:
             continue
     raise FileExistsError(f"no free temporary name in {parent}")
 
 
 def atomic_write_text(path: str, text: str, *, tmp_prefix: str = ".tmp-",
-                      tmp_suffix: str = ".tmp", newline: Optional[str] = None) -> None:
+                      tmp_suffix: str = ".tmp", newline: Optional[str] = None,
+                      private: bool = False) -> None:
     """Replace `path` with `text` atomically — a reader sees the whole old file or the whole new
     one, never a fragment, and a crash at any point leaves the previous content intact.
 
@@ -101,11 +114,15 @@ def atomic_write_text(path: str, text: str, *, tmp_prefix: str = ".tmp-",
 
     `newline` is passed to the text layer: `None` (the default) is the platform's translation, and
     `"\n"` writes LF on every OS — for a file that is COMMITTED, where a CRLF on Windows would churn
-    every diff (L7b's `.mokata/specs/`)."""
+    every diff (L7b's `.mokata/specs/`).
+
+    `private=True` is THE atomic door of the private set (0.0.28 C1, `winacl`): the temp file is BORN
+    readable by this user only and `os.replace` carries that descriptor onto `path`. Only a file whose
+    bytes are a token or the user's trust decision passes it."""
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
-    fd, tmp = _exclusive_temp(parent or ".", tmp_prefix, tmp_suffix)
+    fd, tmp = _exclusive_temp(parent or ".", tmp_prefix, tmp_suffix, private=private)
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline=newline) as fh:
             fh.write(text)

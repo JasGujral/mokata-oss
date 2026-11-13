@@ -8,8 +8,12 @@
                                done (the Activity drawer's "Open result")
   POST /api/jobs/{id}/cancel   stop it: the work stops at its next checkpoint, a subprocess is
                                killed, and the job is `cancelled` at once
-  POST /api/jobs/{id}/leave    `{client}`: this page no longer wants it (a superseded request); a
-                               query job nobody wants is cancelled, an index build keeps going
+  POST /api/jobs/{id}/leave    `{client, token}`: that one request of the page no longer wants it
+                               (superseded); a query job no request wants is cancelled, an index
+                               build keeps going. No token: 400 (there is no leave-the-whole-page)
+  POST /api/jobs/leave         `{client, token}`: the same, for a request superseded BEFORE the page
+                               learned its job (the page aborted the fetch): it leaves every job it
+                               is in, and a job it starts later never takes its want. No token: 400
 
 Progress arrives on `/api/events` as `job` events (<= 1 s apart while a job runs). The heavy core
 routes (`/api/graph`, `/api/query`, `/api/impact`, `/api/search`, `/api/meaning`, `/api/tree`)
@@ -165,6 +169,21 @@ def routes(reg: Any, ctx: Any) -> None:
             return _unknown(jid)
         b = await ctx.body(request)
         client = b.get("client") if isinstance(b.get("client"), str) else None
-        state.jobs.leave(job, client or request.headers.get("x-mokata-client"))
+        token = b.get("token") if isinstance(b.get("token"), str) else ""
+        if not token:
+            return JSONResponse({"error": "BadRequest", "note": "a leave names the request that "
+                                 "leaves: {client, token}"}, status_code=400)
+        state.jobs.leave(job, client or request.headers.get("x-mokata-client"), token[:64])
         return JSONResponse({"job": job.snapshot()})
     reg.register("/api/jobs/{id}/leave", leave, kind="action", feature="jobs")
+
+    async def leave_request(request: Any):
+        b = await ctx.body(request)
+        client = b.get("client") if isinstance(b.get("client"), str) else None
+        token = b.get("token") if isinstance(b.get("token"), str) else ""
+        if not token:
+            return JSONResponse({"error": "BadRequest", "note": "a leave names the request that "
+                                 "leaves: {client, token}"}, status_code=400)
+        state.jobs.leave_request(client or request.headers.get("x-mokata-client"), token[:64])
+        return JSONResponse({"left": True})
+    reg.register("/api/jobs/leave", leave_request, kind="action", feature="jobs")

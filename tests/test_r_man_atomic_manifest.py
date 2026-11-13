@@ -294,10 +294,6 @@ OUT_OF_SCOPE = {
         "Already atomic (temp + os.replace). 0.0.22 E2 — the capped snapshot timeline, not the manifest.",
     ("ide/snapshots.py", "capture_before_first_write"):
         "Already atomic (temp + os.replace). 0.0.22 E2 — the per-session first-write index, not the manifest.",
-    ("ide/bus.py", "ensure_bridge"):
-        "Already atomic (temp + os.replace), mode 0600. 0.0.25 ID.S3 — the IDE live-bridge record (port + hook token) under temp_local/ide/, not the manifest.",
-    ("ide/server.py", "_write_record"):
-        "Already atomic (temp + os.replace), mode 0600. 0.0.22 E2 — the review-window server record, not the manifest.",
     ("ide/statedir.py", "note_repo"):
         "0.0.26 P29 — a one-line `repo.txt` label in the USER's ~/.mokata/ide-repos/<key>/ naming the "
         "repo an un-set-up repo's IDE state belongs to. Never the manifest; never in the repo.",
@@ -467,8 +463,8 @@ class TestAtomicfileContract(unittest.TestCase):
         opened = []
         real = atomicfile._exclusive_temp
 
-        def spy(parent, prefix, suffix):
-            fd, tmp = real(parent, prefix, suffix)
+        def spy(parent, prefix, suffix, **kw):
+            fd, tmp = real(parent, prefix, suffix, **kw)
             opened.append(tmp)
             return fd, tmp
 

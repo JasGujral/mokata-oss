@@ -33,10 +33,34 @@ Everything runs **on your machine, as you**. Nothing runs on a mokata server, be
 
 - **Your repo:** `.mokata/`. The manifest and constitution are committed. Everything mutable lives
   under `.mokata/temp_local/`, which is gitignored: memory, the audit ledger, run state and caches.
-- **Your home directory:** `~/.mokata/`. It holds the hook spool (owner-only), the cached plugin
-  root and the IDE's per-repo state for repos mokata is not set up in.
+- **Your home directory:** `~/.mokata/`. It holds the hook spool (0600 files in a 0700 folder on
+  macOS and Linux; your profile's access on Windows), the cached plugin root and the IDE's per-repo
+  state for repos mokata is not set up in.
 - **Claude Code's settings:** only through `mokata setup claude`, which previews the change and
   asks first. The plugin route needs no settings write.
+
+### Files only you can read
+
+A few files hold a secret or a decision that is yours alone: the IDE server record (its pairing
+token), the IDE bridge record (the hook token), `.claude/settings.local.json` when `--ide-bridge` or
+`--http-gates` writes that token into it, your workspace-trust record, and the IDE's spill and
+explainer-review scratch. Each is **created** readable by you only, on every OS: on Windows with an
+access list that has one entry, yours (no SYSTEM or Administrators entry; backup software and
+Defender can still read files, and an administrator can take ownership); on macOS and Linux with
+mode 0600 / 0700, and on macOS with no inherited ACL entry. Nothing else mokata writes is made
+private.
+
+- **A file planted at one of these paths** (owned by someone else, or readable by others) is
+  refused, never used.
+- **A volume that cannot hold privacy** (FAT, exFAT, an SMB/CIFS share, WSL2's `/mnt/c`, ntfs-3g, a
+  macOS volume that ignores ownership — mokata tells by what the volume does with a file's mode, not
+  by its name): mokata still works there, and `mokata doctor` says "this volume has no access control: private files are
+  as private as the disk". It never claims otherwise.
+- **`mokata doctor`** lists these files with their state. `mokata doctor --fix` re-protects one of
+  yours that became readable by others, keeping its exact bytes (your token and trust decision are
+  unchanged, so the gate keeps working). It never changes a file someone else owns.
+- **Claude Code's worktree copy** of `settings.local.json` (`.worktreeinclude`) is made by Claude
+  Code, not mokata; `mokata doctor` lists each copy and `--fix` re-protects it.
 - **Every durable write** to memory, code, config or a remote goes through **one** human gate: it
   is previewed, it needs explicit approval, it is secret-scanned and it is ledgered.
 
@@ -169,9 +193,11 @@ its shell out of the decision. It cannot protect a terminal the agent already co
 
 ## Workspace trust and language servers
 
-The window's code intelligence (hover, definition, references, symbols, diagnostics) comes from the
-project's own language servers through a **read-only** bridge: only an allowlist of read methods is
-ever sent, and a server's own request to apply an edit is answered "not applied". A language server
+The window's code intelligence (hover, definition, symbols, diagnostics in the Language panel;
+references in Find Usages; the call hierarchy — who calls a function, what it calls — in Find Usages'
+Callers / Callees tabs) comes from the project's own language servers through a **read-only** bridge:
+only an allowlist of read methods is ever sent (the call hierarchy adds three reads:
+`textDocument/prepareCallHierarchy`, `callHierarchy/incomingCalls`, `callHierarchy/outgoingCalls`), and a server's own request to apply an edit is answered "not applied". A language server
 **runs the repo's code** — `rust-analyzer` runs `build.rs` and proc macros, `gopls` runs Go tooling,
 tsserver loads plugins from `node_modules`, pyright follows the config to a venv — so none is started
 until a human marks the workspace **trusted**. That decision is gated like an approval: in the window

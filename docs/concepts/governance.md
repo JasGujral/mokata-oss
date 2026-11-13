@@ -362,8 +362,9 @@ them mutate the state they show:
 - **The gated merge.** A session worktree's branch lands in the main checkout's branch only
   through `mokata worktree merge` (or Merge… under the IDE's Sessions › Worktree, or the `worktree_merge`
   MCP tool — one implementation): the full suite must have passed with mokata's runner AT the
-  branch's head on a clean tree, every acceptance criterion must have a passing test, and the review
-  must have passed at that head. Then **you** approve exactly that merge in your own terminal
+  branch's head on a clean tree, every acceptance criterion must have a passing test, the spec legs
+  (spec-awareness and spec-drift) must not block at that head — a leg with nothing to check is shown
+  as **NOT CHECKED**, never as passed — and the review must have passed at that head. Then **you** approve exactly that merge in your own terminal
   (`mokata approve <id>`; an in-chat approval does not count). It runs none of the repo's hooks,
   filters, merge drivers or signing programs, and moves the branch by compare-and-swap, so a branch
   that moved after your approval is refused, not merged. With no mokata run bound to the worktree,

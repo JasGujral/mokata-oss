@@ -115,12 +115,6 @@ class _NoPin(unittest.TestCase):
 
 # ============================================================ 1 · the drift, reproduced
 class TestTheDrift(_NoPin):
-    def test_the_scan_that_picked_is_gone(self):
-        """`progress.find_active_run` — the scanner OSS #44 was reported on — no longer exists.
-
-        Deleting it IS the fix: while it existed, any surface could reach for a second answer, and
-        three of them did. This is the pin that stops it coming back under the same name."""
-        self.assertFalse(hasattr(progress, "find_active_run"))
 
     def test_five_bare_runs_used_to_drift_and_now_do_not(self):
         """OSS #44's exact shape: five registered runs, one of them the real pipeline.

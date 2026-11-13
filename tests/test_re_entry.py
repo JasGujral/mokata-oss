@@ -387,8 +387,13 @@ class TestTheFiledResidual(_Base):
     def test_the_model_still_cannot_mint_consent(self):
         d = _pipeline_repo()
         _re_enter(d, "runB")
-        out = call_planned(TS.spec_emit, path=d, title="s2", criteria=C2, tests=T2, approach="A1",
-                           approve=True, confirm=True)
+        # 0.0.28 I2: `approve`/`confirm` are deleted, so the model has no argument that mints
+        # consent: a direct call raises TypeError (over MCP: refused invalid_input), and a plain
+        # call only ever proposes.
+        with self.assertRaises(TypeError):
+            call_planned(TS.spec_emit, path=d, title="s2", criteria=C2, tests=T2, approach="A1",
+                         approve=True, confirm=True)
+        out = call_planned(TS.spec_emit, path=d, title="s2", criteria=C2, tests=T2, approach="A1")
         self.assertEqual(out["status"], "proposed")
         self.assertFalse(out["committed"])
 

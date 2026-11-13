@@ -59,6 +59,7 @@ _SKIP_DIRS = {"__pycache__", ".git", ".mokata", "node_modules", ".venv", "venv"}
 #: in a guard whose whole output is a list of things a human must now go and change.
 _SUBPROCESS_MODULES = frozenset({"subprocess", "sp"})
 _SPAWNERS = frozenset({"run", "Popen", "call", "check_call", "check_output"})
+_DOOR_SPAWNERS = frozenset({"run_jobbed", "spawn_jobbed"})
 
 # --------------------------------------------------------------------- the System32 shadow set
 #
@@ -226,7 +227,13 @@ def _is_spawn(node):
     if not isinstance(node, ast.Call):
         return False
     mod, attr = _callee(node)
-    return mod in _SUBPROCESS_MODULES and attr in _SPAWNERS
+    if mod in _SUBPROCESS_MODULES and attr in _SPAWNERS:
+        return True
+    # 0.0.28 — B's process door spawns too: `quiet_spawn.run_jobbed([...])` and a bare imported
+    # `spawn_jobbed([...])` hand argv[0] to CreateProcess exactly as `subprocess.run` does, so a
+    # spawn routed through the door must not vanish from this check (lane I round 2 found `gh` gone
+    # from the reviewed set the moment `branch_protection` moved onto the door).
+    return attr in _DOOR_SPAWNERS and mod in ("quiet_spawn", None)
 
 
 # ------------------------------------------------------------------ CAUSE A — bare-name argv[0]

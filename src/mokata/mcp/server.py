@@ -23,7 +23,7 @@ from typing import Any, Callable, Dict, List, Optional
 from ..axi_out import with_remedy
 from . import status as _status
 from .registry import SERVER_NAME, TOOLS
-from .validation import ValidationError, refusal, validate_surface_params
+from .validation import ValidationError, refusal, validate_call, validate_surface_params
 # tools_read / tools_write / tools_approve populate the shared TOOLS registry as an import side
 # effect (tools_approve = AP-MCP's default-off in-chat `approve` tool).
 from . import tools_read, tools_write, tools_approve  # noqa: F401
@@ -55,31 +55,61 @@ def _call_path(args: tuple, kwargs: dict) -> str:
     return "."
 
 
+_NOT_INITIALIZED_SAID = threading.Event()
+
+#: The one startup line for a repo without `mokata init` (0.0.28 I1, H9). Fixed text: no path.
+NOT_INITIALIZED_NOTICE = ("mokata-mcp: mokata is not initialized here; state tools will refuse "
+                          "until `mokata init`")
+
+
 def _register_this_window(path: str) -> None:
     """Self-register / refresh THIS MCP process in the MS.S2 live-session registry (R-MCP).
 
     `session_registry.touch` is an idempotent UPSERT-SELF, so the FIRST tool call registers this
     run (session_id/run_id + pid + repo_root + last_seen — the existing MS.S2 `_ENTRY_FIELDS`, no
-    new field) and every subsequent call refreshes it. Lazy by construction: this only ever runs
-    from `_with_registration`, i.e. when a tool is actually SERVED — never at import or startup.
+    new field) and every subsequent call refreshes it.
 
-    Degrade-clean and D5-classed: a registry failure is `note_degraded` ONCE, loudly (the hook then
-    stays fail-open on ambiguity, exactly as before this stage), then swallowed — self-registering
-    this window must NEVER break the tool call the user asked for. The class is broad on purpose:
-    `touch` spans identity minting, PID/OS probing, and cross-process-locked transient-file IO, and
-    none of that is worth failing a user's tool call over."""
+    0.0.28 I1 (H9, `MCP-NOT-INITIALIZED-READS-AS-SERVER-FAULT`) — a repo that was never `mokata
+    init`-ed is NOT a degraded registry. Every Claude Code start in such a checkout used to log
+    `session-registry: DEGRADED … check permissions/disk under .mokata/temp_local/`: the wrong cause
+    and the wrong fix. It now says, ONCE per process, that mokata is not initialized here, and skips
+    registration (there is no state to register into).
+
+    Degrade-clean and D5-classed otherwise: a real registry failure is `note_degraded` ONCE, loudly
+    and with its `detail` (the hook then stays fail-open on ambiguity), then swallowed —
+    self-registering this window must NEVER break the tool call the user asked for. The class is
+    broad on purpose: `touch` spans identity minting, PID/OS probing, and cross-process-locked
+    transient-file IO, and none of that is worth failing a user's tool call over."""
+    from ..config import ConfigError, Surface, NOT_INITIALIZED
     try:
-        from ..config import Surface
-        from .. import session_registry as SR
-        SR.touch(Surface.load(path))
+        surface = Surface.load(path)
+    except ConfigError as exc:
+        if getattr(exc, "kind", "") == NOT_INITIALIZED:
+            if not _NOT_INITIALIZED_SAID.is_set():
+                _NOT_INITIALIZED_SAID.set()
+                sys.stderr.write(NOT_INITIALIZED_NOTICE + "\n")
+                sys.stderr.flush()
+            return
+        _registry_degraded(exc)
+        return
     except Exception as exc:  # noqa: BLE001 - the contract IS broad (see docstring); it SPEAKS.
-        from ..degrade import FAILURE_LOCAL_IO, note_degraded
-        note_degraded(
-            "session-registry", FAILURE_LOCAL_IO,
-            fallback="this window is not recorded in the live-session registry; the run-state gate "
-                     "stays fail-open when this repo has ambiguous run state",
-            fix="check permissions/disk under `.mokata/temp_local/`, then run `mokata doctor`",
-            detail=str(exc))
+        _registry_degraded(exc)
+        return
+    try:
+        from .. import session_registry as SR
+        SR.touch(surface)
+    except Exception as exc:  # noqa: BLE001 - the contract IS broad (see docstring); it SPEAKS.
+        _registry_degraded(exc)
+
+
+def _registry_degraded(exc: BaseException) -> None:
+    from ..degrade import FAILURE_LOCAL_IO, note_degraded
+    note_degraded(
+        "session-registry", FAILURE_LOCAL_IO,
+        fallback="this window is not recorded in the live-session registry; the run-state gate "
+                 "stays fail-open when this repo has ambiguous run state",
+        fix="check permissions/disk under `.mokata/temp_local/`, then run `mokata doctor`",
+        detail=str(exc))
 
 
 # ======================================================================================
@@ -203,7 +233,19 @@ def _as_error(op: str, exc: BaseException) -> Dict[str, Any]:
     another mokata process (a hook, the CLI, another window) held the same state for longer than
     the bounded wait. Nothing is waited on indefinitely, and the agent can tell "busy, retry" from
     "the server broke" by `retryable` alone."""
+    from ..config import ConfigError, NOT_INITIALIZED
     from ..oslock import LockTimeout
+    if isinstance(exc, ConfigError) and getattr(exc, "kind", "") == NOT_INITIALIZED:
+        # 0.0.28 I1 (H9) — a setup fault, not a server fault: `refused` with its fix, never
+        # `error` + "retry" (a retry cannot succeed). Fixed text: the exception's own message
+        # carries the absolute repo path, so it is never rendered.
+        return {
+            "status": _status.REFUSED, "isError": False, "operation": op, "committed": False,
+            "retryable": False, "reason_code": "not-initialized",
+            "reason": "mokata is not initialized in this repo",
+            "hint": "run `mokata init` in the repo root, then re-call",
+            "remedyCommand": "mokata init",
+        }
     if isinstance(exc, LockTimeout):
         return {
             "status": _status.ERROR, "isError": True, "operation": op, "committed": False,
@@ -431,6 +473,27 @@ def _finish(call: _Call) -> None:
             del _INFLIGHT[call.key]
 
 
+_TOOL_LIMITER: Any = None
+
+
+def _tool_limiter() -> Any:
+    """0.0.28 I1 (H2, `MCP-SHARED-POOL`) — the tool workers' OWN capacity limiter, unbounded.
+
+    anyio's default thread limiter (40 tokens) is the one the SDK's stdio reader and writer use for
+    every `readline`/`write` (`anyio.wrap_file`). A tool worker holds its token across the reply
+    budget, so 40 slow calls left the transport unable to READ: measured, `ping` took 7 s behind 45
+    slow calls. Tool work now draws from a separate, INFINITE limiter: a call always gets a thread at
+    once (the token is taken before `_serve`'s budget clock starts, so a finite limiter would queue a
+    call with no answer at all), and the transport keeps the default one to itself. No cap is added
+    (doc 84 OSS-46: no timeouts, no caps)."""
+    global _TOOL_LIMITER
+    if _TOOL_LIMITER is None:
+        import math
+        import anyio
+        _TOOL_LIMITER = anyio.CapacityLimiter(math.inf)
+    return _TOOL_LIMITER
+
+
 def _offloop(served: Callable[..., Any]) -> Callable[..., Any]:
     """O14 — the handler FastMCP registers: async, and it runs `_serve` on a worker thread, so the
     event loop (pings, cancellations, every other parallel call) never waits on a tool body.
@@ -440,7 +503,7 @@ def _offloop(served: Callable[..., Any]) -> Callable[..., Any]:
     async def handler(*args: Any, **kwargs: Any) -> Any:
         import anyio
         return await anyio.to_thread.run_sync(functools.partial(served, *args, **kwargs),
-                                              abandon_on_cancel=True)
+                                              abandon_on_cancel=True, limiter=_tool_limiter())
     return handler
 
 
@@ -710,6 +773,69 @@ def _public_module() -> Any:
     return sys.modules.get("mokata.mcp_server", sys.modules[__name__])
 
 
+_FRONT_DOOR_CLASS: Any = None
+
+
+def _mokata_fastmcp() -> Any:
+    """`_MokataFastMCP` — FastMCP with mokata's FRONT DOOR on `call_tool` (0.0.28 I1,
+    `MCP-FIRST-CALL-FAILS`). Built lazily: the SDK stays a lazy import.
+
+    `call_tool` runs `validation.validate_call` against the tool's LIVE input schema (what the
+    client was shown) BEFORE FastMCP's own pre-parse, so an unknown argument name is refused with
+    the name it probably meant instead of being silently dropped, a missing required argument is
+    refused instead of defaulting into an empty write, and an ambiguous boolean is refused instead
+    of being guessed. Any `ToolError` FastMCP still raises from a pydantic validation error (a
+    nested item of the wrong shape) becomes the SAME `refused` result — never the raw SDK text."""
+    global _FRONT_DOOR_CLASS
+    if _FRONT_DOOR_CLASS is not None:
+        return _FRONT_DOOR_CLASS
+    from mcp.server.fastmcp import FastMCP
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    class _MokataFastMCP(FastMCP):
+        async def call_tool(self, name: str, arguments: Dict[str, Any]) -> Any:
+            tool = self._tool_manager.get_tool(name)
+            if tool is None:
+                return await super().call_tool(name, arguments)
+            try:
+                served = validate_call(name, tool.parameters, arguments)
+            except ValidationError as bad:
+                return tool.fn_metadata.convert_result(with_remedy(refusal(bad, name)))
+            try:
+                return await super().call_tool(name, served)
+            except ToolError as exc:
+                bad = _pydantic_fault(exc, tool.parameters)
+                if bad is None:
+                    raise
+                return tool.fn_metadata.convert_result(with_remedy(refusal(bad, name)))
+
+    _FRONT_DOOR_CLASS = _MokataFastMCP
+    return _MokataFastMCP
+
+
+def _pydantic_fault(exc: BaseException, schema: Dict[str, Any]) -> Optional[ValidationError]:
+    """The caller-side field a pydantic validation error names, as mokata's `ValidationError`, or
+    None when the `ToolError` was not an argument fault. Never carries pydantic's text (it quotes the
+    input value)."""
+    from .validation import _type_hint
+    cause = exc.__cause__
+    try:
+        import pydantic
+    except ImportError:                                   # pragma: no cover - the SDK requires it
+        return None
+    if not isinstance(cause, pydantic.ValidationError):
+        return None
+    errors = cause.errors(include_input=False, include_url=False)
+    loc = errors[0].get("loc") if errors else ()
+    field = str(loc[0]) if loc else "arguments"
+    props = (schema or {}).get("properties") or {}
+    hint = _type_hint(props[field]) if field in props else "<see the tool's inputSchema>"
+    where = ".".join(str(p) for p in loc[1:])
+    return ValidationError(field, ("has the wrong shape" + (f" at `{where}`" if where else "")
+                                   + f"; expected {hint}"),
+                           accepted=sorted(props), retry_with={field: hint})
+
+
 def build_server() -> Any:
     """Construct the FastMCP server with every tool registered.
 
@@ -739,7 +865,10 @@ def build_server() -> Any:
 
     from .tool_annotations import annotations_for, description_for
 
-    server = FastMCP(SERVER_NAME)
+    # 0.0.28 I1 (H3, `MCP-STDERR-WEDGE`) — WARNING, not the SDK's INFO: steady-state serving
+    # writes NOTHING to stderr per request. A client that does not drain stderr froze the server at
+    # call ~1500 (a full pipe blocks the logging write on the event loop).
+    server = _mokata_fastmcp()(SERVER_NAME, log_level="WARNING")
     for spec in TOOLS:
         # MCP-R.D0: every served tool call rides `_serve` — self-registers this window (R5), runs
         # under the MCP-surface budget (R1), and returns a single-vocab structured status (R2/R3/R6).
@@ -753,10 +882,133 @@ def build_server() -> Any:
         server.add_tool(_offloop(_serve(spec.fn, name=spec.name, kind=spec.kind)), name=spec.name,
                         description=description_for(spec.kind, spec.name, spec.fn.__doc__ or ""),
                         annotations=ToolAnnotations(**annotations_for(spec.kind, spec.name)))
+    # 0.0.28 I2 (`tools/list` budget) — pydantic stamps a `title` on every schema node that only
+    # restates the parameter's own name ("path" -> "Path"); a model learns nothing from it and it
+    # was ~1 in 6 bytes of `tools/list`. Validation never reads it (the front door reads types,
+    # enums and `required`; FastMCP validates against its own arg model).
+    for tool in server._tool_manager.list_tools():
+        _drop_titles(tool.parameters)
     return server
 
 
+def _drop_titles(node: Any) -> None:
+    """Remove pydantic's generated `title` from every schema node, in place. A `properties` map is
+    names -> schemas, so a parameter NAMED `title` (spec_emit's) is kept; only schema keys go."""
+    if isinstance(node, list):
+        for item in node:
+            _drop_titles(item)
+        return
+    if not isinstance(node, dict):
+        return
+    if isinstance(node.get("title"), str):
+        del node["title"]
+    for key, value in node.items():
+        if key in ("properties", "$defs") and isinstance(value, dict):
+            for sub in value.values():
+                _drop_titles(sub)
+        else:
+            _drop_titles(value)
+
+
+# ======================================================================================
+# 0.0.28 I1 — the protocol owns fds 0 and 1 from the first instruction of `main()`
+# ======================================================================================
+# `MCP-STDIN-INHERITED` (H1): fd 1 was parked (O14) but fd 0 — the JSON-RPC INPUT — was not, and a
+# child process inherits fd 0. Twelve `subprocess.run` sites pass no `stdin=`; nine are reachable from
+# a tool. On the CLI such a child gets the user's TTY; under MCP it got the protocol pipe, and a child
+# that reads one line (a git hook, a credential helper, `core.fsmonitor`) swallowed the next request:
+# measured, one `tools/call` lost in 5 of 5 trials, never answered. Parking fd 0 FIRST — before any
+# startup child (the registration thread, the runtime record, the code-graph pool) can be spawned —
+# means no child the server starts can ever see the protocol input. It reads EOF instead.
+#
+# The child-prompt env covers what fd 0 cannot: `/dev/tty` prompts (git credentials, ssh), which a
+# child opens directly. The CLI twin works there because the user can answer; an MCP child blocks.
+
+#: Set in the server's own environment at startup, so every child inherits them. `GIT_SSH_COMMAND` is
+#: set only when unset (a user's own ssh command is kept); the rest are forced.
+CHILD_PROMPT_ENV = {"GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "", "SSH_ASKPASS_REQUIRE": "never"}
+CHILD_SSH_COMMAND = "ssh -o BatchMode=yes"
+
+
+def _disable_child_prompts() -> None:
+    import os
+    os.environ.update(CHILD_PROMPT_ENV)
+    os.environ.setdefault("GIT_SSH_COMMAND", CHILD_SSH_COMMAND)
+
+
+def _park_stdin() -> Optional[int]:
+    """Move the JSON-RPC input to a private, non-inheritable descriptor and point fd 0 (and, on
+    Windows, the process's STD_INPUT_HANDLE, which is what `subprocess` actually hands a child) at
+    the null device. Returns the private descriptor, or None when fd 0 is closed or unusable — the
+    server is then served as-is, exactly as the fd-1 fallback does."""
+    import os
+    try:
+        rpc_in = os.dup(0)                    # `os.dup` gives a non-inheritable descriptor
+    except (OSError, ValueError):
+        return None
+    try:
+        null = os.open(os.devnull, os.O_RDONLY)
+        try:
+            os.dup2(null, 0)
+        finally:
+            os.close(null)
+        if os.name == "nt":
+            _windows_set_std_input()
+        sys.stdin = open(os.devnull, "r", encoding="utf-8")
+    except (OSError, ValueError):
+        try:
+            os.dup2(rpc_in, 0)                # put it back: never leave fd 0 half-parked
+        except OSError:
+            pass
+        os.close(rpc_in)
+        return None
+    return rpc_in
+
+
+def _windows_set_std_input() -> None:
+    """Windows: CPython's `subprocess` takes a child's stdin from `GetStdHandle`, not from CRT fd 0,
+    so the park also points STD_INPUT_HANDLE at fd 0's (now NUL) handle."""
+    import ctypes
+    import msvcrt
+    handle = msvcrt.get_osfhandle(0)
+    ctypes.windll.kernel32.SetStdHandle(ctypes.c_uint32(0xFFFFFFF6),   # STD_INPUT_HANDLE (-10)
+                                        ctypes.c_void_p(handle))
+
+
+def _park_stdout() -> Optional[int]:
+    """O14 — duplicate the real stdout to a private fd only the transport writes, and point fd 1
+    (plus `sys.stdout`) at stderr, where a stray write is harmless log noise. None when there is no
+    usable stderr descriptor to park fd 1 on (a windowless launcher)."""
+    import os
+    try:
+        sys.stdout.flush()
+        rpc_out = os.dup(sys.stdout.fileno())
+        os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
+    except (AttributeError, OSError, ValueError):
+        return None
+    sys.stdout = sys.stderr
+    return rpc_out
+
+
+def _unpark(rpc_in: Optional[int], rpc_out: Optional[int]) -> None:
+    """Put parked descriptors back on fds 0/1 — for the paths that serve as the SDK does (or not at
+    all), so nothing is left half-parked."""
+    import os
+    if rpc_in is not None:
+        os.dup2(rpc_in, 0)
+        os.close(rpc_in)
+        if os.name == "nt":
+            _windows_set_std_input()
+        sys.stdin = sys.__stdin__
+    if rpc_out is not None:
+        os.dup2(rpc_out, 1)
+        os.close(rpc_out)
+        sys.stdout = sys.__stdout__
+
+
 def main(argv: Optional[List[str]] = None) -> int:
+    # 0.0.28 I1 — FIRST: the protocol input leaves fd 0 before anything else can spawn a child.
+    rpc_in = _park_stdin()
     import argparse
     parser = argparse.ArgumentParser(
         prog="mokata-mcp",
@@ -769,43 +1021,30 @@ def main(argv: Optional[List[str]] = None) -> int:
     # action fires during `parse_args`, ahead of the `mcp_available()` SDK check below, so the
     # probe target never hangs and never needs MCP deps (works in a stripped env). A server that
     # PREDATES this flag rejects it with exit 2 — and that failure is itself the staleness signal.
+    # (It prints to the REAL stdout: fd 1 is parked only after argument parsing.)
     from .. import __version__
     parser.add_argument("--version", action="version", version=__version__)
     args = parser.parse_args(argv)
 
     # Fail LOUD, not dead (Stage 3b.1) — and, since MCP-SDK-2-BREAKS-THE-SERVER, fail loud about
-    # the RIGHT THING. Rather than let build_server() raise an uncaught traceback — which Claude
-    # Code surfaces only as a failed/absent server the user can't diagnose — name the cause and a
-    # remedy on stderr and exit non-zero.
-    #
-    # ⚠ This branch used to hardcode ONE message: "the MCP SDK is not installed … reinstall
-    # mokata". Under `mcp` 2.0.0 every clause of it was false — the SDK was installed, and the
-    # reinstall re-resolved the same broken version, so the remedy was a loop. The message is now
-    # the STATE's own (`diagnosis()`), which is why absent, incompatible and broken can no longer
-    # be told the same thing. Gated on the disposition, not on a bool, so the text and the refusal
-    # can never come from different reads (doc 85 §7g).
+    # the RIGHT THING: the message is the SDK state's own (`diagnosis()`), so absent, incompatible
+    # and broken can never be told the same thing (doc 85 §7g).
     state = _public_module().sdk_state()
     if not state.usable:
+        _unpark(rpc_in, None)
         sys.stderr.write(f"mokata-mcp: {state.diagnosis()}\n")
         return 1
 
-    # RUN-ID-DRIFT — register this window EAGERLY, at process start, BEFORE serving anything.
-    #
-    # The comment above `_register_this_window` has always claimed registry liveness is "a STRUCTURAL
-    # fact, not a user-dependent one". It was not: registration fired from `_serve`, i.e. on the FIRST
-    # TOOL CALL the server happened to serve. A window the user had opened but not yet asked mokata
-    # anything therefore had only the row its SessionStart hook wrote — and that hook process exits
-    # within a second, so a sibling window read the row's pid as dead, PRUNED it, and `live_runs`
-    # returned [] with no live sibling to find. Every narrowing that depends on the registry
-    # (`resolve_run`'s LIVE rung, the gate hook's ambiguity narrowing, the badge's display filter)
-    # silently lost the one signal that could have disambiguated the repo. Registering here makes
-    # the claim true: a window is in the registry from the moment its server exists.
-    #
-    # Same call, same degrade posture (`_register_this_window` is D5-classed and swallows), and it
-    # runs BEFORE `.run()` blocks on stdio, so a slow registry delays startup rather than a user's
-    # tool call — the reverse of R5's tradeoff, and the right way round at startup. `_serve` still
-    # re-registers per call, which is now a REFRESH (`last_seen`/phase) rather than the first write.
-    _register_this_window(getattr(args, "path", ".") or ".")
+    rpc_out = _park_stdout() if rpc_in is not None else None
+    _disable_child_prompts()
+
+    # RUN-ID-DRIFT — register this window EAGERLY, at process start, so a window is in the registry
+    # from the moment its server exists (a window that had not yet used mokata was otherwise pruned
+    # by a sibling as dead). 0.0.28 I1 (H4): it goes through `_spawn_registration`, OFF the startup
+    # path and AFTER the fd park — a contended registry lock (up to the bounded wait) can no longer
+    # delay `initialize`, and a child it starts can no longer read the protocol input. `_serve`
+    # still re-registers per call, as a REFRESH.
+    _spawn_registration(getattr(args, "path", ".") or ".")
     # 0.0.26 L8 (MP.S1) — on the plugin route (`CLAUDE_PLUGIN_DATA` is exported only to a plugin's
     # servers and hooks) this process IS the pinned `uvx --from "mokata[full]==<v>"` environment:
     # record its interpreter so the plugin's hooks and CLI launcher run the same version, fast.
@@ -816,49 +1055,41 @@ def main(argv: Optional[List[str]] = None) -> int:
     # calls instead of starting (and leaking) one per call.
     from ..knowledge.crg_client import enable_session_pool
     enable_session_pool()
-    _run_stdio(_public_module().build_server())   # stdio (plugin-launched); each tool takes `path`
+    _run_stdio(_public_module().build_server(), rpc_in, rpc_out)
     return 0
 
 
-def _run_stdio(server: Any) -> None:
-    """O14 — serve stdio with the JSON-RPC stream on a PRIVATE descriptor.
+def _run_stdio(server: Any, rpc_in: Optional[int] = None, rpc_out: Optional[int] = None) -> None:
+    """Serve stdio on the PRIVATE descriptors `main` parked (O14 fd 1, 0.0.28 I1 fd 0).
 
-    The protocol owns stdout, and before this anything else that reached file descriptor 1 went
-    into the client's JSON-RPC stream: a stray `print`, a library warning written to stdout, and —
-    the case no code review catches — any child process (git, a graph CLI, a test runner) started
-    without its stdout captured, because a child inherits fd 1. One such line and the client
-    drops the connection or waits for a reply that is now unparseable: a "stuck" server. So the
-    real stdout is duplicated to a private fd that only the transport writes, and fd 1 (plus
-    `sys.stdout`) is pointed at stderr, where a stray write is harmless log noise. Works the same
-    on Windows (`os.dup`/`os.dup2` are CRT calls there). A non-FastMCP server (a test double) is
-    run as-is."""
+    The protocol owns stdout and stdin: anything else that reached fd 1 used to go into the client's
+    JSON-RPC stream (a stray `print`, a child started without captured stdout), and any child that
+    read fd 0 swallowed a request. When either descriptor could not be parked (a closed fd, a
+    windowless launcher), the server is served as the SDK does — nothing is lost that this host
+    could have kept. A non-FastMCP server (a test double) is run as-is.
+
+    The input keeps the SDK's own `errors="replace"` decoding: one invalid byte becomes a parse
+    error for that line, never an exception that takes the reader's task group down."""
+    import os
     try:
         from mcp.server.fastmcp import FastMCP
     except ImportError:                                   # pragma: no cover - checked in main
         FastMCP = None                                    # type: ignore[assignment]
-    if FastMCP is None or not isinstance(server, FastMCP):
+    if FastMCP is None or not isinstance(server, FastMCP) or rpc_in is None or rpc_out is None:
+        _unpark(rpc_in, rpc_out)                          # the SDK (or a double) reads fds 0/1
         server.run()
         return
-    import os
     from io import TextIOWrapper
     import anyio
     from mcp.server.stdio import stdio_server
 
-    try:
-        sys.stdout.flush()
-        rpc_fd = os.dup(sys.stdout.fileno())
-        os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
-    except (AttributeError, OSError, ValueError):
-        # No usable stderr descriptor to park fd 1 on (a windowless launcher): serve as the SDK
-        # does. Nothing is lost that this host could have kept.
-        server.run()
-        return
-    sys.stdout = sys.stderr
-    rpc = anyio.wrap_file(TextIOWrapper(os.fdopen(rpc_fd, "wb"), encoding="utf-8"))
+    rpc_read = anyio.wrap_file(TextIOWrapper(os.fdopen(rpc_in, "rb"), encoding="utf-8",
+                                             errors="replace"))
+    rpc_write = anyio.wrap_file(TextIOWrapper(os.fdopen(rpc_out, "wb"), encoding="utf-8"))
     low = server._mcp_server                              # FastMCP's own lowlevel server (mcp<2)
 
     async def _serve_forever() -> None:
-        async with stdio_server(stdout=rpc) as (read_stream, write_stream):
+        async with stdio_server(stdin=rpc_read, stdout=rpc_write) as (read_stream, write_stream):
             await low.run(read_stream, write_stream, low.create_initialization_options())
 
     anyio.run(_serve_forever)

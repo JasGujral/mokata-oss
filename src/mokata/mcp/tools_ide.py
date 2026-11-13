@@ -26,10 +26,14 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 from __future__ import annotations
 
 import os
-from typing import Any, Dict
+from typing import Annotated, Any, Dict
 
 from .pagination import DEFAULT_PAGE_LIMIT, paginate
 from .registry import _tool
+from .tool_annotations import Field
+from .validation import ValidationError
+
+_PATH = "Repo root the tool operates on (default: the server's working directory)."
 
 IDE_CALL_TIMEOUT = 2.0
 OPEN_CMD = "mokata ide"
@@ -50,14 +54,20 @@ def _not_running(root: str) -> Dict[str, Any]:
                     "it opens the window, or re-focuses the open one"}
 
 
+# Provenance (developers): ID.S3 (0.0.25 Lane ID3). Read-only: it pings 127.0.0.1 (bounded by
+# `IDE_CALL_TIMEOUT`) and starts nothing; `not_running` is a clean answer, not an error. It answers
+# from the server's own ping, never from the record file alone (a crashed server's record reads as
+# not running). The pairing token never leaves the server: the result names the command that prints
+# the link, not the link (a tool result can be retained in a transcript).
 @_tool("ide_status", "read")
-def ide_status(path: str = ".") -> Dict[str, Any]:
-    """Is a `mokata ide` window serving this repo? Returns `running`, its local `url` (the pairing
-    token is NEVER returned — run `mokata ide` to print the paired link or re-focus the window),
-    `demo` (true = the labelled SAMPLE dataset, nothing real), the focused `session`, how many
-    `pages` are attached, and whether the `--ide-bridge` http hooks are set up (`bridge`).
-    Read-only: it pings 127.0.0.1 (bounded) and starts nothing. status `not_running` is a clean
-    answer, not an error."""
+def ide_status(path: Annotated[str, Field(description=_PATH)] = ".") -> Dict[str, Any]:
+    """Find out whether a `mokata ide` window is serving this repo, and where.
+
+    Read-only: it pings the local window and starts nothing. `not_running` is a normal answer. The pairing token is never returned; run `mokata ide` to print the paired link.
+
+    Returns: `running`, local `url`, `demo` (true means labelled sample data), focused `session`, attached `pages`, and `bridge` hook status.
+    Errors: none; an absent window is reported as `not_running`.
+    """
     from ..ide.bus import read_bridge
     from ..ide.launch import _call, running
     root = _root(path)
@@ -75,20 +85,33 @@ def ide_status(path: str = ".") -> Dict[str, Any]:
             "pair": f"run `{OPEN_CMD}` to print the paired link (the token is never returned here)"}
 
 
+# Provenance (developers): doc 109 §4.2 "the agent points the human at code". A UI round trip: the
+# path is contained on this side and again by the server, then published to the page's event stream.
+# It writes nothing, starts nothing (no server is spawned from an MCP call) and reports how many
+# pages saw it, so "nobody is looking" is said. The window not accepting the open is a genuine
+# mokata-side fault, so that one return stays `status: "error"`.
 @_tool("ide_open", "read")
-def ide_open(path: str = ".", file: str = "", line: int = 1, session: str = "") -> Dict[str, Any]:
-    """Point the human at code: open `file` (repo-relative) at `line` in the running `mokata ide`
-    window, and/or focus `session` (a Claude Code session id) there. A UI round trip — it writes
-    nothing and starts no server. The path must be inside the repo (absolute paths, `..` and
-    symlinks out are refused). Returns `pages` (how many open pages received it); status `no_page`
-    means the window is running but nobody has it open, `not_running` means there is no window —
-    both say which command fixes it."""
+def ide_open(
+        path: Annotated[str, Field(description=_PATH)] = ".",
+        file: Annotated[str, Field(
+            description="Repo-relative file to open; absolute paths and `..` are refused.")] = "",
+        line: Annotated[int, Field(description="Line to scroll to, from 1.")] = 1,
+        session: Annotated[str, Field(
+            description="Claude Code session id to focus in the window.")] = "",
+        ) -> Dict[str, Any]:
+    """Point the person at a file or session by opening it in the running `mokata ide` window.
+
+    Give `file` (with optional `line`) and/or `session`. The path must stay inside the repo. It writes nothing and starts no window; run `mokata ide` first if none is open.
+
+    Returns: `ok` with `pages` that received it; `no_page` when the window has no open page; `not_running` when there is no window.
+    Errors: refused (invalid_input) when neither `file` nor `session` is given; refused when `file` escapes the repo; error when the window rejects the open.
+    """
     from ..ide.launch import _call, running
     from ..ide.nav import PathRefused, contained_rel
     root = _root(path)
     if not file and not session:
-        return {"status": "error", "message": "ide_open needs `file` (and optionally `line`) "
-                                              "and/or `session`"}
+        raise ValidationError("file", "or `session` is required: name a file (and optionally a "
+                              "line) and/or a session to open")
     body: Dict[str, Any] = {}
     if file:
         try:
@@ -122,17 +145,27 @@ def ide_open(path: str = ".", file: str = "", line: int = 1, session: str = "") 
     return out
 
 
+# Provenance (developers): ID-SESSION-BROWSER / ID-NEEDS-YOU. The neutral twin of the browser's
+# session list and needs-you queue, from the same `ide.session_views` derivation the page draws, for
+# a harness with no browser open. Pending approvals are shown by proposal id and the
+# `mokata approve <id>` command; the proposal's content is never shown. PAGED over sessions
+# (`limit` defaults to 50, `limit=0` opts out).
 @_tool("ide_sessions", "read")
-def ide_sessions(path: str = ".", needs_you_only: bool = False, limit: int = DEFAULT_PAGE_LIMIT,
-                 offset: int = 0) -> Dict[str, Any]:
-    """Every Claude Code session that wrote in this repo (live + past), as the IDE's session browser
-    shows it: `status` (live | ended | past, with the `status_basis` it was derived from), files
-    and writes, gates fired/blocked for its run, token spend (measured and estimated kept apart),
-    ledger links — and `needs_you`, the attention queue SORTED BY RISK (formula in `risk_formula`):
-    pending approvals (by proposal id + the `mokata approve <id>` command; the proposal's content is
-    never shown), a gate block nothing has moved past, a secret block. Read-only, derived from
-    mokata's own stores. PAGED over sessions (`limit` defaults to 50, `limit=0` opts out);
-    `needs_you_only=true` lists only the sessions that are waiting on a human."""
+def ide_sessions(
+        path: Annotated[str, Field(description=_PATH)] = ".",
+        needs_you_only: Annotated[bool, Field(
+            description="List only sessions waiting on a human.")] = False,
+        limit: Annotated[int, Field(
+            description="Sessions per page; 0 returns all.")] = DEFAULT_PAGE_LIMIT,
+        offset: Annotated[int, Field(description="Sessions to skip, for paging.")] = 0,
+        ) -> Dict[str, Any]:
+    """List every Claude Code session that wrote in this repo, with the ones waiting on a human first.
+
+    Each row has its status (live, ended or past), writes, gates fired and blocked, token spend and ledger links. `needs_you` is the attention queue sorted by risk: pending approvals, an unresolved gate block, a secret block. Read-only.
+
+    Returns: a page of `sessions` plus `needs_you`, `waiting` and `risk_formula`.
+    Errors: none; an empty repo returns an empty list with a message.
+    """
     from ..ide import session_views as SV
     root = _root(path)
     data = SV.browser(root)

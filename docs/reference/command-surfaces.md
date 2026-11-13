@@ -28,6 +28,8 @@ regress.
 **The MCP surface today: 74 tools — 47 read, 26 write, and 1 approve** (the default-off in-chat
 approval described below). The registry in `mokata.mcp.registry` is the single source of that
 count.
+Every tool's parameters, allowed values, refusals and an example call are in the generated
+[MCP tool reference](mcp-tools.md).
 
 **How surfaces are chosen:** read-only inspection → an MCP **read** tool; a durable write → a
 **human-gated** MCP **write** tool (the universal WriteGate — secret-scan + human gate + audit;
@@ -74,7 +76,7 @@ interactive phase → a `/mokata:…` **slash** command.
 | `lat-check` | — | `lat_check` | — |
 | `index` | — | `index_status` (read-only diff; durable rebuild stays CLI) | — |
 | `baseline` | — | `baseline` | — |
-| `ci-check` | — | `ci_check` | — (read-only PR check; reuses the gates, posts nothing) |
+| `ci-check` | — | `ci_check` | — (read-only PR check; reuses the gates, posts nothing; Ctrl-C ends it with no verdict, exit 2. Its spec-awareness and spec-drift legs also run in `worktree test` as the gated merge's spec evidence) |
 | `sessions` | — | `sessions` | — |
 | `windows` | — | `session_windows` | — (the LIVE Claude Code windows on this repo — each is its own MCP process; transient registry upkeep, ungated) |
 | `plan` | — | `plan_list`, `plan_show` | — (`plan export` is a user-run CLI copy into a committable `plans/` — never a silent clobber) |

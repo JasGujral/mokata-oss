@@ -346,6 +346,7 @@ class DerivingWritesNothing(unittest.TestCase):
                     held.execute("PRAGMA journal_mode=WAL")
                     held.execute("SELECT count(*) FROM events").fetchone()
                 else:
+                    _settle_side_files(db)                # the fixture MAKES the setup it names
                     for ext in ("-wal", "-shm"):
                         self.assertFalse(os.path.exists(db + ext), "setup: no side files")
                 before = snapshot_tree(w.d)
@@ -355,28 +356,100 @@ class DerivingWritesNothing(unittest.TestCase):
                 if held is not None:
                     held.close()
 
-    def test_a_plain_readonly_open_creates_wal_side_files_the_probe(self):
-        """The measured fact the immutable open exists for (kept as a fixture, not a claim)."""
-        d = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
-        db = os.path.join(d, "e.db")
-        c = sqlite3.connect(db)
-        c.execute("PRAGMA journal_mode=WAL")
-        c.execute("CREATE TABLE t(x)")
-        c.commit()
-        c.close()
-        self.assertFalse(os.path.exists(db + "-wal"))
+    def test_a_raw_readonly_open_of_a_wal_file_with_no_side_files_is_never_clean_the_probe(self):
+        """The measured fact the read-only factory's rule exists for (a fixture, not a claim), on
+        whichever SQLite this interpreter links: a raw `mode=ro` open of a WAL database whose
+        `-wal`/`-shm` are absent either CREATES them (most builds) or REFUSES to open (`unable to
+        open database file` — Apple's system libsqlite3, which every pyenv / Command Line Tools
+        Python on macOS links). Never a clean read that changes nothing. If a build ever does
+        both right, this reds and the factory's immutable branch is re-measured, not assumed."""
+        db = _wal_db_without_side_files(self)
+        try:
+            r = sqlite3.connect(_ro_uri(db), uri=True)
+            try:
+                self.assertEqual((2,), r.execute("SELECT count(*) FROM t").fetchone())
+            finally:
+                r.close()
+        except sqlite3.OperationalError as exc:
+            self.assertIn("unable to open", str(exc))
+            return                                        # refused: Apple's build
+        self.assertTrue(os.path.exists(db + "-wal") or os.path.exists(db + "-shm"),
+                        "a raw mode=ro open read cleanly and created nothing")
+
+    def test_the_readonly_factory_reads_a_wal_file_with_no_side_files_and_creates_nothing(self):
+        """W5 — `connect_sqlite_readonly`, the one door for a database mokata reads and does not
+        own (code-review-graph's `graph.db`), on every SQLite: a WAL file with no side files is
+        READ (Apple's build used to refuse it, so a freshly swapped-in complete graph — `swap_in`
+        removes the old file's side files — probed INCOMPLETE) and NOTHING is created (other
+        builds used to create both side files from a probe that promises to change nothing)."""
         from mokata.memory._sqlite import connect_sqlite_readonly
-        r = connect_sqlite_readonly(db, immutable=True)
-        r.execute("SELECT count(*) FROM t").fetchone()
-        r.close()
-        self.assertFalse(os.path.exists(db + "-shm"), "an immutable open creates nothing")
+        db = _wal_db_without_side_files(self)
         r = connect_sqlite_readonly(db)
-        r.execute("SELECT count(*) FROM t").fetchone()
-        r.close()
-        if not os.path.exists(db + "-shm"):
-            self.skipTest("this SQLite build does not create side files on a mode=ro open")
-        self.assertTrue(os.path.exists(db + "-shm"), "plain mode=ro created a side file")
+        try:
+            self.assertEqual((2,), r.execute("SELECT count(*) FROM t").fetchone())
+        finally:
+            r.close()
+        for ext in ("-wal", "-shm", "-journal"):
+            self.assertFalse(os.path.exists(db + ext), ext)
+
+    def test_the_readonly_factory_still_reads_what_a_live_writer_has_only_in_its_wal(self):
+        """The other half of the rule: with side files PRESENT the factory opens `mode=ro`, so a
+        row a writer committed to its WAL and has not checkpointed is SEEN. An immutable open
+        here would read the main file alone and answer from before the writer."""
+        from mokata.memory._sqlite import connect_sqlite_readonly
+        db = _wal_db_without_side_files(self)
+        w = sqlite3.connect(db)
+        try:
+            w.execute("PRAGMA wal_autocheckpoint=0")
+            w.execute("INSERT INTO t VALUES (3)")
+            w.commit()
+            self.assertTrue(os.path.exists(db + "-wal"))
+            r = connect_sqlite_readonly(db)
+            try:
+                self.assertEqual((3,), r.execute("SELECT count(*) FROM t").fetchone())
+            finally:
+                r.close()
+        finally:
+            w.close()
+
+
+def _ro_uri(db):
+    from pathlib import Path
+    return Path(os.path.abspath(db)).as_uri() + "?mode=ro"
+
+
+def _settle_side_files(db):
+    """Checkpoint every WAL frame into the main file, then remove the side files. SQLite deletes
+    them itself when the last connection closes — except where `SQLITE_FCNTL_PERSIST_WAL` is on by
+    default (Apple's system libsqlite3), which keeps both. A TRUNCATE checkpoint that reports
+    `busy == 0` has moved every frame into the main file, so nothing the files held is lost; a
+    busy one is refused loudly rather than a live writer's WAL deleted under it."""
+    c = sqlite3.connect(db)
+    try:
+        busy, _log, _done = c.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    finally:
+        c.close()
+    if busy:
+        raise AssertionError("setup: a writer still holds %s — cannot settle its WAL" % db)
+    for ext in ("-wal", "-shm"):
+        if os.path.exists(db + ext):
+            os.remove(db + ext)
+
+
+def _wal_db_without_side_files(tc):
+    d = tempfile.mkdtemp()
+    tc.addCleanup(shutil.rmtree, d, ignore_errors=True)
+    db = os.path.join(d, "e.db")
+    c = sqlite3.connect(db)
+    c.execute("PRAGMA journal_mode=WAL")
+    c.execute("CREATE TABLE t(x)")
+    c.execute("INSERT INTO t VALUES (1), (2)")
+    c.commit()
+    c.close()
+    _settle_side_files(db)
+    for ext in ("-wal", "-shm"):
+        tc.assertFalse(os.path.exists(db + ext), "setup: no side files")
+    return db
 
 
 class AWriterMidReadNeverGivesATornAnswer(unittest.TestCase):

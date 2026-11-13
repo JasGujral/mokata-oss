@@ -358,16 +358,6 @@ class QualityAtTheDeclaredScale(unittest.TestCase):
         asserted anyway, because "cannot" is what a regression guard is for."""
         self.assertEqual([], Q.all_bound_violations())
 
-    def test_report(self):
-        print(f"\n[DB.S8g quality at the DECLARED N={QUALITY_SCALE_N:,} · "
-              f"{len(self.corpus.probes)} probes]")
-        for arm in Q.ALL_ARMS:
-            print("  " + self.results[arm].row())
-        floor = self.results[Q.ARM_JACCARD].recall_at_k
-        ladder = self.results[Q.ARM_EXPANSION].recall_at_k
-        print(f"  A->D recall gain {ladder - floor:+.4f} "
-              f"(locked threshold {MIN_LADDER_RECALL_GAIN:.2f})")
-
 
 class TheEngineIsTheOnlyHonestCounter(unittest.TestCase):
     """Why the anti-silent-cap pin above counts the TABLE (audit finding B, 2026-08-02).

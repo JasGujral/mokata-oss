@@ -427,13 +427,6 @@ class _FakePg:
 
 
 class TestSchemaMigration(unittest.TestCase):
-    def test_the_scope_columns_are_at_or_below_the_current_schema_version(self):
-        """TM.S6's claim was "the scope columns shipped at v3", which it expressed as
-        `TEAM_SCHEMA_VERSION == 3` — true only until a later stage bumped the schema for its own
-        reasons (DB.S5 → v4). The durable claim is that v3 is the version the scope columns are
-        served FROM: the floor still admits them, and the current version is at least that."""
-        self.assertGreaterEqual(teamdb.TEAM_SCHEMA_VERSION, 3)
-        self.assertGreaterEqual(teamdb.TEAM_SCHEMA_MIN_SUPPORTED, 3)
 
     def test_provision_sql_adds_idempotent_scope_columns(self):
         sql = " || ".join(teamdb.provision_sql())

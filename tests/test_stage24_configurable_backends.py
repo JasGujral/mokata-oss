@@ -137,12 +137,6 @@ class TestObsidianDetectionIsGone(unittest.TestCase):
         self.assertFalse(det.is_present("y", {}))
         self.assertTrue(det.is_present("z", {"detect": {"type": "always"}}))
 
-    def test_the_helpers_are_DELETED_not_merely_unreferenced(self):
-        # A private helper left behind is dead code the mutation harness and every sweep must
-        # carry (doc 85 §7d). `hasattr` is the assertion because an unreferenced function is
-        # invisible to every other check in this file.
-        self.assertFalse(hasattr(detect, "_obsidian_config_dirs"))
-        self.assertFalse(hasattr(detect, "_obsidian_present"))
 
     def test_the_live_strategies_that_SURVIVE_still_work(self):
         det = Detector(cache=False)

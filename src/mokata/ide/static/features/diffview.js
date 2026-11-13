@@ -635,6 +635,10 @@
   function wireDiffHost(host) {
     if (!host || host._dvWired) return;
     host._dvWired = true;
+    // A press on a line number or a code cell (neither is focusable) would drop focus to <body>; the
+    // diff box takes it (programmatic focus only: -1 keeps it out of the Tab order). 0.0.28 D.
+    const box = MK.$("diff");
+    if (box && !box.hasAttribute("tabindex")) box.tabIndex = -1;
     host.addEventListener("click", (ev) => {
       const td = ev.target.closest && ev.target.closest("table.d td.no[data-n]");
       if (td) cite(td);
@@ -644,28 +648,62 @@
     // drag from hunk 1 into hunk 2 crosses the gap row between them and its anchor can land outside
     // every table - the side must survive that.
     host.addEventListener("mousedown", (ev) => {
+      if (ev.button !== 0) return;                       // a right/middle press selects nothing and drags nothing
       const td = ev.target.closest && ev.target.closest("table.split td.tx");
-      dragSide = td && td.dataset.side ? td.dataset.side : null;
       dragSig = null;
-      dragging = !!dragSide;
-      // every hunk's table, so the other side is unselectable all along a drag that crosses hunks
-      for (const t of host.querySelectorAll("table.split")) {
-        if (dragSide) t.dataset.sel = dragSide; else t.removeAttribute("data-sel");
-      }
+      dragging = true;
+      dragFrom = td && td.dataset.side ? td : null;
+      dragAnchor = null;
+      dragMoved = false;
+      dragStart = null;
+      lockSide(host, td && td.dataset.side ? td.dataset.side : null);
     });
-    // The one-side rule belongs to the selection THIS drag made - and to nothing else. The selection's
-    // two ends are noted while the button is down and when it comes up; a later selection (Ctrl/Cmd+A,
-    // find-in-page, a script) has other ends, so it is the browser's own and copies natively.
-    // The other side stops being unselectable the moment the selection is not the drag's: the browser
-    // then selects (and find-in-page matches) it like any text.
+    // A drag that starts in a gap row (or anywhere outside the tables) has no side yet: it takes the
+    // side of the first code cell the pointer enters - the column the reader is reading. One that
+    // never enters a cell stays the browser's own copy. (Firefox sends a drag that began in a gap bar
+    // its mouse events with the hunk as their target: the selection's own focus says the same.)
+    document.addEventListener("mousemove", (ev) => {
+      if (!dragging || !(ev.buttons & 1) || !ev.target.closest) return;
+      dragMoved = true;
+      const td = ev.target.closest("table.split td.tx[data-side]");
+      if (td && !dragSide) lockSide(host, td.dataset.side);
+    }, true);
+    // The one-side rule belongs to the selection THIS drag made - and to nothing else. A later
+    // selection (Ctrl/Cmd+A, find-in-page, a script) has other ends, so it is the browser's own and
+    // copies natively; Shift+Arrow keeps one end and is the drag made longer (`extendsDrag`).
     document.addEventListener("selectionchange", () => {
-      if (dragging) { dragSig = selSig(); return; }
-      if (dragSide && dragSig && !sameSig(dragSig, selSig())) {
-        dragSide = null; dragSig = null;
-        for (const t of host.querySelectorAll("table.split")) t.removeAttribute("data-sel");
+      if (dragging) {
+        dragSig = selSig();
+        const s = window.getSelection();
+        if (dragMoved && s && s.rangeCount && !dragAnchor) dragAnchor = [s.anchorNode, s.anchorOffset];
+        if (!dragSide && s && dragAnchor && s.anchorNode === dragAnchor[0] && s.anchorOffset === dragAnchor[1]) {
+          const td = cellOf(s.focusNode);
+          if (td) lockSide(host, td.dataset.side);
+        }
+        return;
+      }
+      if (dragSide && dragSig) {
+        const now = selSig();
+        if (sameSig(dragSig, now)) return;
+        if (extendsDrag(now)) { dragSig = now; return; }
+        lockSide(host, null); dragSig = null;
       }
     });
-    document.addEventListener("mouseup", () => { if (dragging) { dragging = false; dragSig = selSig(); } }, true);
+    // a press that becomes a native drag-and-drop never sends a mouseup; a context menu may eat it
+    const endDrag = (ev) => {
+      if (!dragging) return;
+      dragging = false;
+      dragSig = selSig();
+      dragEndSig = dragSig;
+      dragStart = dragSig && [dragSig[0], dragSig[1]];
+      // the code cell UNDER THE POINTER as the button came up (a gutter, a gap, a margin: null). Read
+      // from the point, not `ev.target`: Firefox (the Linux runner) captures a selection drag's mouse
+      // events to the element the press began on, so the mouseup's target is the PRESS cell — the
+      // release on a blank line was then taken for a snapped end and dropped (0.0.28 D, edges 6b).
+      const under = ev && ev.type === "mouseup" && document.elementFromPoint(ev.clientX, ev.clientY);
+      dragRelease = (under && under.closest && under.closest("table.split td.tx[data-side]")) || null;
+    };
+    for (const type of ["mouseup", "dragstart", "dragend", "contextmenu"]) document.addEventListener(type, endDrag, true);
     // What a person COPIES from a Split selection is that side's code and nothing else. `user-select:
     // none` on the other side's cells is not enough: Chromium 141 still serialises the other side's
     // cells and the screen-reader "removed:/added:" spans into the copy. So the copy is built here.
@@ -677,80 +715,239 @@
     });
   }
   // The side a drag started on in a Split view ("old" | "new"), or null when the last mousedown was
-  // anywhere else. Set by the mousedown above.
+  // anywhere else.
   let dragSide = null;
   let dragging = false;
   let dragSig = null;
+  // The dragged-side cell the press began on: Firefox leaves an EMPTY line the selection starts on out
+  // of every range, so this alone may put it back - and only while the selection still starts where
+  // the drag left it (`dragStart`). Nothing else about where the pointer has been is an authority.
+  let dragFrom = null;
+  // The cell the button came up over, and the selection exactly as the drag left it: an EMPTY line at
+  // the selection's start counts only if the press or the release was on it - and only while the
+  // selection is still exactly the one the drag made (a browser snaps an end released on the next
+  // row's gutter into the empty line above it). Any later change to the selection ends both.
+  let dragRelease = null;
+  let dragEndSig = null;
+  let dragAnchor = null;
+  let dragMoved = false;
+  let dragStart = null;
+  function lockSide(host, side) {
+    dragSide = side;
+    for (const t of host.querySelectorAll("table.split")) {
+      if (side) t.dataset.sel = side; else t.removeAttribute("data-sel");
+    }
+  }
+  // A selection that keeps one end of the drag's selection and now ends, at the other, in a code cell
+  // of the dragged side is that drag extended (Shift+Arrow, either way).
+  function extendsDrag(now) {
+    if (!now || !dragSig) return false;
+    const startKept = now[0] === dragSig[0] && now[1] === dragSig[1];
+    const endKept = now[2] === dragSig[2] && now[3] === dragSig[3];
+    return (startKept && inSide(now[2], now[3])) || (endKept && inSide(now[0], now[1]));
+  }
+  function cellOf(node) {
+    const n = node && (node.nodeType === 1 ? node : node.parentElement);
+    return n && n.closest ? n.closest("table.split td.tx[data-side]") : null;
+  }
+  // Whether a selection end sits in the dragged side's code (Firefox may put it at a ROW boundary).
+  function inSide(node, offset) {
+    const td = cellOf(node);
+    if (td) return td.dataset.side === dragSide;
+    const n = node && (node.nodeType === 1 ? node : node.parentElement);
+    if (!n || !n.closest) return false;
+    let row = n.closest("table.split tr");
+    if (!row && node.nodeType === 1 && n.closest("table.split")) {
+      const kid = n.children[offset] || n.children[offset - 1];
+      row = kid && kid.closest ? kid.closest("tr") : null;
+    }
+    return !!row && !!row.querySelector(`td.tx[data-side="${dragSide}"]`);
+  }
   function selSig() {
     const s = window.getSelection && window.getSelection();
-    return s && s.rangeCount ? [s.anchorNode, s.anchorOffset, s.focusNode, s.focusOffset] : null;
+    if (!s || !s.rangeCount) return null;
+    const a = s.getRangeAt(0), z = s.getRangeAt(s.rangeCount - 1);
+    return [a.startContainer, a.startOffset, z.endContainer, z.endOffset];
   }
   function sameSig(a, b) { return !!a && !!b && a.every((v, i) => v === b[i]); }
-  // The cells of the dragged side that a selection covers, across EVERY hunk's table and EVERY range
-  // (Firefox splits a selection around `user-select:none` into several), each with the range that
-  // reaches it. Gap rows hold no `td.tx[data-side]`, so they contribute nothing. null when there is
-  // no Split drag or the selection does not touch a Split table at all.
+
+  // ---- the selection's extent, and the rows inside it (0.0.28 D: the work is bounded by the Range,
+  // never by the hunk - a hunk's table can hold 30k rows and copy/cite run on the main thread).
+  // The extent is the selection's overall start..end: Firefox splits ONE drag into a range per run of
+  // selectable cells, and only the union of them is what the person dragged over.
+  function extent(s) {
+    let lo = s.getRangeAt(0), hi = lo;
+    for (let i = 1; i < s.rangeCount; i++) {
+      const r = s.getRangeAt(i);
+      if (r.compareBoundaryPoints(Range.START_TO_START, lo) < 0) lo = r;
+      if (r.compareBoundaryPoints(Range.END_TO_END, hi) > 0) hi = r;
+    }
+    const b = document.createRange();
+    b.setStart(lo.startContainer, lo.startOffset);
+    b.setEnd(hi.endContainer, hi.endOffset);
+    return b;
+  }
+  const splitTables = () => [...document.querySelectorAll("#diff table.split")];   // one per hunk / context block
+  // (a context block's table holds its rows directly, a hunk's in tbody blocks; the header row is not code)
+  function firstRow(t) { for (const r of t.rows) if (r.parentElement.nodeName !== "THEAD") return r; return null; }
+  function lastRow(t) { const r = t.rows[t.rows.length - 1]; return r && r.parentElement.nodeName !== "THEAD" ? r : null; }
+  // The row a boundary point falls in or, outside every row (a gap bar, a table edge), the nearest row
+  // after it (dir +1) or before it (dir -1). Cost: the number of hunks at most, never rows.
+  function rowAt(node, offset, dir) {
+    const n = node && (node.nodeType === 1 ? node : node.parentElement);
+    const tr = n && n.closest && n.closest("table.split tr");
+    if (tr) return tr;
+    if (node && node.nodeType === 1 && n.closest && n.closest("table.split")) {
+      const kid = node.childNodes[dir > 0 ? offset : offset - 1];
+      if (kid && kid.nodeName === "TR") return kid;
+      if (kid && kid.nodeName === "TBODY") return dir > 0 ? kid.firstElementChild : kid.lastElementChild;
+    }
+    const at = document.createRange();
+    at.setStart(node, offset);
+    const ts = splitTables();
+    if (dir > 0) { for (const t of ts) if (at.comparePoint(t, 0) > 0 && firstRow(t)) return firstRow(t); return null; }
+    for (let i = ts.length - 1; i >= 0; i--) if (at.comparePoint(ts[i], ts[i].childNodes.length) < 0 && lastRow(ts[i])) return lastRow(ts[i]);
+    return null;
+  }
+  // The row after `tr` in document order across the tbody blocks of a table and across hunks.
+  function nextRow(tr, tables) {
+    if (tr.nextElementSibling) return tr.nextElementSibling;
+    if (tr.parentElement.nodeName === "TBODY") {
+      for (let tb = tr.parentElement.nextElementSibling; tb; tb = tb.nextElementSibling) if (tb.nodeName === "TBODY" && tb.firstElementChild) return tb.firstElementChild;
+    }
+    const t = tr.closest("table");
+    const ts = tables();
+    for (let i = ts.indexOf(t) + 1; i < ts.length; i++) { const r = firstRow(ts[i]); if (r) return r; }
+    return null;
+  }
+  // A cell's own code, without the screen-reader / no-newline / CR spans: a walk of its nodes (no clone).
+  const NOT_CODE = /(^|\s)(dv-sr|dv-noeol|dv-cr)(\s|$)/;
+  function codeOf(node) {
+    let out = "";
+    for (const c of node.childNodes) {
+      if (c.nodeType === 3) out += c.data;
+      else if (c.nodeType === 1 && !NOT_CODE.test(c.className || "")) out += codeOf(c);
+    }
+    return out;
+  }
+  // Whether the extent `b` really selects something of this cell: some of its code, or - for an empty
+  // line - the cell lies inside it (it starts at or before the cell and ends after it; a drag that stops
+  // at an empty line's column 0 does not select it). Only the two edge rows are asked, and the clone is
+  // of the clipped part alone. (An `intersectsNode` pre-check here was an equivalent mutant: a range that
+  // misses the cell already clips to "" and does not cover it. Deleted, 0.0.28 D.)
+  function selectedIn(td, b) {
+    if (codeOf(td) === "") return covers(b, td);
+    return clippedText(td, b) !== "";
+  }
+  function covers(b, td) {
+    const n = td.childNodes.length;
+    return b.comparePoint(td, 0) >= 0 && b.comparePoint(td, n) === 0 && !(b.endContainer === td && b.endOffset === n);
+  }
+  // The cells of the dragged side the CURRENT selection covers, in order, across every hunk (gap rows
+  // hold no `td.tx[data-side]`). Only the rows between the extent's first and last row are visited
+  // (`dv.visits` counts them); only those two edge rows are clipped. null: not the drag's selection.
   function splitSideCells() {
     const s = window.getSelection && window.getSelection();
     if (!dragSide || dragging || !s || !s.rangeCount || s.isCollapsed) return null;
-    if (!sameSig(dragSig, selSig())) return null;     // not the selection the drag made
-    const ranges = [];
-    for (let i = 0; i < s.rangeCount; i++) ranges.push(s.getRangeAt(i));
-    const tables = [...document.querySelectorAll("table.split")]
-      .filter((t) => ranges.some((r) => r.intersectsNode(t)));
-    if (!tables.length) return null;
-    const out = [];
-    for (const t of tables) {
-      for (const td of t.querySelectorAll(`td.tx[data-side="${dragSide}"]`)) {
-        const range = ranges.find((r) => r.intersectsNode(td));
-        if (range) out.push({ td, range });
+    const now = selSig();                              // (the selectionchange event may not have run yet)
+    if (!sameSig(dragSig, now)) {
+      if (!extendsDrag(now)) return null;              // not the selection the drag made
+      dragSig = now;
+    }
+    const b = extent(s);
+    let row = rowAt(b.startContainer, b.startOffset, +1);
+    const last = rowAt(b.endContainer, b.endOffset, -1);
+    if (!row || !last || row.compareDocumentPosition(last) & Node.DOCUMENT_POSITION_PRECEDING) return null;
+    let tables = null;
+    const lazyTables = () => tables || (tables = splitTables());
+    // The empty line at the selection's TOP end, which Firefox leaves out of every range: put back only
+    // while the selection still starts where the drag left it, and only across empty lines up to the
+    // first row. The top end is where a drag down was PRESSED and where a drag up was RELEASED (0.0.28 D:
+    // Linux Firefox leaves the blank line a drag up ends on out of every range too - edges 6b, 6h).
+    const startsAsDragged = !!dragStart && b.startContainer === dragStart[0] && b.startOffset === dragStart[1];
+    const blankEnd = (td) => td && td.isConnected && td.dataset.side === dragSide && codeOf(td) === "" ? td.closest("tr") : null;
+    const ends = [blankEnd(dragFrom), blankEnd(dragRelease)].filter((r) => r && r !== row && (r.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING));
+    const from = ends.length === 2 && (ends[1].compareDocumentPosition(ends[0]) & Node.DOCUMENT_POSITION_FOLLOWING) ? ends[1] : ends[0] || null;
+    let lead = [];
+    if (startsAsDragged && from && from !== row && (from.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING)) {
+      for (let r = from; r && r !== row; r = nextRow(r, lazyTables)) {
+        dv.visits++;
+        const td = r.querySelector(`td.tx[data-side="${dragSide}"]`);
+        if (td && codeOf(td) !== "") { lead = []; break; }
+        if (td) lead.push({ td, edge: false });
+        if (lead.length > 64) { lead = []; break; }  // (a run of empty lines that long is not "the line it began on")
       }
     }
-    return out.length ? out : null;                    // nothing of the dragged side covered: not ours
+    const out = [];
+    for (;;) {
+      dv.visits++;
+      const td = row.querySelector(`td.tx[data-side="${dragSide}"]`);
+      const edge = row === last || !out.length;
+      // (a snapped blank is only ever the selection's FIRST row: once the blank line the drag began on
+      // is put back (`lead`), the next blank is inside the selection and is copied — 0.0.28 D, the
+      // Linux runner's 6a red, where it was dropped and a gap marker stood in its place)
+      if (td && (!edge || selectedIn(td, b)) && !(!out.length && !lead.length && snappedBlank(td))) out.push({ td, edge });
+      if (row === last) break;
+      row = nextRow(row, lazyTables);
+      if (!row) break;
+    }
+    const cells = lead.concat(out);
+    if (!out.length) return null;                     // nothing of the dragged side covered: not ours
+    cells.bound = b;
+    return cells;
   }
+  // The selection STARTS on this empty line only because the browser snapped an end into it: the drag
+  // neither began nor was released on it, and the selection is still exactly the drag's.
+  function snappedBlank(td) {
+    if (codeOf(td) !== "" || !sameSig(dragEndSig, selSig())) return false;
+    return td !== dragFrom && td !== dragRelease;
+  }
+  dv.visits = 0;
   // The text of one code cell that `range` covers: the cell clipped to the range at its ends, minus
   // the screen-reader / no-newline / CR spans.
   function clippedText(td, range) {
-    const part = document.createRange();
-    part.selectNodeContents(td);
-    if (range.compareBoundaryPoints(Range.START_TO_START, part) > 0) part.setStart(range.startContainer, range.startOffset);
-    if (range.compareBoundaryPoints(Range.END_TO_END, part) < 0) part.setEnd(range.endContainer, range.endOffset);
-    const box = document.createElement("div");
-    box.append(part.cloneContents());
-    for (const x of box.querySelectorAll(".dv-sr, .dv-noeol, .dv-cr")) x.remove();
-    return box.textContent;
-  }
-  // Whether `range` really selects something of this cell (a blank line has nothing to clip: it counts
-  // when the range reaches into it).
-  function selectedIn(td, range) {
-    if (!range.intersectsNode(td)) return false;
-    const whole = document.createRange();
-    whole.selectNodeContents(td);
-    const own = clippedText(td, whole);
-    return own === "" ? true : clippedText(td, range) !== "";
+    // A walk of the cell's own text nodes, each cut to the range's ends (`comparePoint`): no Range is
+    // made and no node is cloned or removed. (0.0.28 D: a clone + `.remove()` per copy mutated nodes of
+    // the document while every Range made so far was still attached to it - Chromium updates each
+    // attached Range on every such mutation, so each copy cost more than the last.)
+    let out = "";
+    const walk = (node) => {
+      for (const c of node.childNodes) {
+        if (c.nodeType === 1) { if (!NOT_CODE.test(c.className || "")) walk(c); continue; }
+        if (c.nodeType !== 3) continue;
+        const len = c.data.length;
+        if (range.comparePoint(c, len) < 0 || range.comparePoint(c, 0) > 0) continue;
+        const a = c === range.startContainer ? range.startOffset : 0;
+        const z = c === range.endContainer ? range.endOffset : len;
+        if (z > a) out += c.data.slice(a, z);
+      }
+    };
+    walk(td);
+    return out;
   }
   // The selected text of ONE side of a Split view (the side the drag started in) over every hunk the
-  // selection reaches, cell by cell and clipped to the range at its ends; null when the selection is
-  // not in a Split view. Where lines of the side were elided between two cells (the gap between hunks),
-  // an honest marker line stands in for them - a paste never reads as contiguous code that is not.
+  // selection reaches; null when the selection is not the drag's. Where lines of the side were elided
+  // between two cells (the gap between hunks), an honest marker line stands in for them. A selection of
+  // empty lines only is null - the page never writes "" over the clipboard.
   function splitSideText() {
     const cells = splitSideCells();
     if (!cells) return null;
     const lines = [];
     let last = null;
-    for (const { td, range } of cells) {
+    for (const { td, edge } of cells) {
       const no = td.closest("tr").querySelector(`td.no[data-side="${dragSide}"]`);
       const n = no && no.dataset.n ? +no.dataset.n : null;
       if (n !== null) {
         if (last !== null && n > last + 1) {
           const k = n - last - 1;
-          lines.push(`\u22ef ${k.toLocaleString("en-US")} unchanged line${k === 1 ? "" : "s"} \u22ef`);
+          lines.push(`⋯ ${k.toLocaleString("en-US")} unchanged line${k === 1 ? "" : "s"} ⋯`);
         }
         last = n;
       }
-      lines.push(clippedText(td, range));
+      lines.push(edge ? clippedText(td, cells.bound) : codeOf(td));
     }
-    return lines.join("\n");
+    const text = lines.join("\n");
+    return text === "" ? null : text;
   }
   dv.splitSideText = splitSideText;
 

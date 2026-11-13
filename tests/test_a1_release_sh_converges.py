@@ -89,6 +89,8 @@ verify_versions()             { __trace "TAIL verify_versions $2"; }
 verify_tag_sets()             { __trace "TAIL verify_tag_sets $1"; }
 wait_for_ci_green()           { __trace "TAIL wait_for_ci_green $1 $2"; }
 wait_for_release()            { __trace "TAIL wait_for_release $1 $2"; }
+# 0.0.28 I1: the plugin-pin gate (step 7b) resolves the pin against PyPI; stubbed like the waits.
+verify_plugin_pin_resolves()  { __trace "TAIL verify_plugin_pin_resolves $2"; }
 confirm() {
   local n a
   __trace "CONFIRM $1"
@@ -310,11 +312,6 @@ class TheCloseReasonIsReadNotInferred(unittest.TestCase):
         self.assertLess(body.index('confirm "$1"'), body.index('&& gh pr create'),
                         "the NEW-PR offer must be confirm-gated, like the first one")
         self.assertIn('open_release_pr "Open the release PR now?"', self.text)
-
-    def test_closed_branch_gone_remedy_is_false_the_false_sentence_is_gone(self):
-        self.assertNotIn("which re-opens the PR", self.text)
-        for _n, line in RR.code_lines(self.text):
-            self.assertNotIn("re-opens the PR", line)
 
 
 # ============================================================== 1 · re-entry, driven end to end
@@ -563,7 +560,8 @@ class ReEntryIsDerivedFromTheRemotes(_ReleaseHarness, unittest.TestCase):
                      "TAIL verify_release_notes the public mirror (merged main)",
                      "TAIL wait_for_ci_green JasGujral/mokata-oss",
                      "TAIL verify_tag_sets this cut's tail, immediately after tagging",
-                     "TAIL wait_for_release JasGujral/mokata-oss v9.9.9"):
+                     "TAIL wait_for_release JasGujral/mokata-oss v9.9.9",
+                     "TAIL verify_plugin_pin_resolves 9.9.9"):
             self.assertTrue(any(t.startswith(step) for t in tail), f"{step!r} did not run: {tail}")
         self.assertIn("ALREADY ON JasGujral/mokata-oss@main", proc.stdout)
         self.assertIn("ALREADY created and published on BOTH repositories", proc.stdout)
@@ -647,7 +645,8 @@ class ThereIsNoWayToTalkPastThePreflight(unittest.TestCase):
         a re-run may skip what is DONE, never what GRADES what was done."""
         lines = self.text.splitlines()
         for call in ('verify_versions "$PUB_CHECKOUT"', 'verify_release_notes "$PUB_CHECKOUT"',
-                     'verify_tag_sets "this cut', 'wait_for_release "$PUB_REPO"'):
+                     'verify_tag_sets "this cut', 'wait_for_release "$PUB_REPO"',
+                     'verify_plugin_pin_resolves "$REPO_ROOT"'):
             hits = [ln for ln in lines if ln.startswith(call)]
             self.assertEqual(1, len(hits), f"{call!r} is not an unconditional top-level call")
 

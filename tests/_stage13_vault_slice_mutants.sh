@@ -46,6 +46,9 @@ VLT=src/mokata/vault.py
 DR=tests/_deprecation_removal.py
 
 T13='test_stage13_vault_slice.py'
+# B01 and E02 are graded by T14 since 0.0.28 lane A: stage 13's gate tests were pruned and stage 14's
+# `test_the_registry_is_still_exactly_covered` / `test_every_removed_channel_stays_in_the_map_...` kill both.
+T14='test_stage14_neo4j_removal.py'
 T55='test_stage55b_session_transport.py'
 T9='test_stage9_removal_release.py'
 
@@ -112,7 +115,7 @@ mutant "A03 ***  the removed-kind guard stops reading the registry and hardcodes
 mutant "B01 ***  THE WHOLE TRAP IN ONE LINE — the gate's target is pointed back at the module, so
        the only way to satisfy it is to delete the design-artifact vault" "$DR" \
   '    "vault": "mokata.session_transport:VaultTransport",' \
-  '    "vault": "mokata.vault",' "$T13"
+  '    "vault": "mokata.vault",' "$T14"
 
 mutant "B02 ***  the artifact vault's integrity refusal starts selling the migration again — a
        remedy that moves session bundles, shown to a user holding a corrupt SPEC" "$VLT" \
@@ -256,7 +259,7 @@ mutant "D08 **   a removed transport kind is reported as UNAVAILABLE on MCP — 
 mutant "E02 ***  the removed channel is dropped from IMPLEMENTATIONS instead of being required to
        be ABSENT — the probe stops checking at the moment the check acquires a subject" "$DR" \
   '    "vault": "mokata.session_transport:VaultTransport",' \
-  '    "_vault_unmapped": "mokata.session_transport:VaultTransport",' "$T13"
+  '    "_vault_unmapped": "mokata.session_transport:VaultTransport",' "$T14"
 
 # ==== F. E7 — the ruling ========================================================================
 

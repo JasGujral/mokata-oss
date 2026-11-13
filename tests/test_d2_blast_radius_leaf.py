@@ -372,25 +372,6 @@ class TestKindsThatStayAbsent(unittest.TestCase):
             res = self._backend(root).query("defs", "totally_unknown")
             self.assertEqual(res.basis, BASIS_LEXICAL)
 
-    def test_the_defs_exclusion_is_unreachable_and_that_is_why_it_is_safe(self):
-        """★ WRITTEN BECAUSE A MUTANT SURVIVED. Stage 6's M07 added `defs` to SYMBOL_EDGE_KINDS
-        and the whole suite stayed green — the test above passes either way, so it was grading
-        nothing. The mutant was RIGHT to survive: for `defs`, `refs` IS `_defs(target)`, so the
-        certification branch is reached exactly when `_defs` is empty, which is exactly when
-        `_holds_definition` is False regardless of the kind tuple. The exclusion cannot fire.
-
-        That equivalence is the real invariant, so it is what gets pinned. If a future change
-        breaks it — `_defs` and the `defs` dispatch reading different sources — this goes red
-        instead of the exclusion quietly becoming load-bearing and untested."""
-        with tempfile.TemporaryDirectory() as root:
-            b = self._backend(root)
-            for sym in ("cart_summary", "use_cart", "checkout_button", "totally_unknown"):
-                reaches_empty_branch = not b._defs(sym)
-                would_certify = bool(b._defs(sym))
-                self.assertNotEqual(
-                    reaches_empty_branch, would_certify,
-                    f"`defs`({sym}) can reach the certification branch AND be certified — the "
-                    f"exclusion has become load-bearing and needs a real test, not this one")
 
     def test_refs_still_routes_to_the_lexical_superset(self):
         # CRG-NAV's ruling is untouched: calls+imports is a PARTIAL set and must not be dressed

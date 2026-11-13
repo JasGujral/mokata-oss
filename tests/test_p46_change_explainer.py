@@ -825,19 +825,17 @@ class TheTerminalHandOffIsOneSafeArgument(unittest.TestCase):
         """The hand-off reuses the terminal's `claude` program (its billing notice included) and
         appends one argument; it never resumes and never uses another program."""
         from mokata.ide import terminal as T
-        host = T.TerminalHost.__new__(T.TerminalHost)
-        host.root = HERE
-        host._lock = threading.Lock()
-        host._terms = {}
-        host._reaper = threading.Thread(target=lambda: None)
-        host._reaper.start()
-        host.enabled = (True, "")
-        host.programs = {"claude": lambda resume: ["/bin/claude"], "shell": lambda r: ["/bin/sh"]}
+        # A REAL host (0.0.28 lane B, `TERMINALHOST-IDLE-SECS-ATTRERROR`): one half-built with
+        # `__new__` lacked `idle_secs`, and the reaper thread `open()` starts died reading it.
+        host = T.TerminalHost(HERE, programs={"claude": lambda resume: ["/bin/claude"],
+                                              "shell": lambda r: ["/bin/sh"]},
+                              enabled=(True, ""))
+        self.addCleanup(host.close_all)
         made = {}
 
         def fake(tid, program, argv, root, cols, rows):
             made["argv"], made["program"] = argv, program
-            return mock.Mock(alive=True, id=tid)
+            return mock.Mock(alive=True, id=tid, last_poll=time.time())
         with mock.patch.object(T, "_make_terminal", fake):
             host.open("claude", explain="session S1")
             self.assertEqual(["/bin/claude", "/mokata:explain session S1"], made["argv"])

@@ -25,6 +25,7 @@ PLAYWRIGHT_BROWSERS_PATH). Without them each flow SKIPS — unless `MOKATA_REQUI
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """
 
+import json
 import os
 import queue
 import shutil
@@ -39,6 +40,19 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SRC = os.path.join(ROOT, "src")
 REQUIRED = os.environ.get("MOKATA_REQUIRE_E2E") == "1"
+#: Which playwright browser the flows run in (`MOKATA_E2E_BROWSER`, default chromium). Validated here,
+#: at import: a name this harness does not know is an error naming it, never a quiet fallback to
+#: Chromium (a "Firefox" job that ran Chromium would read green and test nothing).
+BROWSERS = ("chromium", "firefox")
+BROWSER = os.environ.get("MOKATA_E2E_BROWSER", "chromium")
+if BROWSER not in BROWSERS:
+    raise AssertionError("MOKATA_E2E_BROWSER=%r is not a browser this harness runs (one of: %s)"
+                         % (BROWSER, ", ".join(BROWSERS)))
+#: Per-browser launch options. Firefox has no clipboard permission to grant (Playwright's
+#: `clipboard-read` is Chromium-only), so the async clipboard is enabled by pref instead.
+_LAUNCH = {"chromium": {},
+           "firefox": {"firefox_user_prefs": {"dom.events.asyncClipboard.readText": True,
+                                              "dom.events.testing.asyncClipboard": True}}}
 START_TIMEOUT = 45.0
 STEP_MS = 20000
 
@@ -234,6 +248,13 @@ class IdeServer(object):
 
 # ---- the flow base -------------------------------------------------------------------------------
 
+def grant_clipboard(page, origin):
+    """Let the page read and write the clipboard. Chromium needs a permission grant; Firefox has no
+    such permission (it is enabled by launch pref, `_LAUNCH`), so there it is a no-op."""
+    if BROWSER == "chromium":
+        page.context.grant_permissions(["clipboard-read", "clipboard-write"], origin=origin)
+
+
 class IdeFlow(unittest.TestCase):
     """One fixture repo + one server + one page per subclass; see the module docstring.
 
@@ -242,6 +263,12 @@ class IdeFlow(unittest.TestCase):
     first red is the one to read."""
 
     FIXTURE = "shop"
+    #: The page's locale, pinned (not the machine's): the product formats counts in the reader's
+    #: locale, and Firefox and headless Chromium on Linux follow the OS.
+    LOCALE = "en-US"
+    #: Fail the whole flow in setUpClass when the page's language is not LOCALE. Only the locale
+    #: guard flow turns this off, so a dropped pin reads there as failed STEPS (a gradeable red).
+    SELF_CHECK_LOCALE = True
     #: HTTP statuses a flow EXPECTS (e.g. a gated route answering 409); anything else >= 400 reds.
     EXPECTED_HTTP = ()
 
@@ -257,7 +284,8 @@ class IdeFlow(unittest.TestCase):
             return
         if NO_PLAYWRIGHT:
             if REQUIRED:
-                raise AssertionError("MOKATA_REQUIRE_E2E=1 but " + NO_PLAYWRIGHT)
+                raise AssertionError("MOKATA_REQUIRE_E2E=1 but %s — cannot run %s"
+                                     % (NO_PLAYWRIGHT, BROWSER))
             # Not a SkipTest from setUpClass: that drops the tests from `Ran N` instead of
             # counting them as skips (tests/test_suite_count_integrity.py). Each test skips itself.
             cls.no_browser = NO_PLAYWRIGHT
@@ -268,18 +296,18 @@ class IdeFlow(unittest.TestCase):
             cls.server = IdeServer(cls.repo)
             cls.pw = sync_playwright().start()
             try:
-                cls.browser = cls.pw.chromium.launch()
+                cls.browser = getattr(cls.pw, BROWSER).launch(**_LAUNCH[BROWSER])
             except Exception as exc:
                 if REQUIRED:
-                    raise AssertionError("MOKATA_REQUIRE_E2E=1 but Chromium did not launch: %s"
-                                         % exc)
-                cls.no_browser = "no launchable Chromium: %s" % exc
+                    raise AssertionError("MOKATA_REQUIRE_E2E=1 but %s did not launch: %s"
+                                         % (BROWSER, exc))
+                cls.no_browser = "no launchable %s: %s" % (BROWSER, exc)
                 cls._teardown()
                 return
         except BaseException:
             cls._teardown()
             raise
-        cls.page = cls.browser.new_page(viewport={"width": 1400, "height": 900})
+        cls.page = cls.browser.new_page(viewport={"width": 1400, "height": 900}, locale=cls.LOCALE)
         cls.page.set_default_timeout(STEP_MS)
         cls.errors = []
         cls.requests = []
@@ -291,11 +319,23 @@ class IdeFlow(unittest.TestCase):
         page.on("response", lambda r: cls.errors.append("HTTP %d %s" % (r.status, r.url))
                 if r.status >= 400 and r.status not in cls.EXPECTED_HTTP else None)
         page.goto(cls.server.url)
+        got = page.evaluate("navigator.language")
+        if cls.SELF_CHECK_LOCALE and got != cls.LOCALE:
+            cls._teardown()
+            raise AssertionError("the page's locale is %r, not the pinned %r (%s)"
+                                 % (got, cls.LOCALE, BROWSER))
 
     @classmethod
     def _expected_console(cls, text):
         # Chromium logs "Failed to load resource: ... status of 409" for an EXPECTED status too.
-        return any("status of %d" % s in text for s in cls.EXPECTED_HTTP)
+        if any("status of %d" % s in text for s in cls.EXPECTED_HTTP):
+            return True
+        # Firefox logs a console error when a navigation (`goto`/`reload`, a flow's fresh page)
+        # aborts the page's open EventSource while the document is still loading. That is the
+        # browser reporting its own abort of the live stream, not the page failing; the filter is
+        # this one message about this one route, so a real stream failure still reds.
+        return (BROWSER == "firefox" and "/api/events" in text
+                and "was interrupted while the page was loading" in text)
 
     @classmethod
     def _teardown(cls):
@@ -384,7 +424,11 @@ class IdeFlow(unittest.TestCase):
         p.click("#qo-open")
         p.wait_for_selector("#qo:not([hidden])")
         p.fill("#qo-input", path)
-        p.locator("#qo-results .qo-row", has_text=path.rsplit("/", 1)[-1]).first.click(modifiers=["Alt"])
+        # a row of the list that answers THIS query: the empty query's list (drawn when the palette
+        # opened) is about to be replaced, and a click aimed at one of its rows lands on whatever the
+        # new list puts there - or on nothing (0.0.28 D, the Linux Firefox full-suite red)
+        p.locator("#qo-results[data-q=%s] .qo-row" % json.dumps(path),
+                  has_text=path.rsplit("/", 1)[-1]).first.click(modifiers=["Alt"])
         p.wait_for_selector("#view-navigate:not([hidden])")
         self.until("!!(window.MK && MK.nav && MK.nav.path === %r)" % path, "%s to open" % path)
 

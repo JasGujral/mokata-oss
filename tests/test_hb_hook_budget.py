@@ -462,8 +462,10 @@ def _p95(xs):
 
 
 class HookBudgetHoldsForEveryWiredHook(unittest.TestCase):
-    """doc 109 §17.2, measured the way the harness experiences it: a fresh `mokata-hook <sub>`
-    process per call — the console script's own target, the `mokata_emit` front door (0.0.26 O3:
+    """doc 109 §17.2, measured the way the harness experiences it: a fresh process per call through
+    the plugin's own launcher (`hooks.json` -> `mokata-hook-launch` -> the pinned runtime, with
+    Claude Code's `PYTHONDONTWRITEBYTECODE=1` set: `_support.plugin_route_hook`, 0.0.28 W5) into
+    the `mokata_emit` front door (0.0.26 O3:
     observe hooks are spooled and drained by a detached process; the drain is let finish between
     calls and is NOT timed, as it is not on the harness's clock) — on the PLUGIN route (`--via-plugin`, the globally installed one — the heavier of
     the two routes, it also checks for a settings-route twin), the payload on stdin, p95 over N calls
@@ -513,12 +515,14 @@ class HookBudgetHoldsForEveryWiredHook(unittest.TestCase):
         import statistics
         import time
         spool = os.path.join(self._t.name, "spool")
-        env = dict(os.environ, PYTHONPATH=SRC, CLAUDE_PROJECT_DIR=d, MOKATA_HOOK_SPOOL=spool)
+        argv, env = _support.plugin_route_hook(
+            sub, "--via-plugin",
+            env=dict(os.environ, PYTHONPATH=SRC, CLAUDE_PROJECT_DIR=d, MOKATA_HOOK_SPOOL=spool),
+            home=os.path.join(self._t.name, "home"))
         xs, floor = [], []
         for i in range(self.N + 2):
             t0 = time.perf_counter()
-            subprocess.run([sys.executable, "-m", "mokata_emit", sub, "--via-plugin"],
-                           input=body, cwd=d,
+            subprocess.run(argv, input=body, cwd=d,
                            env=env, capture_output=True, timeout=60, **hidden())
             t1 = time.perf_counter()
             _wait_drained(spool)
@@ -582,6 +586,142 @@ class HookBudgetHoldsForEveryWiredHook(unittest.TestCase):
     def test_in_a_session_bound_to_a_run(self):
         self._check("bound", list(perf.HOOK_KINDS))
 
+
+#: The fixture's line length — at or under the SHORTEST line the progress log's writer can emit
+#: (`TheFixtureIsTheWorstCase` pins it): what a start pays per log line scales with the line COUNT in
+#: the 8 MiB window, not its bytes, so the worst case is the shortest line. 130 B is 64.5k lines.
+WORST_LINE_BYTES = 130
+
+
+def _worst_case_line(iso: str, run: str) -> str:
+    """One `WORST_LINE_BYTES` line with every `ENVELOPE_KEYS` key, as short as it can be made."""
+    from mokata.progress_events import ENVELOPE_KEYS
+    import uuid
+    ev = dict.fromkeys(ENVELOPE_KEYS)
+    ev.update(event_id=uuid.uuid4().hex[:8], ts=iso, schema_version=1, type="p",
+              stage="d", run_id=run, data={"n": ""})
+    pad = WORST_LINE_BYTES - len(json.dumps(ev, separators=(",", ":"))) - 1
+    ev["data"]["n"] = "x" * pad
+    line = json.dumps(ev, separators=(",", ":")) + "\n"
+    assert len(line.encode("utf-8")) == WORST_LINE_BYTES, len(line)
+    return line
+
+
+class TheFixtureIsTheWorstCase(unittest.TestCase):
+    """The budget cell below is only the worst case if no real line is shorter than its lines."""
+
+    def test_no_line_the_writer_emits_is_shorter_than_the_fixtures(self):
+        from mokata.progress_events import ProgressLog
+        with tempfile.TemporaryDirectory() as t:
+            path = os.path.join(t, "log.jsonl")
+            # every field the caller controls at its emptiest: no type, no stage, no run, no data
+            ProgressLog(path).append_event("", "", run_id=None, data={})
+            with open(path, "rb") as fh:
+                line = fh.read()
+        ts = json.loads(line)["ts"]
+        shortest = len(line) - (len(ts) - len(ts.split(".")[0] + "+00:00") if "." in ts else 0)
+        self.assertGreaterEqual(shortest, WORST_LINE_BYTES,
+                                "a real line can be shorter than the budget fixture's: lower "
+                                "WORST_LINE_BYTES to it")
+
+    def test_the_fixture_line_is_that_long_and_an_event(self):
+        line = _worst_case_line("2030-01-01T00:00:00Z", "r1")
+        self.assertEqual(WORST_LINE_BYTES, len(line.encode("utf-8")))
+        from mokata.progress_events import ENVELOPE_KEYS
+        self.assertEqual(set(ENVELOPE_KEYS), set(json.loads(line)))
+
+
+class SessionStartHoldsOnEverySourceAtTheLogBound(unittest.TestCase):
+    """0.0.28 F rounds 3-4 — SessionStart on EVERY source (startup, resume, clear, compact) with the
+    progress log AT its read bound (8 MiB, every line newer than the run's start, so every backward
+    reader walks all of it) of WORST-CASE lines (`WORST_LINE_BYTES`, 64.5k of them) and a full
+    timeline (`TIMELINE_KEEP` lines), measured exactly as above, on both fixtures that read it:
+    `bound` (the session bound to a run: re-anchor, working set, current stage, the next-step
+    derivation) and `repo` (no run). Each source must hold at `MARGIN` of its ceiling, not at the
+    ceiling: a cell that passes at 399 of 400 is a cell that flakes on the runners."""
+
+    MARGIN = 0.9
+    N = HookBudgetHoldsForEveryWiredHook.N
+    BATCHES = HookBudgetHoldsForEveryWiredHook.BATCHES
+    FLOOR = HookBudgetHoldsForEveryWiredHook.FLOOR
+    _batch = HookBudgetHoldsForEveryWiredHook._batch
+
+    @classmethod
+    def setUpClass(cls):
+        import time
+        import uuid
+        from mokata import run_intent as RI
+        from mokata.config import Surface
+        from mokata.govern.resume import PipelineCheckpoint
+        from mokata.hints import LOG_BYTE_CAP, TIMELINE_KEEP, timeline_path
+        from mokata.progress_events import PROGRESS_EVENTS_FILENAME
+        from mokata.tdd_state import state_dir
+        cls._t = tempfile.TemporaryDirectory()
+        now = time.time()
+        iso = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(now + 60)) + "Z"
+        cls.dirs = {}
+        for fixture in ("bound", "repo"):
+            d = os.path.join(os.path.realpath(cls._t.name), fixture)
+            os.makedirs(os.path.join(d, "src"))
+            _git("init", "-q", d)
+            with open(os.path.join(d, "src", "a.py"), "w", encoding="utf-8") as fh:
+                fh.write("x = 1\n")
+            init_repo(root=d, profile="standard", assume_yes=True, out=_silent)
+            if fixture == "bound":
+                PipelineCheckpoint(Surface.load(d).state, "r1").ensure_registered()
+                RI.bind_registered(d, "S1", "r1")
+            os.makedirs(state_dir(d), exist_ok=True)
+            with open(os.path.join(state_dir(d), PROGRESS_EVENTS_FILENAME), "a",
+                      encoding="utf-8") as fh:
+                n = 0
+                while n < LOG_BYTE_CAP:
+                    line = _worst_case_line(iso, "r1")
+                    fh.write(line)
+                    n += len(line)
+            tl = timeline_path(d)
+            os.makedirs(os.path.dirname(tl), exist_ok=True)
+            with open(tl, "w", encoding="utf-8") as fh:
+                for i in range(TIMELINE_KEEP):
+                    fh.write(json.dumps({"id": uuid.uuid4().hex, "t": now - 3600 + i * 0.1,
+                                         "session": "S1", "run": "r1", "path": f"src/m{i % 400}.py",
+                                         "kind": "after" if i % 2 else "before", "sha": "a" * 40,
+                                         "state": "ok", "size": 1234}) + "\n")
+            cls.dirs[fixture] = d
+        cls.relax = perf.relax_factor()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._t.cleanup()
+
+    def _fixture(self, fixture):
+        ceiling, _target = perf.hook_budget_ms("session-start", fixture)
+        allowed = ceiling * self.MARGIN * self.relax
+        d = self.dirs[fixture]
+        over, rows = [], []
+        for source in ("startup", "resume", "clear", "compact"):
+            body = json.dumps({"session_id": "S1", "cwd": d, "transcript_path": "",
+                               "hook_event_name": "SessionStart", "source": source}).encode()
+            seen = []
+            for _ in range(self.BATCHES):
+                p95, floor = self._batch("session-start", d, body)
+                seen.append((p95 / perf.interpreter_factor(floor), p95, floor))
+                if seen[-1][0] <= allowed:
+                    break
+            best = min(seen)
+            rows.append(f"{source:<8} p95 {best[0]:7.1f} normalised ({best[1]:.1f} raw, floor "
+                        f"{best[2]:.1f})  allowed {allowed:g} ({self.MARGIN:g} x ceiling "
+                        f"{ceiling * self.relax:g})")
+            if best[0] > allowed:
+                over.append(f"{source}: {best[0]:.1f} > {allowed:g} {seen}")
+        sys.stderr.write(f"\n[HOOK-BUDGET 8 MiB x {WORST_LINE_BYTES} B lines] session-start @ "
+                         f"{fixture}:\n" + "".join(f"  {r}\n" for r in rows))
+        self.assertEqual([], over)
+
+    def test_every_source_holds_its_margin_bound(self):
+        self._fixture("bound")
+
+    def test_every_source_holds_its_margin_repo(self):
+        self._fixture("repo")
 
 if __name__ == "__main__":
     unittest.main()

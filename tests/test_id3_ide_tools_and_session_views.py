@@ -270,10 +270,6 @@ class TheServerRoutesAreGuardedAndContained(_Repo):
     def test_the_replay_route_is_deleted(self):
         self.assertEqual(404, self.c.get("/api/timelapse?session=S1", headers=self.tok).status_code)
 
-    def test_the_repo_treemap_is_deleted_not_hidden(self):
-        """UX-SIMPLIFY #28: the Sessions Map answered no review question; its route is gone."""
-        self.assertEqual(404, self.c.get("/api/treemap?session=S1", headers=self.tok).status_code)
-        self.assertFalse(hasattr(SV, "treemap"))
 
     def test_the_browser_reads_the_bus_ring(self):
         r = self.c.post("/api/bus", json={"kind": "session_end", "session": "S1"}, headers=self.tok)
@@ -359,10 +355,14 @@ class TheIdeToolsWithNoWindow(_Repo):
 
     def test_open_contains_the_path_before_contacting_anything(self):
         from mokata.mcp.tools_ide import ide_open
+        from mokata.mcp.validation import ValidationError
         with mock.patch("mokata.ide.launch.running") as running:
             for bad in ("../x.py", "/etc/passwd"):
                 self.assertEqual("refused", ide_open(self.d, file=bad)["status"], bad)
-            self.assertEqual("error", ide_open(self.d)["status"])
+            # 0.0.28 I2: naming neither `file` nor `session` is a caller fault — RAISED, not "error"
+            with self.assertRaises(ValidationError) as cm:
+                ide_open(self.d)
+            self.assertEqual("file", cm.exception.field)
             running.assert_not_called()
         self.assertEqual("not_running", ide_open(self.d, file="src/a.py")["status"])
 

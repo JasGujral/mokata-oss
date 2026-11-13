@@ -26,7 +26,11 @@ def cmd_mcp(args: argparse.Namespace) -> int:
         return _cmd_mcp_status(args)
     if action == "install":
         return _cmd_mcp_install(args)
-    print(f"mcp: unknown action '{action}' (use discover | start | status | install).",
+    if action == "docs":
+        # 0.0.28 I2 — the MCP tool reference, rendered from the live schemas (stdout).
+        sys.stdout.write(mcp_admin.render_tool_docs())
+        return 0
+    print(f"mcp: unknown action '{action}' (use discover | start | status | install | docs).",
           file=sys.stderr)
     return 2
 
@@ -109,11 +113,12 @@ def register(sub, common):
     )
     p_mcp.add_argument(
         "action", nargs="?", default="discover",
-        choices=("discover", "start", "status", "install"),
+        choices=("discover", "start", "status", "install", "docs"),
         help="discover (default): map external MCP servers to roles (H4) · start: run the "
              "mokata server foreground on stdio (debug) · status: `initialize` handshake "
              "against the registered server (CONNECTED ✓ or a specific failure + fix) · "
-             "install: write/repair the Claude Code registration (absolute-path, idempotent)")
+             "install: write/repair the Claude Code registration (absolute-path, idempotent) · "
+             "docs: print the MCP tool reference rendered from the live schemas")
     p_mcp.add_argument(
         "--scope", choices=SCOPES, default="project",
         help="install/status registration scope: project (.mcp.json) or user (~/.claude.json)")

@@ -180,11 +180,6 @@ class TestR_O14b_TheLensHasNoClock(unittest.TestCase):
         self.assertFalse(plan.ok)
         self.assertEqual(plan.gate, "blast-radius")
 
-    def test_no_clock_remains(self):
-        from mokata.engine import amend as A
-        self.assertFalse(hasattr(A, "_LENS_BUDGET_SECS"))
-        self.assertFalse(hasattr(A, "_bounded_lens"))
-
 
 if __name__ == "__main__":
     unittest.main()

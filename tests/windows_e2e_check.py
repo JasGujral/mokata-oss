@@ -38,6 +38,7 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """
 
 import argparse
+import io
 import json
 import os
 import shutil
@@ -102,17 +103,45 @@ class Server:
     reports as an infrastructure problem rather than as the product defect it is.
     """
 
-    def __init__(self, cwd):
+    def __init__(self, cwd, argv=None):
         self.proc = subprocess.Popen(
-            [resolve("mokata-mcp")], cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, text=True, bufsize=1)
+            argv or [resolve("mokata-mcp")], cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE)
+        # The server speaks UTF-8 on stdio (MCP). `text=True` alone decodes with the Windows ANSI
+        # code page (cp1252), which cannot read the em dashes in `tools/list` — the reader thread
+        # died of UnicodeDecodeError, looked like an EOF, and the check then waited for a server
+        # that was alive and fine. That was the whole ten-minute "hang".
+        # The protocol channel (stdout) is decoded STRICT: bytes that are not UTF-8 on an MCP
+        # channel are a product defect and must fail the check by name (`_readline` reports the
+        # exception), never be quietly turned into U+FFFD and pass. Only the stderr diagnostics —
+        # shown to people — are decoded leniently.
+        self._in = io.TextIOWrapper(self.proc.stdin, encoding="utf-8", write_through=True)
+        self._out = io.TextIOWrapper(self.proc.stdout, encoding="utf-8", errors="strict")
+        self._errs = io.TextIOWrapper(self.proc.stderr, encoding="utf-8", errors="replace")
+        # stderr is drained from the first byte by its own thread: a server that writes more than a
+        # pipe holds would otherwise block on stderr, and a failure report that READS stderr after
+        # the fact would block for as long as anything (a child the server started) kept the pipe
+        # open — which hung this check for the job's whole ten minutes with no output at all.
+        self._err = []
+        self._drain = threading.Thread(target=self._drain_stderr, daemon=True)
+        self._drain.start()
+
+    def _drain_stderr(self):
+        try:
+            for chunk in iter(self._errs.readline, ""):
+                self._err.append(chunk)
+        except (OSError, ValueError):
+            pass
+
+    def stderr_tail(self):
+        return "".join(self._err)[-2000:]
 
     def _readline(self):
         holder = {}
 
         def _read():
             try:
-                holder["line"] = self.proc.stdout.readline()
+                holder["line"] = self._out.readline()
             except Exception as exc:                          # pragma: no cover
                 holder["exc"] = exc
 
@@ -121,28 +150,31 @@ class Server:
         reader.join(READ_TIMEOUT)
         if reader.is_alive():
             raise StepFailed("the server did not answer within %.0fs — it started and then went "
-                             "quiet, which is a different failure from not starting"
-                             % READ_TIMEOUT)
+                             "quiet, which is a different failure from not starting. stderr:\n%s"
+                             % (READ_TIMEOUT, self.stderr_tail()))
+        if "exc" in holder:
+            raise StepFailed("reading the server's answer failed: %r" % (holder["exc"],))
         line = holder.get("line")
         if not line:
-            err = ""
             try:
-                err = (self.proc.stderr.read() or "")[-2000:]
-            except Exception:                                 # pragma: no cover
-                pass
-            raise StepFailed("the server closed its stdout without answering. stderr:\n" + err)
+                code = self.proc.wait(timeout=READ_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                code = None
+            self._drain.join(5)
+            raise StepFailed("the server closed its stdout without answering (exit code %s). "
+                             "stderr:\n%s" % (code, self.stderr_tail()))
         return line
 
     def call(self, method, params=None, request_id=1):
-        self.proc.stdin.write(json.dumps({
+        self._in.write(json.dumps({
             "jsonrpc": "2.0", "id": request_id, "method": method,
             "params": params or {}}) + "\n")
-        self.proc.stdin.flush()
+        self._in.flush()
         return json.loads(self._readline())
 
     def notify(self, method):
-        self.proc.stdin.write(json.dumps({"jsonrpc": "2.0", "method": method}) + "\n")
-        self.proc.stdin.flush()
+        self._in.write(json.dumps({"jsonrpc": "2.0", "method": method}) + "\n")
+        self._in.flush()
 
     def tool(self, name, arguments, request_id):
         """Call a tool and return its decoded JSON payload.
@@ -170,10 +202,20 @@ class Server:
                 self.proc.kill()
             except Exception:
                 pass
+        finally:
+            # Release the pipes. A close can wait on a reader still inside `readline` (a child of
+            # the server may hold a pipe open), so each runs on its own daemon thread and is
+            # waited for briefly — cleanup must never be the thing that hangs the check.
+            self._drain.join(5)
+            for wrapper in (self._in, self._out, self._errs):
+                closer = threading.Thread(target=lambda w=wrapper: w.close(), daemon=True)
+                closer.start()
+                closer.join(2)
 
 
 def _run(argv, cwd):
     proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace",
                           stdin=subprocess.DEVNULL, timeout=180)
     return proc
 

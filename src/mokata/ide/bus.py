@@ -18,7 +18,7 @@ watcher task per server, and only while a page is attached — the server stays 
 The bus never blocks a publisher and never grows without bound: a fixed ring; a subscriber that falls
 further behind than the ring is told to resync (`changed`) instead of being queued for.
 
-The bridge record (`temp_local/ide/bridge.json`, 0600) holds the two values an http hook has to bake
+The bridge record (`temp_local/ide/bridge.json`, owner-only: `winacl`, 0.0.28 C1) holds the two values an http hook has to bake
 into settings: a STABLE per-repo port and a hook token. The hook token authorises `POST /api/bus` and
 nothing else — it can never read the repo through the page API (least privilege, doc 109 §6).
 
@@ -72,10 +72,15 @@ def bridge_path(root: str) -> str:
 
 
 def read_bridge(root: str) -> Optional[Dict[str, Any]]:
+    """The bridge record — only if it is OURS and still private (0.0.28 C1: a planted or weak record is
+    refused, never adopted)."""
+    from ..winacl import read_private
+    raw = read_private(bridge_path(root))
+    if raw is None:
+        return None
     try:
-        with open(bridge_path(root), encoding="utf-8") as fh:
-            d = json.load(fh)
-    except (OSError, ValueError):
+        d = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
         return None
     if not isinstance(d, dict) or not isinstance(d.get("token"), str) or not d.get("token"):
         return None
@@ -111,18 +116,20 @@ def _pick_port(root: str) -> int:
 
 def ensure_bridge(root: str) -> Dict[str, Any]:
     """The repo's bridge record, created once (port + hook token) and then STABLE — the http hooks
-    in `.claude/settings.local.json` carry both, so they must not move between launches."""
+    in `.claude/settings.local.json` carry both, so they must not move between launches.
+
+    0.0.28 C1: written through the private door. A record that fails verification (planted, or left
+    readable by others) is NOT returned: a fresh one replaces it (the replace raises when the folder
+    will not let this user remove a foreign file). Its only callers are `mokata setup`'s bridge and
+    gate steps, which bake the record they get back into `settings.local.json` in the same run."""
     rec = read_bridge(root)
     if rec:
         return rec
+    from ..atomicfile import atomic_write_text
     rec = {"port": _pick_port(root), "token": secrets.token_urlsafe(24)}
     path = bridge_path(root)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + f".tmp-{os.getpid()}"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        json.dump(rec, fh)
-    os.replace(tmp, path)
+    atomic_write_text(path, json.dumps(rec), private=True)
     return rec
 
 

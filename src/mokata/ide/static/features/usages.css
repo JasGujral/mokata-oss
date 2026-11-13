@@ -14,3 +14,14 @@
 .p4-cands { flex-wrap: wrap; gap: 4px; }
 .p4-pager { gap: 8px; align-items: center; margin-top: 6px; }
 .p4-row:focus-visible, .p4-shape:focus-visible, .p4-pop button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+/* 0.0.28 G — the box's tabs and the Callers/Callees tree. At 200% the tablist scrolls, rows wrap. */
+.p4-tabs { display: flex; gap: 4px; overflow-x: auto; white-space: nowrap; margin-bottom: 8px; }
+.p4-tab:focus-visible, .p4-node:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.p4-tree, .p4-group { list-style: none; margin: 0; padding: 0; }
+.p4-group { padding-left: 14px; }
+.p4-node { cursor: default; }
+.p4-call-row { display: flex; flex-wrap: wrap; gap: 4px; align-items: baseline; min-width: 0; overflow-wrap: anywhere; cursor: pointer; }
+.p4-call-row > * { min-width: 0; overflow-wrap: anywhere; }
+.p4-exp { display: inline-block; width: 1em; flex: none; cursor: pointer; }
+.p4-node[aria-disabled="true"] > .p4-call-row { cursor: not-allowed; opacity: 0.8; }
+@media (prefers-reduced-motion: reduce) { .p4-usages * { transition: none !important; animation: none !important; } }

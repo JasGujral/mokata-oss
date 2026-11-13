@@ -393,7 +393,7 @@ RECORD_VERDICT_INSTRUCTION = (
     "When the review reaches its verdict, PERSIST it so `/mokata:ship` can verify the record "
     "(evidence over vibes): "
     + REVIEW_RECORD_INSTRUMENT +
-    " with `passed=true` (or `failed=true`), setting `independent=true` when it "
+    " with `outcome=\"passed\"` (or `outcome=\"failed\"`; `--passed`/`--failed` on the CLI), setting `independent=true` when it "
     "ran as a fresh-context subagent and OMITTING it when it degraded to the inline two-pass, "
     "and `blocking=<how many Blocking findings you raised>` (0 when none; `--blocking N` on the "
     "CLI) — that count is what makes \"caught at review vs caught in the loop\" measurable, and "

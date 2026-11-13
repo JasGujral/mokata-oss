@@ -163,9 +163,10 @@ def routes(reg, ctx) -> None:
                              "sample": False})
 
     async def suite(request):
-        """POST /api/worktree/suite {path} — mokata's full-suite runner in that worktree, as a
-        `tests.run` job; what it records is the merge's test evidence (P2)."""
-        from ... import merge_suite as MS
+        """POST /api/worktree/suite {path} — mokata's full-suite runner in that worktree, then the
+        spec legs (0.0.28 F), as ONE `tests.run` job; what they record is the merge's test evidence
+        (P2) and spec evidence (P3b). Cancel ends it with nothing recorded."""
+        from ... import merge_spec as MSL
         body = await ctx.body(request)
         body = body if isinstance(body, dict) else {}
         path = str(body.get("path") or "")
@@ -178,7 +179,7 @@ def routes(reg, ctx) -> None:
         state.attach_loop()
         # a suite that cannot run (no command, no bound run) FAILS as a job, saying why
         job = state.jobs.start("tests.run", {"route": "/api/worktree/suite", "path": path},
-                               lambda: MS.run_full_suite(root, path),
+                               lambda: MSL.run_suite_and_leg(root, path),
                                label=f"full suite · {os.path.basename(path)[:40]}",
                                scope=os.path.basename(path),
                                client=request.headers.get("x-mokata-client") or None)

@@ -126,14 +126,6 @@ def _beats(progress_path):
         return []
 
 
-def _kill_tree(proc, job=None):
-    """Kill the sweep AND its children (hook subprocesses a hung test may have spawned) through
-    the one tree-kill the repo already has (`ide.lsp._kill_tree`: killpg on POSIX, the Job Object
-    on Windows) -- no second spelling, and no bare `taskkill` resolved through System32."""
-    from mokata.ide.lsp import _kill_tree as tree_kill
-    tree_kill(proc, pgid=None if os.name == "nt" else proc.pid, job=job)
-
-
 def run_sweep(modules, extra_tree=None, stall_floor_s=STALL_FLOOR_S, stall_factor=STALL_FACTOR,
               poll_s=0.25):
     """Run the sweep over `modules` and return (proc, journal records)."""
@@ -159,13 +151,17 @@ def run_sweep(modules, extra_tree=None, stall_floor_s=STALL_FLOOR_S, stall_facto
         # Output goes to FILES, not pipes: a poll loop that does not drain a pipe deadlocks the
         # child on a full buffer, and that deadlock would read as the hang this guard hunts.
         with open(out_path, "wb") as out_fh, open(err_path, "wb") as err_fh:
-            from mokata.ide.lsp import spawn_jobbed       # Windows: in the job before it runs
-            proc, job = spawn_jobbed(argv, cwd=_TESTS, env=env, stdin=subprocess.DEVNULL,
-                                     stdout=out_fh, stderr=err_fh)
+            # The sweep AND its children (hook subprocesses a hung test may have spawned) are one
+            # tree owned by the process door's handle: killpg while unreaped on POSIX, the Job
+            # Object on Windows — no second spelling, and no bare `taskkill` through System32.
+            from mokata.quiet_spawn import spawn_jobbed
+            tree = spawn_jobbed(argv, cwd=_TESTS, env=env, stdin=subprocess.DEVNULL,
+                                stdout=out_fh, stderr=err_fh)
+            proc = tree.proc
             last_n, last_t, slowest = 0, time.monotonic(), 0.0
             stalled = None
             try:
-                while proc.poll() is None:
+                while tree.poll_exit() is None:
                     time.sleep(poll_s)
                     n = len(_beats(progress))
                     now = time.monotonic()
@@ -176,11 +172,7 @@ def run_sweep(modules, extra_tree=None, stall_floor_s=STALL_FLOOR_S, stall_facto
                         stalled = now - last_t
                         break
             finally:
-                if proc.poll() is None:
-                    _kill_tree(proc, job)
-                proc.wait()
-                if job is not None:
-                    job.terminate()         # release the handle (no-op after a normal exit)
+                tree.close()                # ends the tree (if it still runs), reaps, releases
         def _read(path):
             with io.open(path, encoding="utf-8", errors="replace") as fh:
                 return fh.read()

@@ -18,8 +18,11 @@
                      "hints": {"type": "array", "items": {"$ref": "#/schemas/Hint"}},
                      "count": {"type": "integer"}, "reason": {"type": "string"},
                      "subject": {"type": "object", "required": ["session", "run", "chain"]},
-                     "basis": {"type": "object", "required": ["run", "source", "read", "bash", "note"]},
-                     "derived_at": {"type": "number"}}
+                     "basis": {"type": "object", "required": ["run", "source", "read", "bash", "note"],
+                               "properties": {"inputs": {"type": "array", "items": {"type": "string"}},
+                                              "listed": {"type": "array", "items": {"type": "string"}}}},
+                     "derived_at": {"type": "number"},
+                     "valid_until": {"type": ["number", "null"]}}
     }
   },
   "routes": [

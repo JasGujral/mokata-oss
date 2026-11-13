@@ -20,8 +20,9 @@ PY="${PYTHON:-python3}"
 
 DR=tests/_deprecation_removal.py
 T='test_a12_removal_drift_corpus_and_surfaces.py'
+TA=tests/$T
 
-TOTAL=5
+TOTAL=8
 ran=0; red=0; green=0; survivors=""
 
 # ---- step 0: the green baseline ---------------------------------------------------------------
@@ -84,6 +85,23 @@ mutant "J05 ★★ the surface deny-list is ignored — the one path declared no
        anyway, which is the same false-red pressure from the other side" "$DR" \
   '            if rel in DENIED_FROM_USER_SURFACES:' \
   '            if False:' "$T"
+
+# ==== C. the fourth answer of the deny-list existence test (0.0.28 lane A) =====================
+
+mutant "J06 ★★★ THE IGNORE CLAUSE IS DROPPED — any absent, untracked path is accepted, so a deny
+       entry for a path that was never there certifies a rule that applies to nothing" "$TA" \
+  '    return _git(root, "check-ignore", "--no-index", "-q", path + "/").returncode == 0' \
+  '    return True' "$T"
+
+mutant "J07 ★★★ THE TRACKED CLAUSE IS DROPPED — a tracked path that DISAPPEARS is accepted as
+       local-only because it also matches an ignore rule; the dead rule this test exists to catch" "$TA" \
+  '    if listed.returncode != 0 or listed.stdout.strip():' \
+  '    if False:' "$T"
+
+mutant "J08 ★★ THE PROBE LOSES ITS TRAILING SLASH — on an absent directory the pattern \`docs/x/\`
+       never matches a bare \`docs/x\`, so the real case (docs/marketing) reds again" "$TA" \
+  '    return _git(root, "check-ignore", "--no-index", "-q", path + "/").returncode == 0' \
+  '    return _git(root, "check-ignore", "--no-index", "-q", path).returncode == 0' "$T"
 
 # ==== verdict ==================================================================================
 

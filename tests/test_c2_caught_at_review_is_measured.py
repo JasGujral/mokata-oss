@@ -207,12 +207,17 @@ class ReviewLibSweepAVerdictCannotContradictItsOwnCount(unittest.TestCase):
 
     def test_the_mcp_twin_refuses_the_same_way(self):
         from mokata.mcp.tools_read import review_record
+        from mokata.mcp.validation import ValidationError
         with tempfile.TemporaryDirectory() as d:
-            _repo(d, "r1")
-            out = review_record(path=d, passed=True, blocking=2, run="r1")
-            self.assertFalse(out["recorded"])
-            self.assertFalse(out["satisfies_gate"])
-            self.assertIn("cannot be recorded as PASSED", out["reason"])
+            surface = _repo(d, "r1")
+            # 0.0.28 I2: `passed=True` is now `outcome="passed"`, and the contradiction (PASSED with
+            # Blocking findings) is RAISED as a ValidationError naming `blocking`, not returned.
+            with self.assertRaises(ValidationError) as cm:
+                review_record(path=d, outcome="passed", blocking=2, run="r1")
+            self.assertEqual("blocking", cm.exception.field)
+            self.assertIn("contradicts `outcome`", cm.exception.reason)
+            self.assertIsNone(PE.latest_review_verdict_event(surface, run_id="r1"),
+                              "a contradicted verdict was written — ship could accept it")
 
 
 class EverySurfaceSaysTheSameNumber(unittest.TestCase):
@@ -222,10 +227,14 @@ class EverySurfaceSaysTheSameNumber(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             surface = _repo(d, "r1")
             PE.record_gate_block(state_dir(d), "r1", G.GATE_TDD, "src/a.py")
-            self.assertTrue(review_record(path=d, failed=True, independent=True, blocking=3,
+            # 0.0.28 I2: `passed=/failed=` -> `outcome=`; a negative count is a RAISED fault
+            from mokata.mcp.validation import ValidationError
+            self.assertTrue(review_record(path=d, outcome="failed", independent=True, blocking=3,
                                           run="r1")["recorded"])
-            self.assertFalse(review_record(path=d, passed=True, blocking=-2, run="r1")["recorded"])
-            self.assertTrue(review_record(path=d, passed=True, independent=True, blocking=0,
+            with self.assertRaises(ValidationError) as cm:
+                review_record(path=d, outcome="passed", blocking=-2, run="r1")
+            self.assertEqual("blocking", cm.exception.field)
+            self.assertTrue(review_record(path=d, outcome="passed", independent=True, blocking=0,
                                           run="r1")["recorded"])
             caught = review_status(path=d, run="r1")["caught"]
             self.assertEqual({"in_loop": 1, "at_review": 3, "measured": True},

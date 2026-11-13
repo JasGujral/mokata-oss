@@ -30,7 +30,12 @@
   const query = (q) => (root.matchMedia ? root.matchMedia(q) : null);
   const mqLight = query("(prefers-color-scheme: light)");
   const mqMore = query("(prefers-contrast: more)");
-  const env = () => ({ light: !!(mqLight && mqLight.matches), more: !!(mqMore && mqMore.matches) });
+  // The OS state is read from a FRESH query each time it is resolved, never from the long-lived
+  // lists above (they only deliver the `change` events): a list whose `matches` lags its own event
+  // (Playwright's Firefox leaves an existing list's `prefers-contrast` stale while a new query
+  // reads it right — 0.0.28 D) can then never pin a stale theme.
+  const now = (q) => { const m = query(q); return !!(m && m.matches); };
+  const env = () => ({ light: now("(prefers-color-scheme: light)"), more: now("(prefers-contrast: more)") });
 
   let choice = "system";
   let userSet = false;               // the person picked: a later workspace load must not undo it

@@ -18,6 +18,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
 
@@ -51,6 +52,15 @@ _APP = "from pkg.core import mid\n\n\ndef top():\n    return mid()\n\n\ndef entr
 class TestRealCrgBlastRadius(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        # `HERMETIC-OPT-IN-UNGRADED` (0.0.28 lane A): the hermetic suite sets MOKATA_CRG=off unless a
+        # test opts in, and the build below runs HERE, in setUpClass, so the opt-in has to be at
+        # class level. `build_now` otherwise answers "switched off (MOKATA_CRG=off)" and every test
+        # fails with "build failed" — o2 shipped red for a release for exactly that. Scoped, never
+        # global: the patch is undone by `addClassCleanup`.
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        cls.addClassCleanup(patch.stop)
+        os.environ.pop("MOKATA_CRG", None)
         from mokata.knowledge.crg_client import CodeReviewGraphClient
         cls.root = os.path.realpath(tempfile.mkdtemp(prefix="o2-real-crg-"))
         os.makedirs(os.path.join(cls.root, "pkg"))

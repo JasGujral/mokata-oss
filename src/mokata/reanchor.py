@@ -94,16 +94,12 @@ def position(root: str, session_id: Optional[str]) -> Position:
         red, _green = load(store, rid)
         stage = None
         finished = False
-        for e in ProgressLog.from_state_dir(sd).read_events_backward():
-            if e.get("run_id") != rid:
-                continue
-            if e.get("type") == RUN_FINISHED and stage is None:
-                finished = True
-                stage = "ship"
-                break
-            if e.get("type") == STAGE_ENTER:
-                stage = e.get("stage")
-                break
+        e = ProgressLog.from_state_dir(sd).latest(rid, (RUN_FINISHED, STAGE_ENTER))
+        if e is not None and e.get("type") == RUN_FINISHED:
+            finished = True
+            stage = "ship"
+        elif e is not None:
+            stage = e.get("stage")
         return Position("bound", rid, stage, store.exists(APPROACH_PREFIX + rid),
                         store.exists(SPEC_PREFIX + rid), len(red), finished,
                         tuple(sorted(read_override(root, rid))))

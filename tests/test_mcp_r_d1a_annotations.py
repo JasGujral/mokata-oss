@@ -123,7 +123,11 @@ class TestCoverage(unittest.TestCase):
             self.assertIn("readOnlyHint", ann)           # present + bool for EVERY tool
             self.assertIsInstance(ann["readOnlyHint"], bool)
             self.assertIsInstance(ann["openWorldHint"], bool)
-            if spec.kind == "read":
+            if spec.kind == "read" and spec.name in A.APPEND_ONLY_TOOLS:
+                # 0.0.28 I2: append-only evidence tools are read-kind but NOT read-only
+                self.assertIs(ann["readOnlyHint"], False)
+                self.assertIs(ann["destructiveHint"], False)
+            elif spec.kind == "read":
                 self.assertIs(ann["readOnlyHint"], True)
             else:
                 self.assertIs(ann["readOnlyHint"], False)
@@ -197,7 +201,16 @@ class TestSchemaParity(unittest.TestCase):
             srv.add_tool(fn, name=name)
             return {t.name: t.inputSchema for t in asyncio.run(srv.list_tools())}[name]
 
-        raw = {s.name: _raw_schema(s.fn, s.name) for s in TOOLS if s.name in sample}
+        # 0.0.28 I2: build_server() drops pydantic's generated `title`; the raw reference gets the
+        # same drop so the parity claim ("annotations/_serve add nothing") still holds.
+        def _raw_schema_untitled(fn, name):
+            srv = FastMCP("parity")
+            srv.add_tool(fn, name=name)
+            for tool in srv._tool_manager.list_tools():
+                MS._drop_titles(tool.parameters)
+            return {t.name: t.inputSchema for t in asyncio.run(srv.list_tools())}[name]
+
+        raw = {s.name: _raw_schema_untitled(s.fn, s.name) for s in TOOLS if s.name in sample}
 
         # the BUILT schema: through build_server (which now attaches annotations AND _serve)
         built = {t.name: t.inputSchema for t in asyncio.run(MS.build_server().list_tools())

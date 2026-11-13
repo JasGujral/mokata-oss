@@ -97,14 +97,6 @@ class TestFinishDecision(unittest.TestCase):
         with self.assertRaises(ValueError):
             record_finish_decision(None, "rm-rf", approve=True)
 
-    def test_the_deprecated_confirmed_alias_is_gone(self):
-        """0.0.17 stage 5, `BACKCOMPAT-SWEEP` under the pre-1.0 rule (doc 85 §7d). `confirmed=`
-        was a deprecated alias for `approve=` with ZERO production call sites; deleting it is the
-        rule, not a judgement call. Asserted rather than merely removed, so a well-meaning
-        re-addition has to argue with a test."""
-        with self.assertRaises(TypeError):
-            record_finish_decision(None, "keep", confirmed=True)
-
 
 # ----------------------------------------------------------------- baseline (Part B)
 

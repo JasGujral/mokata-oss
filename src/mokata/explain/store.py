@@ -80,7 +80,21 @@ def _reviews(root: str, *more: str, create: bool = True) -> Optional[SafeDir]:
     if create and not os.path.isdir(os.path.join(root, MOKATA_DIR)):
         raise UnsafeStore("mokata is not set up in this repository (no .mokata/) — run "
                           "`mokata init` first; nothing was written")
-    return open_chain(root, [MOKATA_DIR, TEMP_LOCAL_DIRNAME, REVIEWS, *more], create=create)
+    # 0.0.28 C1: private from `reviews/` down ONLY — `.mokata` and `temp_local` are never created by
+    # the private door (their later ordinary files must not inherit an owner-only entry).
+    base = open_chain(root, [MOKATA_DIR, TEMP_LOCAL_DIRNAME], create=create)
+    if base is None:
+        return None
+    cur = base
+    for part in [REVIEWS, *more]:
+        try:
+            nxt = cur.sub(part, create=create, private=True)
+        finally:
+            cur.close()
+        if nxt is None:
+            return None
+        cur = nxt
+    return cur
 
 
 def _now_ts(now: float) -> str:

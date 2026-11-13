@@ -52,9 +52,10 @@ def _check_part(part: str) -> None:
 class SafeDir:
     """One verified directory. Use as a context manager (it holds a descriptor where it can)."""
 
-    def __init__(self, path: str, fd: Optional[int]) -> None:
+    def __init__(self, path: str, fd: Optional[int], private: bool = False) -> None:
         self.path = path
         self.fd = fd
+        self.private = private          # 0.0.28 C1: what it creates is born owner-only (`winacl`)
 
     def __enter__(self) -> "SafeDir":
         return self
@@ -119,15 +120,23 @@ class SafeDir:
 
     # -------------------------------------------------------------------------------- writes
     def write(self, name: str, data: bytes) -> None:
-        """Atomic: an `O_EXCL|O_NOFOLLOW` temp file in THIS directory, then `os.replace` within it."""
+        """Atomic: an `O_EXCL|O_NOFOLLOW` temp file in THIS directory, then `os.replace` within it. A
+        PRIVATE directory's temp is born owner-only through `winacl` (with this held fd); a plain one
+        keeps the folder's access (the umask on POSIX) — a page committed into the repo or a run record
+        is not a secret (0.0.28 C1, note C H3)."""
         _check_part(name)
         tmp = f".tmp-{_secrets.token_hex(6)}"
-        flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-                 | getattr(os, "O_BINARY", 0))
-        if self.fd is not None:
-            fd = os.open(tmp, flags, 0o600, dir_fd=self.fd)
+        if self.private:
+            from .. import winacl
+            fd = (winacl.create_private_file(tmp, dir_fd=self.fd) if self.fd is not None
+                  else winacl.create_private_file(os.path.join(self.path, tmp)))
         else:
-            fd = os.open(os.path.join(self.path, tmp), flags, 0o600)
+            flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+                     | getattr(os, "O_BINARY", 0))
+            if self.fd is not None:
+                fd = os.open(tmp, flags, 0o666, dir_fd=self.fd)
+            else:
+                fd = os.open(os.path.join(self.path, tmp), flags, 0o666)
         done = False
         try:
             with os.fdopen(fd, "wb") as fh:
@@ -157,19 +166,26 @@ class SafeDir:
         except OSError:
             return False
 
-    def sub(self, part: str, create: bool = True) -> Optional["SafeDir"]:
-        """A verified child directory (created when `create`), or None when absent."""
-        return _step(self, part, create)
+    def sub(self, part: str, create: bool = True, private: Optional[bool] = None) -> Optional["SafeDir"]:
+        """A verified child directory (created when `create`), or None when absent. It is private when
+        this one is, or when `private=True` asks (the reviews store from `reviews/` down)."""
+        return _step(self, part, create, self.private if private is None else private)
 
 
-def _step(parent: SafeDir, part: str, create: bool) -> Optional[SafeDir]:
+def _step(parent: SafeDir, part: str, create: bool, private: bool = False) -> Optional[SafeDir]:
     _check_part(part)
     if create:
         try:
-            if parent.fd is not None:
-                os.mkdir(part, 0o700, dir_fd=parent.fd)
+            if private:
+                from .. import winacl
+                if parent.fd is not None:
+                    winacl.make_private_dir(part, dir_fd=parent.fd)
+                else:
+                    winacl.make_private_dir(os.path.join(parent.path, part))
+            elif parent.fd is not None:
+                os.mkdir(part, 0o777, dir_fd=parent.fd)
             else:
-                os.mkdir(os.path.join(parent.path, part), 0o700)
+                os.mkdir(os.path.join(parent.path, part), 0o777)
         except FileExistsError:
             pass
     st = parent._lstat(part)
@@ -182,19 +198,24 @@ def _step(parent: SafeDir, part: str, create: bool) -> Optional[SafeDir]:
                           "(a store directory must be a real directory inside the repository)")
     path = os.path.join(parent.path, part)
     if parent.fd is None:
-        return SafeDir(path, None)
+        return SafeDir(path, None, private)
     fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent.fd)
     got = os.fstat(fd)
     if (got.st_dev, got.st_ino) != (st.st_dev, st.st_ino):
         os.close(fd)
         raise UnsafeStore(f"{part!r} changed while it was opened — refused")
-    return SafeDir(path, fd)
+    return SafeDir(path, fd, private)
 
 
-def open_chain(root: str, parts: Sequence[str], create: bool = True) -> Optional[SafeDir]:
+def open_chain(root: str, parts: Sequence[str], create: bool = True,
+               private: bool = False) -> Optional[SafeDir]:
     """The directory `root/parts[0]/…/parts[-1]`, every component verified. `root` is the repo
     root (resolved once with realpath — the repo itself may legitimately sit behind a link); the
-    components below it may not be links. None when absent and not `create`."""
+    components below it may not be links. None when absent and not `create`.
+
+    `private` (0.0.28 C1) is a property of the CALL, never of the module: every component this call
+    creates, and every file written through the result, is born owner-only. Plain by default — a
+    committed page (`explain_commit`) and a run record (`.mokata/runs/`) are not secrets."""
     top = os.path.realpath(root)
     st = os.stat(top)
     if not stat.S_ISDIR(st.st_mode):
@@ -203,7 +224,7 @@ def open_chain(root: str, parts: Sequence[str], create: bool = True) -> Optional
     done = False
     try:
         for part in parts:
-            nxt = _step(cur, part, create)
+            nxt = _step(cur, part, create, private)
             cur.close()
             if nxt is None:
                 done = True

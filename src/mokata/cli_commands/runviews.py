@@ -307,8 +307,9 @@ def cmd_progress_test_run(args: argparse.Namespace) -> int:
     except ValueError as exc:
         print(f"mokata test-run: not recorded — {exc}")
         return 1
-    verdict = "PASSED" if suite["passed"] else "FAILED"
-    named = f" · {len(suite['tests'])} test(s) recorded {'GREEN' if suite['passed'] else 'RED'}" \
+    ok = suite["verdict"] == "passed"           # the run's one word (0.0.28 D, test_runs.VERDICTS)
+    verdict = suite["verdict"].upper()
+    named = f" · {len(suite['tests'])} test(s) recorded {'GREEN' if ok else 'RED'}" \
         if suite["tests"] else ""
     print(f"mokata test-run: {verdict} recorded (run {res.run_id[:8]}){named}.")
     return 0
@@ -602,18 +603,37 @@ def cmd_worktree_merge_override(args: argparse.Namespace) -> int:
 
 def cmd_worktree_test(args: argparse.Namespace) -> int:
     # 0.0.27 P21 — mokata's full-suite runner in a session worktree: the merge's test evidence.
+    # 0.0.28 F — then the spec legs (spec-awareness, spec-drift) in the same worktree, recorded as
+    # the merge's spec evidence. A red suite does not skip them; Ctrl-C records nothing (exit 2).
+    from .. import ci_check as CI
+    from .. import merge_spec as MSL
     from .. import merge_suite as MS
+    from ..knowledge.cancel import Cancelled
     from ..merge_gate import MergeGateError
     try:
-        res = MS.run_full_suite(os.path.abspath(args.path), args.target)
-    except (MS.SuiteError, MergeGateError) as exc:
+        with CI.cancel_on_sigint():
+            res = MSL.run_suite_and_leg(os.path.abspath(args.path), args.target)
+    except Cancelled:
+        print(f"mokata worktree test: {CI.CANCELLED_TEXT}")
+        return CI.CANCELLED_EXIT
+    except (MS.SuiteError, MSL.SpecLegError, MergeGateError) as exc:
         print(f"mokata worktree test: {exc}")
         return 1
     t = res["tree"]
     print(res["output"][-4000:])
     print(f"mokata worktree test: {'PASSED' if res['passed'] else 'FAILED'} (exit {res['exit_code']}) "
           f"`{res['command']}` at {str(t.get('head_after'))[:12]} — recorded for run {res['run']}")
-    return 0 if res["passed"] else 1
+    leg = res["spec_leg"]
+    bad = False
+    for x in leg["legs"]:
+        word = ("DEGRADED" if x["degraded"] else
+                {"pass": "passed", "block": "BLOCKS", "absent": "NOT CHECKED"}[x["status"]])
+        bad = bad or x["degraded"] or x["status"] == "block"
+        print(f"  spec leg {x['name']}: {word} — {x['summary']}"
+              + (f" — {x['unblock']}" if x["status"] == "block" and x["unblock"] else ""))
+    print(f"mokata worktree test: spec legs recorded for run {leg['run']} at "
+          f"{str(leg['head'])[:12]}")
+    return 0 if res["passed"] and not bad else 1
 
 
 def cmd_resume(args: argparse.Namespace) -> int:

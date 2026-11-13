@@ -222,6 +222,99 @@ def derived(root: str, name: str, paths: list, compute, keep=lambda _v: True):
     return value
 
 
+# --------------------------------------------------- the next-step answer (0.0.28 F)
+#
+# ONE stored answer per repo, keyed on what it was DERIVED FROM (the files `hints.derive` read) —
+# never on the session that stored it. A session's own records are inputs like any other; their
+# paths name the session (`temp_local/sessions/<sid>.json`), so they are stored with that path
+# component as SESSION_SLOT and read back as the READING session's own. A new session is served
+# the answer exactly when what IT would read is unchanged (0.0.28 F round 2, H1).
+
+RESUME_FILENAME = "resume.json"
+SESSION_SLOT = "{session}"
+
+
+def _swap(path: str, old: str, new: str) -> str:
+    """`path` with every component equal to `old` (or `old` + an extension) renamed `new`."""
+    import re
+    if not old:
+        return path
+    parts = re.split(r"([\\/])", path)
+    return "".join(new + c[len(old):] if c == old or c.startswith(old + ".") else c
+                   for c in parts)
+
+
+def _slot(path: str, session: str) -> str:
+    from .session_index import safe_sid
+    return _swap(path, safe_sid(session), SESSION_SLOT) if session else path
+
+
+def _fill(path: str, session: str) -> str:
+    from .session_index import safe_sid
+    return _swap(path, SESSION_SLOT, safe_sid(session) if session else "")
+
+
+def input_key(inputs: list, listed: list) -> dict:
+    """What a `hints.derive` answer read, as of now: a directory it listed by its sorted listing,
+    every other path by its stat signature. The key is DERIVED — never a hand-typed list."""
+    dirs = set(listed)
+    key = {}
+    for p in inputs:
+        if p in dirs:
+            try:
+                key[p] = sorted(os.listdir(p))
+            except OSError:
+                key[p] = None
+        else:
+            key[p] = _sig(p)
+    return key
+
+
+def read_resume(root: str):
+    """The stored `{answer, line, inputs, listed, key, at}` (paths session-slotted), or None. Never
+    raises."""
+    import json
+    try:
+        with open(os.path.join(cache_dir(root), RESUME_FILENAME), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    entry = data.get("entry") if isinstance(data, dict) and data.get("v") == CACHE_VERSION \
+        else None
+    if not (isinstance(entry, dict) and isinstance(entry.get("answer"), dict)
+            and isinstance(entry.get("key"), dict) and isinstance(entry.get("inputs"), list)
+            and isinstance(entry.get("listed"), list)
+            and (entry.get("line") is None or isinstance(entry.get("line"), str))):
+        return None
+    return entry
+
+
+def resume_holds(entry: dict, session: str) -> bool:
+    """True when what `session` would read is what the stored answer was derived from."""
+    inputs = [_fill(p, session) for p in entry["inputs"]]
+    listed = [_fill(p, session) for p in entry["listed"]]
+    want = {_fill(k, session): v for k, v in entry["key"].items()}
+    return input_key(inputs, listed) == want
+
+
+def store_resume(root: str, session: str, answer: dict, key: dict, line) -> None:
+    """Store `answer` (derived for `session`) and its rendered briefing `line` (None = silent),
+    keyed on `key` (its `input_key`), the session's own path components slotted out. The line is
+    stored so a hit renders nothing (it never imports `hints`: measured ~10 ms of a 150 ms hook)."""
+    import json
+    from .atomicfile import atomic_write_text
+    basis = answer.get("basis") or {}
+    entry = {"answer": answer, "line": line, "at": time.time(),
+             "inputs": [_slot(p, session) for p in basis.get("inputs") or []],
+             "listed": [_slot(p, session) for p in basis.get("listed") or []],
+             "key": {_slot(k, session): v for k, v in key.items()}}
+    try:
+        atomic_write_text(os.path.join(cache_dir(root), RESUME_FILENAME),
+                          json.dumps({"v": CACHE_VERSION, "entry": entry}, sort_keys=True))
+    except (OSError, TypeError, ValueError):
+        pass                                  # nothing stored: the hook derives
+
+
 # ------------------------------------------------------------------------------ the refresher
 
 def _lock_fresh(d: str) -> bool:
@@ -232,7 +325,7 @@ def _lock_fresh(d: str) -> bool:
 
 
 def start_refresh(root: str, *, via_plugin: bool, calibrate: "int | None" = None,
-                  capture: bool = False) -> bool:
+                  capture: bool = False, session: str = "") -> bool:
     """Start the ONE detached refresher (unless one runs). It also logs this briefing's token
     estimate (`calibrate`) — the ledger write SessionStart used to pay synchronously."""
     try:
@@ -242,7 +335,7 @@ def start_refresh(root: str, *, via_plugin: bool, calibrate: "int | None" = None
             return False
         args = [REFRESH_FLAG, root, "plugin" if via_plugin else "cli",
                 str(int(calibrate)) if calibrate is not None else "-",
-                "capture" if capture else "-"]
+                "capture" if capture else "-", session or "-"]
         from mokata_emit import spawn_mokata_emit
         return spawn_mokata_emit(args, cwd=d)
     except Exception:  # noqa: BLE001 — the next session start retries; its lines say "checking"
@@ -291,7 +384,8 @@ def compute(root: str, surface, route: str) -> dict:
 
 
 def refresh_main(argv: list) -> int:
-    """`<python> mokata_emit/__main__.py --refresh-briefing <root> <cli|plugin> <estimate|-> <capture|->`."""
+    """`<python> mokata_emit/__main__.py --refresh-briefing <root> <cli|plugin> <estimate|->
+    <capture|-> <session|->`."""
     if len(argv) < 2:
         return 1
     root, route = argv[0], argv[1]
@@ -319,8 +413,10 @@ def refresh_main(argv: list) -> int:
         from .context_budget import context_budget
         _cached_rule_lines(surface, context_budget(surface.manifest).briefing_rules_lines)
         _cached_changed_since(surface)
-        from .bootstrap import _cached_resume_hint
-        _cached_resume_hint(surface)
+        # 0.0.28 F — the next-step answer for the session that started this refresh (the hook
+        # prints it, aged, at the next session start; it never derives on the hook path).
+        from .bootstrap import refresh_resume_hint
+        refresh_resume_hint(root, argv[4] if len(argv) > 4 and argv[4] != "-" else "")
         from .knowledge import structure_cache
         if not structure_cache.is_fresh(root):
             from .knowledge.layer import graph_structure_line

@@ -49,29 +49,23 @@ _LINE_CITE = re.compile(r"^(?:(base):)?([^:\0]+):(\d{1,7})(?:-(\d{1,7}))?$")
 
 
 def redact(text: str) -> Tuple[str, int]:
-    """(text with every secret-bearing line replaced, how many lines) — the rule
-    `ide/context._redact` applies since REDACT-FIX: a private key is replaced WHOLE, BEGIN through
-    END (an unterminated BEGIN to the end), by the one key pass Copy with Context uses
-    (`usages.pem_lines`) — the scanner flags only a key's BEGIN line, and a body wrapped narrow is
-    too short for its entropy layer. Every other finding replaces its own line. Line COUNT is
-    kept, so cites into a redacted file still resolve. A key that pass cannot hold back (an END
-    after a run longer than it buffers) fails closed: every line is replaced."""
-    from ..govern.secrets import scan
+    """(text with every secret-bearing line replaced, how many lines) — `usages.redact_text`, the
+    one line redactor `ide/context._redact` also calls (REDACT-MANGLED-KEY): a private key in any
+    spelling the one detector knows is replaced WHOLE, every other finding replaces its own line,
+    each line keeps its own separator, so the line COUNT (and every cite into the file) is kept.
+    Anything secret-shaped left after redaction — or a key the walker cannot hold back — fails
+    CLOSED: every line is replaced."""
     from ..ide import usages as U
     from ..ide.context import REDACTED
     if not text:
         return text, 0
-    lines = text.split("\n")
     try:
-        out = list(U.pem_lines(lines, {}, "", mark=REDACTED))
+        return U.redact_text(text, "", mark=REDACTED)
     except U.RefRefused:
-        return "\n".join(REDACTED.format(kind="private-key") for _ in lines), len(lines)
-    for f in scan(text):
-        if f.layer in ("signature", "entropy") and f.line and 1 <= f.line <= len(out) \
-                and out[f.line - 1] == lines[f.line - 1]:
-            out[f.line - 1] = REDACTED.format(kind=f.kind)
-    n = sum(1 for x, y in zip(lines, out) if x != y)
-    return ("\n".join(out) if n else text), n
+        from ..govern.secrets import _body_of
+        pieces = text.splitlines(keepends=True)
+        mark = REDACTED.format(kind="private-key")
+        return "".join(mark + p[len(_body_of(p)):] for p in pieces), len(pieces)
 
 
 def sensitive(rel: str) -> bool:

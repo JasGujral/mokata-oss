@@ -8,10 +8,20 @@
   POST /api/lsp/start {language}      start that language's server — refused untrusted, or when
                                       no binary is found (named; never installed)
   POST /api/lsp/stop  {language}      stop it
-  GET  /api/lsp/{definition|references|hover|symbols|diagnostics}?path=&line=&col=
+  GET  /api/lsp/{definition|hover|symbols|diagnostics}?path=&line=&col=
                                       a READ, as an `lsp.query` job (no deadline: 202 + Cancel
                                       when slow). Untrusted, never started, or indexing → the
                                       GRAPH answers meanwhile (`source: "graph"`), labelled.
+                                      (0.0.28 G-Q3: references have ONE surface — Find Usages,
+                                      `/api/usages`; the Language panel's references read is gone.)
+  GET  /api/lsp/calls?path=&line=[&col=]&dir=in|out
+                                      0.0.28 G — the call hierarchy, one level per question: who
+                                      calls the function at (line, col) — or the function
+                                      ENCLOSING `line` when no col is sent — or what it calls.
+                                      Untrusted / unsupported / indexing / a server without the
+                                      capability → callers from the call graph, labelled; callees
+                                      empty with the reason (G-Q4). Any other parameter is a 400:
+                                      a CallHierarchyItem never crosses the wire, either way.
 
 A GET never starts a process (doc 109 §6: px0's `/api/lsp/warm` GET spawned rust-analyzer). The
 edge (doc 109 §14): every answer carries `edge` — references split into tests vs code, the symbol's
@@ -37,12 +47,17 @@ from .. import lsp as L
 from .. import trust as T
 
 ACTOR = "ide-tty"
-KINDS = ("definition", "references", "hover", "symbols", "diagnostics")
+KINDS = ("definition", "hover", "symbols", "diagnostics")
 #: The code book's key for this decision. P38 keys its codes by proposal id, and proposals load
 #: from the repo's state dir — so the key holds a character no proposal id can (verification L2).
 TRUST_KEY = "lsp:workspace-trust"
 _WORD = re.compile(r"[A-Za-z_$][\w$]*")
-GRAPH_KIND = {"definition": "defs", "references": "refs"}
+GRAPH_KIND = {"definition": "defs"}
+#: What a call question may carry. Anything else — an `item`, its `data`, a method name — is a 400
+#: before anything runs (the one control for "the page never sends an item", rule M-B).
+CALL_PARAMS = frozenset({"path", "line", "col", "dir", "sync_ms", "job"})
+CALL_DIRS = {"in": "callers", "out": "callees"}
+_CODE = re.compile(r"\(code (-?\d+)\)$")
 
 
 def word_at(line: str, col1: int) -> str:
@@ -335,20 +350,9 @@ def routes(reg: Any, ctx: Any) -> None:
         if kind == "definition":
             res = srv.request("textDocument/definition", {**doc, "position": pos})
             locs = res if isinstance(res, list) else [res] if isinstance(res, dict) else []
-            out["results"] = [dict(L.location(root, x, cache), test=nav._is_test(
-                L.location(root, x, cache, snippet=False)["path"] or "")) for x in locs]
-        elif kind == "references":
-            res = srv.request("textDocument/references",
-                              {**doc, "position": pos, "context": {"includeDeclaration": True}})
-            locs = res if isinstance(res, list) else []
-            results = []
-            for i, x in enumerate(locs):
-                if i % 500 == 0:
-                    checkpoint()
-                r = L.location(root, x, cache, snippet=i < L.REFERENCES_SNIPPET_MAX)
-                r["test"] = nav._is_test(r["path"] or "") if not r["outside"] else False
-                results.append(r)
-            out["results"] = results
+            got = [L.location(root, x, cache) for x in locs]
+            out["skipped"] = sum(1 for g in got if g is None)   # malformed: counted, not fatal
+            out["results"] = [dict(g, test=nav._is_test(g["path"] or "")) for g in got if g]
         elif kind == "hover":
             res = srv.request("textDocument/hover", {**doc, "position": pos})
             out["hover"] = L.hover_text(res)
@@ -361,7 +365,7 @@ def routes(reg: Any, ctx: Any) -> None:
             out["note"] = ("what the server has published for this file so far — a server still "
                            "analysing it publishes more; re-ask" if srv.indexing() else "")
         checkpoint()
-        if kind in ("definition", "references", "hover"):
+        if kind in ("definition", "hover"):
             out["edge"].update(graph_edge(root, sym))
             out["edge"]["tests"] = sum(1 for r in out.get("results", []) if r.get("test"))
             out["edge"]["code"] = sum(1 for r in out.get("results", []) if not r.get("test"))
@@ -417,6 +421,225 @@ def routes(reg: Any, ctx: Any) -> None:
                                                                      "next ask"})
             return work
         return handler
+
+    # ------------------------------------------------------------------------ the call hierarchy
+    def _call_question(request: Any) -> Tuple[str, int, Optional[int], str]:
+        keys = [k for k, _v in request.query_params.multi_items()]
+        extra = sorted(set(keys) - CALL_PARAMS) or sorted({k for k in keys if keys.count(k) > 1})
+        if extra:
+            raise ctx.bad_request(f"unknown or repeated parameter {', '.join(extra)[:120]} — a call "
+                                  "question is path, line, col (optional) and dir, once each")
+        direction = ctx.q(request, "dir")
+        if direction not in CALL_DIRS:
+            raise ctx.bad_request("dir must be 'in' (who calls it) or 'out' (what it calls)")
+        path = ctx.q(request, "path")
+        if not path:
+            raise ctx.bad_request("path is required")
+        try:
+            line = int(ctx.q(request, "line") or 1)
+            col = int(ctx.q(request, "col")) if ctx.q(request, "col") else None
+        except ValueError:
+            raise ctx.bad_request("line and col are integers (1-based)") from None
+        if line < 1 or (col is not None and col < 1):
+            raise ctx.bad_request("line and col are 1-based")
+        return path, line, col, direction
+
+    def _target(rel: str, text: str, line: int, col: Optional[int]) -> Dict[str, Any]:
+        """Where the question is asked: (line, col) exactly when a col is sent (a tree row's own
+        position); otherwise the definition ENCLOSING `line` (the Find Usages resolver), at its
+        name. `{line, col, cur, symbol}` or `{}` when nothing encloses the line."""
+        from .. import usages as U
+        lines = U.viewer_lines(text)
+        if col is None:
+            d, _ol = U.definition_at(state.source._code_root(), rel, line, text)
+            if d is None:
+                return {}
+            line, col = d.line, d.col
+        cur = lines[line - 1] if 0 < line <= len(lines) else ""
+        return {"line": line, "col": col, "cur": cur, "symbol": word_at(cur, col)}
+
+    def _call_rows_graph(code_root: str, refs: List[Any]) -> List[Dict[str, Any]]:
+        """Graph callers as rows (the call LINE; no col — expanding one asks about the function
+        enclosing that line). Snippets read through the bounded reader, inside the repo only."""
+        from .. import nav
+        lines = L.CallLines()
+        places = []
+        for r in refs:
+            abspath = os.path.join(code_root, *str(r.path).split("/"))
+            _rel, outside = L._rel(code_root, abspath)
+            places.append((abspath, outside))
+            if not outside:
+                lines.want(abspath, max(0, int(r.line) - 1))
+        lines.load(_checkpoint)
+        out = []
+        for r, (abspath, outside) in zip(refs, places):
+            text = None if outside else lines.line(abspath, max(0, int(r.line) - 1))
+            out.append({"name": str(r.symbol or "")[:300], "kind": "function", "detail": "",
+                        "path": r.path, "shown": str(r.path)[:200], "outside": outside,
+                        "line": int(r.line), "col": None, "col_exact": False,
+                        "snippet": text.strip()[:300] if text else "", "calls": None,
+                        "test": (not outside) and nav._is_test(r.path)})
+        return out
+
+    def _checkpoint() -> None:
+        from ...knowledge.cancel import checkpoint
+        checkpoint()
+
+    def calls_graph(direction: str, rel: str, line: int, col: Optional[int],
+                    tgt: Dict[str, Any], lang: Optional[str], why: Dict[str, Any]) -> Dict[str, Any]:
+        """No language server answer: callers from the call graph (labelled `graph`); callees are
+        EMPTY with the reason (G-Q4) — `asked: false` says nobody was asked."""
+        from .. import nav
+        from ...knowledge.cancel import report
+        sym = tgt.get("symbol", "")
+        reason = why.get("note") or why.get("state", "")
+        out: Dict[str, Any] = {
+            "sample": False, "kind": "calls", "dir": direction, "path": rel, "line": line,
+            "col": col, "language": lang, "symbol": sym, "source": "graph", "asked": False,
+            "callable": None, "lsp": dict(why, note=reason), "groups": [], "total": 0,
+            "truncated": False, "skipped": 0, "complete": False, "items_named": 0,
+            "items_asked": 0, "cap": L.CALLS_MAX, "basis": None, "backend": "", "note": "",
+            "edge": {"ac": ac_ties(root, rel)}}
+        if direction == "out":
+            out["source"] = "none"
+            out["note"] = (f"callees need the language server ({why.get('state')}) — the call graph "
+                           "answers callers only")
+            if why.get("state") == "no-call-hierarchy":
+                out["note"] = (f"{why.get('server')} offers no call hierarchy — callees need it; "
+                               "the call graph answers callers only")
+            return out
+        if not sym:
+            out["note"] = "no function at that position"
+            out["callable"] = False
+            return out
+        report(note=f"asking the call graph for the callers of {sym}")
+        try:
+            res = nav.run(root, "callers", sym)
+            refs = list(res.references)
+            out["basis"], out["backend"] = res.basis, res.backend
+            out["note"] = res.note or ""
+        except MokataError as exc:            # the floor itself is unavailable: say so
+            refs = []
+            out["note"] = f"graph unavailable: {exc}"[:300]
+        rows = _call_rows_graph(state.source._code_root(), refs[:L.CALLS_MAX])
+        item = {"name": sym, "kind": "function", "detail": "", "path": rel, "shown": rel,
+                "outside": False, "line": tgt.get("line", line), "col": tgt.get("col"),
+                "col_exact": True, "snippet": tgt.get("cur", "").strip()[:300],
+                "test": nav._is_test(rel)}
+        out["groups"] = [{"item": item, "rows": rows, "total": len(refs),
+                          "truncated": len(rows) < len(refs), "skipped": 0}]
+        out["total"], out["truncated"] = len(refs), len(rows) < len(refs)
+        out["edge"].update(graph_edge(root, sym))
+        return out
+
+    def calls_lsp(direction: str, srv: L.Server, rel: str, abspath: str, line: int,
+                  col: Optional[int], tgt: Dict[str, Any], lang: str, how: Dict[str, Any],
+                  text: str) -> Dict[str, Any]:
+        from .. import nav
+        base = {"sample": False, "kind": "calls", "dir": direction, "path": rel, "line": line,
+                "col": col, "language": lang, "symbol": tgt.get("symbol", ""), "source": "lsp",
+                "lsp": {**how, "server": srv.name}, "cap": L.CALLS_MAX, "basis": "lsp",
+                "backend": srv.name, "note": "", "edge": {"ac": ac_ties(root, rel)}}
+        if not tgt:
+            # mokata's resolver found no function and the server was NOT asked: not an LSP
+            # answer (verify-G L-4) — `source: none`, the server's state still said
+            return dict(base, source="none", basis=None, backend="", asked=False, callable=False,
+                        groups=[], total=0, truncated=False, skipped=0, complete=False,
+                        items_named=0, items_asked=0, note=f"no function encloses line {line}")
+        if not host.recheck_trust():
+            return calls_graph(direction, rel, line, col, tgt, lang, {"state": "untrusted"})
+        spec = L.languages()[lang]
+        uri, _ = srv.open(abspath, L.language_id(lang, rel, spec))
+        pos = {"line": tgt["line"] - 1, "character": L.utf16_col(tgt["cur"], tgt["col"])}
+        res = L.call_edges(state.source._code_root(), srv, uri, pos, direction,
+                           recheck=host.recheck_trust, checkpoint=_checkpoint)
+        if res.get("revoked"):
+            host.recheck_trust()
+            return calls_graph(direction, rel, line, col, tgt, lang, {"state": "untrusted"})
+        groups = res["groups"]
+        for g in groups:
+            for r in g["rows"] + [g["item"]]:
+                r["test"] = (not r["outside"]) and nav._is_test(r["path"] or "")
+        total = sum(g["total"] for g in groups)
+        truncated = any(g["truncated"] for g in groups)
+        out = dict(base, asked=True, callable=res["callable"], groups=groups, total=total,
+                   truncated=truncated, skipped=res["skipped"],
+                   items_named=res["items_named"], items_asked=res["items_asked"],
+                   complete=(not truncated and res["skipped"] == 0
+                             and res["items_asked"] == res["items_named"]))
+        if not res["callable"]:
+            out["note"] = "the language server names no function at that position"
+        sym = groups[0]["item"]["name"] if groups else tgt.get("symbol", "")
+        out["symbol"] = sym
+        out["edge"].update(graph_edge(root, sym))
+        return out
+
+    def calls_handler(request: Any):
+        path, line, col, direction = _call_question(request)
+        if state.demo:
+            return lambda: {"sample": True, "kind": "calls", "dir": direction, "path": path,
+                            "line": line, "col": col, "language": None, "symbol": "",
+                            "source": "none", "asked": False, "callable": None,
+                            "lsp": {"state": "sample", "note": "SAMPLE data — no language server"},
+                            "groups": [], "total": 0, "truncated": False, "skipped": 0,
+                            "complete": False, "items_named": 0, "items_asked": 0,
+                            "cap": L.CALLS_MAX, "note": "", "edge": {}}
+        from .. import nav
+        code_root = state.source._code_root()
+        rel = nav.contained_rel(code_root, path)
+        abspath = os.path.join(code_root, *rel.split("/"))
+        if not os.path.isfile(abspath):
+            raise ctx.bad_request(f"no file {rel} in the repository")
+        lang = L.language_of(rel)
+
+        def work() -> Dict[str, Any]:
+            text = L.source_text(abspath)
+            tgt = _target(rel, text, line, col)
+            # The FIRST rung, and it stops any running server (rule M-C): untrusted wins over
+            # every other state, and nothing below may send.
+            if not host.recheck_trust():
+                return calls_graph(direction, rel, line, col, tgt, lang,
+                                   {"state": "untrusted", "note": "this workspace is not trusted"
+                                    " — the call graph answers callers"})
+            if lang is None:
+                return calls_graph(direction, rel, line, col, tgt, lang, {
+                    "state": "unsupported", "note": "no language server is mapped to this file "
+                    "type (add one in ~/.mokata/lsp.json)"})
+            srv, why = host.server_for(lang)
+            if srv is None:
+                return calls_graph(direction, rel, line, col, tgt, lang, why)
+            busy = srv.indexing()
+            if busy:
+                job = host.index_jobs.get(lang)
+                return calls_graph(direction, rel, line, col, tgt, lang, {
+                    "state": "indexing", "server": srv.name, "progress": busy,
+                    "job": getattr(job, "id", None),
+                    "note": f"{srv.name} is still indexing — the graph shows callers meanwhile"})
+            if not L.call_hierarchy_supported(srv):
+                return calls_graph(direction, rel, line, col, tgt, lang, {
+                    "state": "no-call-hierarchy", "server": srv.name,
+                    "note": f"{srv.name} offers no call hierarchy — the call graph answers callers"})
+            try:
+                return calls_lsp(direction, srv, rel, abspath, line, col, tgt, lang, why, text)
+            except L.ServerGone as exc:
+                if not host.recheck_trust():
+                    return calls_graph(direction, rel, line, col, tgt, lang, {"state": "untrusted"})
+                return calls_graph(direction, rel, line, col, tgt, lang, {
+                    "state": "crashed", "server": srv.name,
+                    "note": f"{exc} — it restarts at the next ask"[:300]})
+            except L.ServerError as exc:
+                # The code only: a server's own message never reaches the page (rule F5).
+                m = _CODE.search(str(exc))
+                code = int(m.group(1)) if m else None
+                note = ("the code changed while asking — ask again" if code in (-32800, -32801)
+                        else f"{srv.name} answered an error (code {code})")
+                return calls_graph(direction, rel, line, col, tgt, lang, {
+                    "state": "server-error", "server": srv.name, "code": code, "note": note})
+        return work
+
+    reg.register("/api/lsp/calls", calls_handler, kind="json", feature="lsp", job="lsp.query",
+                 job_label=(lambda r: f"LSP {CALL_DIRS.get(ctx.q(r, 'dir'), 'calls')} · "
+                                      f"{ctx.q(r, 'path')[:80]}:{ctx.q(r, 'line')}"))
 
     for k in KINDS:
         reg.register(f"/api/lsp/{k}", ask(k), kind="json", feature="lsp", job="lsp.query",

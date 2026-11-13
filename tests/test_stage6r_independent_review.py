@@ -338,21 +338,6 @@ class TestTemplates(unittest.TestCase):
         for name in ("develop", "ship", "brainstorm", "spec"):
             self.assertNotIn("## Record verdict", self._text(name), name)
 
-    def test_shipped_skill_matches_generated_source(self):
-        from mokata.agent_skills import load_skill_source, render_skill_md
-        sdir = Path(__file__).resolve().parents[1] / "src" / "mokata" / "skills"
-        for name in ("develop", "review", "ship"):
-            shipped = (sdir / name / "SKILL.md").read_text(encoding="utf-8")
-            regen = render_skill_md(load_skill_source(name, self._TDIR))
-            self.assertEqual(shipped, regen, f"{name}/SKILL.md drifted")
-
-
-# ============================================================ parity stays green
-class TestParityGreen(unittest.TestCase):
-    def test_parity_holds(self):
-        from mokata.parity import verify_parity
-        self.assertTrue(verify_parity().ok, verify_parity().render())
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -30,6 +30,7 @@ from test_p31_session_worktrees import _git, _Repo, _write
 from mokata import approval
 from mokata import merge_gate as MG
 from mokata import merge_lock as ML
+from mokata import merge_spec as MSL
 from mokata import merge_suite as MS
 from mokata import run_intent
 from mokata import session_worktrees as SW
@@ -82,9 +83,11 @@ class _Merge(_Repo):
         return wt
 
     def evidence(self, wt, run="R1"):
-        """The suite through mokata's runner, then a passing review stamped at this head."""
+        """The suite through mokata's runner, the spec legs at this head (0.0.28 F), then a passing
+        review stamped at this head."""
         res = MS.run_full_suite(self.main, wt)
         self.assertTrue(res["passed"], res)
+        MSL.run_spec_leg(self.main, wt)
         self.review(wt, run)
 
     def review(self, wt, run="R1", passed=True):
@@ -126,7 +129,13 @@ class TheHumanApproves(_Merge):
         self.assertEqual((False, "chat-relayed"), (ok, code))
         self.assertEqual(MG.REFUSED, MG.run_merge(self.main, pid).state)
         from mokata.mcp.tools_worktree import worktree_merge
-        r = worktree_merge(path=self.main, target=wt, approve=True, confirm=True)
+        # 0.0.28 I2: the `approve`/`confirm` flags no longer exist, so "an MCP flag merged" is
+        # structurally impossible: a direct call raises TypeError (over MCP: refused invalid_input),
+        # and a plain call only ever proposes.
+        with self.assertRaises(TypeError):
+            worktree_merge(path=self.main, target=wt, approve=True, confirm=True)
+        self.assertEqual(base, self.head(), "an MCP flag merged")
+        r = worktree_merge(path=self.main, target=wt)
         self.assertEqual("proposed", r["status"], r)
         self.assertFalse(r["committed"])
         self.assertEqual(base, self.head(), "an MCP flag merged")
@@ -159,6 +168,8 @@ class TheEvidenceIsAtTheHead(_Merge):
         self.review(wt, passed=False)
         self.assertIn("review-blocks", self.codes(wt))
         self.review(wt)
+        self.assertEqual({"spec-leg-not-run"}, self.codes(wt))   # 0.0.28 F: the spec legs too
+        MSL.run_spec_leg(self.main, wt)
         self.assertEqual(set(), self.codes(wt))
         _write(wt, "scratch.txt", "x\n")                        # untracked counts
         self.assertIn("dirty-worktree", self.codes(wt))

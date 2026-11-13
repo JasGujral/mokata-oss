@@ -86,8 +86,10 @@ from ..knowledge.cancel import checkpoint, current_reporter, report, reporting
 from . import diffs as D
 from . import nav
 from ..errors import MokataError
-from ..test_ids import (fs_folds_case, py_test_defs, stamp_of, test_key_of, test_label_of,
-                        test_name_of, test_param_of, test_path_of, test_qualifier_of)
+from ..test_ids import (OUTSIDE, TARGET_STATES, UNRESOLVED, fs_folds_case, normalise_path,
+                        py_test_defs, raw_path_of, same_target, stamp_of, stamp_target,
+                        test_key_of, test_label_of, test_name_of, test_param_of, test_path_of,
+                        test_qualifier_of)
 from ..repo_paths import as_name, name_of
 
 TRACE_VERSION = 1
@@ -919,6 +921,8 @@ class _Locator:
         self._canon: Dict[str, str] = {}
         self._roots: Optional[List[str]] = None
         self._where: Dict[str, Tuple[str, List[str]]] = {}
+        self._targets: Dict[str, str] = {}
+        self._links: Dict[str, str] = {}
 
     # -- ONE path per file (J1, J5): case-folded where the filesystem folds case, and the pytest
     #    rootdir a rootdir-relative id was written against ----------------------------------------
@@ -940,8 +944,46 @@ class _Locator:
         `tlink -> tests` are `tests/test_w.py` — L1). Cached per path: bounded by the ids."""
         if rel in self._canon:
             return self._canon[rel]
-        self._canon[rel] = self._real(self._case(rel))
+        # at `head` a link is NEVER resolved — not on disk (which is not `head`), not in the tree
+        # (0.0.28 E2, refute M6): a path with a link component is `unlocated` (`link_at_head`)
+        self._canon[rel] = self._case(rel) if self.head else self._real(self._case(rel))
         return self._canon[rel]
+
+    # -- 0.0.28 E2: the target a recorded outcome is bound to ------------------------------------
+    def target(self, rel: str) -> str:
+        """The file `rel` (a path as typed) opens NOW, as `test_ids.stamp_target` says — the SAME
+        function the writer ran. At `head`: a path with a link component is `UNRESOLVED`; any other
+        path is itself, spelled as `head` holds it. Cached per path (bounded by the ids)."""
+        if rel not in self._targets:
+            checkpoint()
+            if not self.head:
+                self._targets[rel] = stamp_target(self.layer_root, rel)
+            else:
+                norm = normalise_path(rel)
+                if norm.startswith("/") or ".." in norm.split("/") or ".." in rel.split("/"):
+                    self._targets[rel] = UNRESOLVED
+                else:
+                    c = self._case(norm)
+                    self._targets[rel] = UNRESOLVED if self.link_at_head(c) else c
+        return self._targets[rel]
+
+    def link_at_head(self, rel: str) -> str:
+        """The first component of `rel` that is a SYMLINK (mode 120000) in `head`'s tree, "" when
+        none is. One `git ls-tree` over the path's prefixes; cached per path."""
+        if not self.head or not rel:
+            return ""
+        if rel not in self._links:
+            parts = rel.split("/")
+            prefixes = ["/".join(parts[:i]) for i in range(1, len(parts) + 1)]
+            code, out = D._git(self.root, "ls-tree", "-z", "--end-of-options", self.head,
+                               "--", *prefixes)
+            links = set()
+            for entry in (out.split("\0") if code == 0 else ()):
+                meta, _tab, name = entry.partition("\t")
+                if meta.startswith("120000 "):
+                    links.add(name)
+            self._links[rel] = next((p for p in prefixes if p in links), "")
+        return self._links[rel]
 
     def _real(self, rel: str) -> str:
         """`rel` with every symlink on it resolved, as a repo-relative name — when the real file
@@ -1018,6 +1060,8 @@ class _Locator:
         return self._roots
 
     def _held(self, rel: str) -> bool:
+        if self.head and self.link_at_head(rel):
+            return False                 # a committed link is never a candidate at head (E2)
         return self.exists(rel) or self.tracked(rel) == "tracked"
 
     def locate(self, rel: str) -> Tuple[str, List[str]]:
@@ -1056,12 +1100,19 @@ class _Locator:
         path = test_path_of(test_id)
         return test_label_of(test_id, self.locate(path)[0] if path else None)
 
-    def stamp(self, rel: str, key: str) -> Optional[str]:
+    def stamp(self, rel: str, key: str, typed: str = "", real: Optional[str] = None
+              ) -> Optional[str]:
         """The test's content stamp as the judged tree holds it now (`test_ids.stamp_of`: the
-        test, its scopes' non-test code, the conftest.py files on its path)."""
+        test, its scopes' non-test code, the conftest.py files on its path). 0.0.28 E2: PER
+        RECORDED ID — the conftests of the path as that id `typed` it, united with those of its
+        `real` target, exactly as the writer (`test_runs.stamps_of`) stamped it."""
         defs = self.py_defs(rel) if rel.endswith(".py") else None
-        return stamp_of(rel, self.text(rel), key, defs=defs,
-                        read=lambda r: self.text(r) if self.exists(r) else None)
+
+        def read(r: str) -> Optional[str]:
+            c = self.canon(r)
+            return self.text(c) if self.exists(c) else None
+        return stamp_of(typed or rel, self.text(rel), key, defs=defs, read=read,
+                        real=None if real in TARGET_STATES else real)
 
     def text(self, rel: str) -> Optional[str]:
         """The file in the tree being judged (`head`'s blob for a range read at head)."""
@@ -1219,9 +1270,18 @@ def _attach_record(b: _Build, acs: List[Dict[str, Any]], record: Dict[str, Any],
     for nid, t in b.tests.items():
         t["qualified_from"] = sorted(qualified.get(t["label"], ()))
         key = f"{t['qualifier']}.{t['symbol']}" if t.get("qualifier") else t["symbol"]
-        now = loc.stamp(t["path"], key) if t["path"] and t["state"] == STATE_PRESENT else None
-        t.update(node_verdict(t, red, green, history, spellings, stamp=now,
-                              loose=loose.get(t["symbol"], set())))
+        bound: Dict[str, Tuple[Optional[str], str]] = {}
+        for i in set(t["recorded_ids"]) | (spellings.get(t["label"], set()) if t["path"] else set()):
+            typed = raw_path_of(i)
+            if not typed:
+                continue
+            tgt = loc.target(typed)
+            st = loc.stamp(t["path"], key, test_path_of(i), tgt) \
+                if t["path"] and t["state"] == STATE_PRESENT else None
+            bound[i] = (st, tgt)
+        t.update(node_verdict(t, red, green, history, spellings, bound=bound,
+                              loose=loose.get(t["symbol"], set()),
+                              same=lambda a, b: same_target(loc.layer_root, a, b)))
         if t["state"] in NON_PROVING:
             t["tdd"] = t["state"]                    # what the trace knows about it, not a proof
         for cid in t["code"]:
@@ -1291,6 +1351,12 @@ def resolve_test(loc: _Locator, test_id: str, located: Dict[str, Dict[str, Any]]
         return out
     path, where = loc.locate(path)
     out["path"] = path
+    link = loc.link_at_head(path)
+    if link:
+        out.update(state=STATE_UNLOCATED,
+                   reason=f"{link} is a symlink at {loc.head}: a link in a commit is not followed "
+                          "(judge the working tree, or commit the file itself)")
+        return out
     if len(where) > 1:
         out.update(state=STATE_AMBIGUOUS,
                    candidates=[f"{w}::{key.replace('.', '::')}" for w in where],
@@ -1430,19 +1496,36 @@ def enforce_rule_on_located(b: _Build, loc: _Locator) -> None:
 def node_verdict(t: Dict[str, Any], red: Set[str], green: Set[str],
                  history: Dict[str, Dict[str, Any]],
                  spellings: Optional[Dict[str, Set[str]]] = None, *,
-                 stamp: Optional[str] = None, loose: Iterable[str] = ()) -> Dict[str, Any]:
+                 bound: Optional[Dict[str, Tuple[Optional[str], str]]] = None,
+                 loose: Iterable[str] = (),
+                 same: Optional[Any] = None) -> Dict[str, Any]:
     """ONE test's TDD verdict. Its ids: every recorded id mapped to it plus every recorded
     spelling of its full id (`spellings`, by label) — never a bare name or another qualifier.
     EACH id is judged on its own history (`tdd_verdict`), and the test is proven only when EVERY
     id is (each param, each spelling: its own red→green, latest green); red when any id's latest
-    is red; green-only otherwise. Proven also needs the test's content `stamp` NOW to be the one
-    each id ran under (J4), and no later RED under a `loose` spelling that could name it (J2)."""
+    is red; green-only otherwise. Proven also needs the test's content stamp NOW to be the one
+    each id ran under (J4), and no later RED under a `loose` spelling that could name it (J2).
+
+    0.0.28 E2 (`PROOF-SYMLINK-REPOINT`): `bound` is, per id, `(stamp now, target now)` — the target
+    from `test_ids.stamp_target`, the function the writer ran; `same` compares two targets
+    (`test_ids.same_target`). An id whose latest recorded target is not this file NOW is evidence
+    about ANOTHER file: it does not vote, and the re-point is said, naming both targets. Proven
+    then also needs, for every voting id, its red, its green and its stamp to be of ONE real file
+    inside the repository."""
+    bound = bound or {}
+    same = same or (lambda a, b: bool(a) and a == b and a not in TARGET_STATES)
     ids = set(t["recorded_ids"])
     if t["path"]:
         ids |= (spellings or {}).get(t["label"], set())
-    verdicts = [tdd_verdict(i, red, green, history) for i in sorted(ids)]
-    ran = [v for v in verdicts if v["tdd"] != TDD_UNRECORDED]
     why: List[str] = []
+    away = sorted(i for i in ids if _repointed(history.get(i) or {}, bound.get(i), same))
+    for i in away:
+        h = history[i]
+        why.append(f"{test_path_of(i)} was {h['target']}, now {bound[i][1]} — the record is of "
+                   "another file; re-run it red, then green")
+    voters = (ids - set(away)) or ids
+    verdicts = [tdd_verdict(i, red, green, history) for i in sorted(voters)]
+    ran = [v for v in verdicts if v["tdd"] != TDD_UNRECORDED]
     if not ran:
         out = tdd_verdict("", set(), set(), {})
     else:
@@ -1454,13 +1537,20 @@ def node_verdict(t: Dict[str, Any], red: Set[str], green: Set[str],
         out["green_at"] = max((v["green_at"] for v in ran if v["green_at"] is not None),
                               default=None)
         out["basis"] = "timed" if all(v["basis"] == "timed" for v in ran) else "sets"
+        if out["tdd"] == TDD_PROVEN and voters is ids and away:
+            out["tdd"] = TDD_GREEN_ONLY          # every id is of another file: nothing is left
+        if out["tdd"] == TDD_PROVEN:
+            gone = _target_trouble(sorted(voters), history, bound, same)
+            if gone:
+                out["tdd"] = TDD_GREEN_ONLY
+                why.extend(gone)
         if out["tdd"] == TDD_PROVEN:
             # J4: a proof is of the test AS IT WAS when it ran green — a `@skip`, an `assert 0`,
             # a `__test__ = False` added since changes its stamp, and the proof does not survive
             # (J9: an id with no timed history at all has no order and no stamp — not proven)
-            unstamped = sorted(i for i in ids if not (history.get(i) or {}).get("stamp"))
-            stale = sorted(i for i in ids if (history.get(i) or {}).get("stamp")
-                           and history[i]["stamp"] != stamp)
+            unstamped = sorted(i for i in voters if not (history.get(i) or {}).get("stamp"))
+            stale = sorted(i for i in voters if (history.get(i) or {}).get("stamp")
+                           and history[i]["stamp"] != (bound.get(i) or (None, ""))[0])
             if unstamped:
                 out["tdd"] = TDD_GREEN_ONLY
                 why.append("no timed, content-stamped record of " + ", ".join(unstamped)
@@ -1483,6 +1573,40 @@ def node_verdict(t: Dict[str, Any], red: Set[str], green: Set[str],
                        "this test — record full ids (path::Class::test)")
     out["params"] = sorted({test_param_of(i) for i in ids} - {""})
     out["tdd_note"] = "; ".join(why)
+    return out
+
+
+def _repointed(h: Dict[str, Any], now: Optional[Tuple[Optional[str], str]], same: Any) -> bool:
+    """The id's latest outcome ran against a real file in the repo, and the id opens a DIFFERENT
+    real file in the repo now (a re-pointed link, a file swapped for a link or back)."""
+    was = h.get("target")
+    if not now or not isinstance(was, str) or was in TARGET_STATES or now[1] in TARGET_STATES:
+        return False
+    return not same(was, now[1])
+
+
+def _target_trouble(ids: List[str], history: Dict[str, Dict[str, Any]],
+                    bound: Dict[str, Tuple[Optional[str], str]], same: Any) -> List[str]:
+    """Why the voting ids' outcomes are NOT of one real file in the repo — [] when they are. In
+    order: an id that leaves the repo or cannot be resolved (recorded or now); a record with no
+    target (before 0.0.28, or damaged); a red and a green that ran in different files."""
+    out: List[str] = []
+    for i in ids:
+        h = history.get(i) or {}
+        path = test_path_of(i)
+        now = (bound.get(i) or (None, UNRESOLVED))[1]
+        seen = [h.get(k) for k in ("red_target", "green_target", "target")] + [now]
+        if OUTSIDE in seen:
+            out.append(f"{path} resolves outside the repository — a file outside it never proves")
+        elif UNRESOLVED in seen:
+            out.append(f"{path} cannot be resolved to a file in the repository (a dangling or "
+                       "looping link, or a `..` through a link) — it never proves")
+        elif not all(isinstance(x, str) and x for x in seen[:3]):
+            out.append(f"no timed, target-bound record of {i} as it ran (recorded before mokata "
+                       "0.0.28, or damaged) — re-run it red, then green")
+        elif not same(h["red_target"], h["green_target"]):
+            out.append(f"red and green ran in different files ({path}: red in {h['red_target']}, "
+                       f"green in {h['green_target']}) — re-run it red, then green")
     return out
 
 

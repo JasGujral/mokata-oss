@@ -24,22 +24,54 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+import os
+from typing import Annotated, Any, Dict, Literal
 
 from .consent import _consent, _gated_write, _policy, _propose, _refused
 from .registry import _mokata_dir
+from .tool_annotations import Field
+from .validation import ValidationError
 
 
-def vault_push(path: str = ".", name: str = "", file: str = "", kind: str = "",
-               author: str = "", force: bool = False,
-               approve: bool = False, confirm: Optional[bool] = None,
-               proposal_id: str = "") -> Dict[str, Any]:
-    """Push a brainstorm/spec markdown artifact into the team vault under `name`. HUMAN-GATED
-    (SI.3): PROPOSE-ONLY — it reports what WOULD happen and writes nothing. A human mints the
-    approval with `mokata approve <id>`; re-call with that `proposal_id` to write through the
-    WriteGate (a secret in the artifact is blocked even when approved). A changed re-push needs
-    `force=true` (it versions, keeping prior metadata — never a silent clobber)."""
-    from ..vault import VaultError, commit_push, plan_push, _artifact_path
+# vault_push — gated (SI.3): propose-only. A secret in the artifact is blocked even when approved; a
+# changed re-push needs `force` (it versions, keeping prior metadata — never a silent clobber). Name,
+# file and kind are validated up front (caller faults -> refused); a VaultError that survives that is a
+# malformed vault index on disk, a repo fault, so it stays `status: "error"`.
+def vault_push(path: Annotated[str, Field(
+                   description="Repo root the tool operates on (default: the server's working directory).")] = ".",
+               *,
+               name: Annotated[str, Field(
+                   description="Vault name for the artifact: a simple slug, no path separators.")],
+               file: Annotated[str, Field(
+                   description="Path to the brainstorm or spec markdown file to push.")],
+               kind: Annotated[Literal["", "brainstorm", "spec"], Field(
+                   description="Artifact kind; empty infers it from the name and file.")] = "",
+               author: Annotated[str, Field(
+                   description="Author recorded on the entry; empty records none.")] = "",
+               force: Annotated[bool, Field(
+                   description="Push a changed artifact as a new version instead of reporting a conflict (default false).")] = False,
+               proposal_id: Annotated[str, Field(
+                   description="Id of a proposal a human approved with `mokata approve <id>`; omit on the first call.")] = "",
+               ) -> Dict[str, Any]:
+    """Push a brainstorm or spec markdown file into the team design vault; call it to share a design artifact.
+
+    Reports what would happen and writes nothing until a human approves. A secret in the artifact is
+    blocked even when approved. Pushing changed content under an existing name needs `force`, which
+    versions it and never overwrites silently.
+
+    Returns: status "proposed" (name, kind, next_version), then "committed" with `version`;
+    "unchanged" when identical content is already there; "conflict" when it changed and `force` is off.
+    Errors: refused (invalid_input) when `name` is not a simple slug, `file` is missing, or `kind`
+    is not allowed; error when the vault index on disk is malformed."""
+    from ..vault import ARTIFACT_KINDS, VaultError, _artifact_path, _safe_name, commit_push, plan_push
+    try:
+        _safe_name(name)
+    except VaultError:
+        raise ValidationError("name", "must be a simple name with no path separators")
+    if not os.path.isfile(file):
+        raise ValidationError("file", "must be an existing markdown file")
+    if kind and kind not in ARTIFACT_KINDS:
+        raise ValidationError("kind", "is not an artifact kind", allowed=list(ARTIFACT_KINDS))
     try:
         plan = plan_push(path, name, file, kind=kind or None, force=force)
     except VaultError as exc:
@@ -63,7 +95,7 @@ def vault_push(path: str = ".", name: str = "", file: str = "", kind: str = "",
                          "next_version": plan.next_version, "reason": plan.reason()},
                         target=_artifact_path(path, plan.name),
                         summary=f"push '{plan.name}' (v{plan.next_version}) to the team vault",
-                        preview=plan.content, approve=approve, confirm=confirm)
+                        preview=plan.content)
     res = _gated_write(
         _mokata_dir(path), "config", _artifact_path(path, plan.name), plan.content,
         lambda: commit_push(path, plan, author=author).version, gate,

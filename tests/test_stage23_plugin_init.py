@@ -26,6 +26,7 @@ from mokata import MOKATA_DIR
 from mokata.cli import main
 from mokata.config import Surface, find_project_root
 from mokata.init import init_repo
+from mokata.mcp.validation import ValidationError
 from mokata.plugin_cache import read_plugin_root, record_plugin_root
 from mokata.profiles import profile_names
 
@@ -232,8 +233,13 @@ class TestMcpInitTool(unittest.TestCase):
 
     def test_unknown_profile_errors(self):
         with tempfile.TemporaryDirectory() as d:
-            res = mcp_commit(self.init, path=d, profile="bogus")
-            self.assertEqual(res["status"], "error")
+            # 0.0.28 I2: a caller fault is RAISED as a ValidationError (on a direct call), naming
+            # the field and the allowed profiles, instead of returned as status "error".
+            with self.assertRaises(ValidationError) as cm:
+                mcp_commit(self.init, path=d, profile="bogus")
+            self.assertEqual(cm.exception.field, "profile")
+            self.assertTrue(cm.exception.allowed)
+            self.assertNotIn("bogus", cm.exception.allowed)
             self.assertFalse(os.path.exists(os.path.join(d, MOKATA_DIR)))
 
 

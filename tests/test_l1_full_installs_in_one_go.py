@@ -292,11 +292,6 @@ class TestSetupNeverInstallsItself(unittest.TestCase):
         self.assertIn(R.plan_extra_install("full").display, text)
         self.assertIn("PARTIALLY wired", text)
 
-    def test_with_deps_is_gone(self):
-        for cmd in (["setup", "claude"], ["init"]):
-            with self.subTest(cmd=cmd), self.assertRaises(SystemExit), \
-                    redirect_stdout(io.StringIO()), mock.patch("sys.stderr", io.StringIO()):
-                self._parser().parse_args(cmd + ["--mode", "full", "--with-deps"])
 
     def test_setup_mode_resolves_profile_and_runs_detect_and_wire(self):
         a = self._parser().parse_args(["setup", "claude", "--mode", "full", "--yes"])

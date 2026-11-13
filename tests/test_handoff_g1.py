@@ -646,8 +646,11 @@ class TestNegativesUnchanged(unittest.TestCase):
         from mokata.mcp.tools_spec import spec_check
         self.assertIn("spec_check", REG.write_tool_names())
         params = inspect.signature(spec_check).parameters
-        for expected in ("symbols", "files", "text", "phase", "approve", "proposal_id"):
+        # 0.0.28 I2: `approve` deleted — consent is `proposal_id` only, and it must stay that way
+        for expected in ("symbols", "files", "text", "phase", "proposal_id"):
             self.assertIn(expected, params)
+        for gone in ("approve", "confirm"):
+            self.assertNotIn(gone, params)
         with tempfile.TemporaryDirectory() as d:
             _repo(d)
             out = spec_check(path=d, symbols="nothing_here")

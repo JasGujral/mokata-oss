@@ -205,7 +205,14 @@ def q01_annotations(fx: Fixture, specs: List[Tuple[str, str, Callable[..., Any]]
         annotated += 1
         if kind == "read":
             reads += 1
-            if ann.get("readOnlyHint") is True and "destructiveHint" not in ann:
+            # 0.0.28 I2: the append-only reads (`APPEND_ONLY_TOOLS`: session_save, review_record,
+            # progress_mark, run_finish) are honestly `readOnlyHint:false, destructiveHint:false`.
+            if name in TA.APPEND_ONLY_TOOLS:
+                if ann.get("readOnlyHint") is False and ann.get("destructiveHint") is False:
+                    reads_ok += 1
+                else:
+                    bad.append(name)
+            elif ann.get("readOnlyHint") is True and "destructiveHint" not in ann:
                 reads_ok += 1
             else:
                 bad.append(name)
@@ -308,7 +315,9 @@ def q04_bad_enum(fx: Fixture, specs: List[Tuple[str, str, Callable[..., Any]]]) 
     """D1d — is a caller's typo a REFUSAL (fix your call) and not an ERROR (the server broke)?"""
     name, kind, fn = next((n, k, f) for n, k, f in specs if f.__name__ == "query")
     started = time.time()
-    res = _call(name, kind, fn, path=fx.path, kind="not_a_real_kind")
+    # 0.0.28 I2: `target` is a required parameter of `query` now, so the call supplies it and the
+    # ONLY fault is the bad `kind` enum.
+    res = _call(name, kind, fn, path=fx.path, target="x", kind="not_a_real_kind")
     elapsed = time.time() - started
     ok = (res.get("status") == ST.REFUSED
           and res.get("field") == "kind"
@@ -450,7 +459,8 @@ def q10_descriptions(fx: Fixture, specs: List[Tuple[str, str, Callable[..., Any]
         desc = TA.description_for(kind, name, doc)
         if kind == "read":
             reads += 1
-            if desc == doc.strip():
+            # 0.0.28 I2: a read description is the DEDENTED docstring (`inspect.cleandoc`)
+            if desc == inspect.cleandoc(doc):
                 reads_identical += 1
             else:
                 bad.append(f"{name}(read desc drifted)")
@@ -713,8 +723,11 @@ class TestExitCriteriaSweep(unittest.TestCase):
         for t in TOOLS:
             ann = TA.annotations_for(t.kind, t.name)
             self.assertIn("readOnlyHint", ann, t.name)
-            if t.kind == "read":
+            # 0.0.28 I2: the append-only reads are `readOnlyHint:false` (evidence appenders)
+            if t.kind == "read" and t.name not in TA.APPEND_ONLY_TOOLS:
                 self.assertTrue(ann["readOnlyHint"], t.name)
+            elif t.kind == "read":
+                self.assertFalse(ann["readOnlyHint"], t.name)
 
     def test_exit_baseline_never_blocks_stdio_past_120s(self):
         from mokata.baseline import BASELINE_MCP_TIMEOUT_SECONDS

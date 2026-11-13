@@ -28,7 +28,7 @@ import codecs
 import json
 import os
 import re
-import tempfile
+import secrets
 import threading
 import time
 from dataclasses import dataclass, field
@@ -376,10 +376,28 @@ class SpillWriter:
     one per line, in key order; every `INDEX_EVERY`-th row's (key, offset) is indexed."""
 
     def __init__(self, directory: str, kind: str) -> None:
+        # 0.0.28 C1: the spill dir and every spill file are BORN owner-only (`winacl`), on every OS -
+        # `os.makedirs(mode=0o700)` and `mkstemp` were the folder's ACL on Windows.
+        from .. import winacl
         try:
-            os.makedirs(directory, mode=0o700, exist_ok=True)
-            fd, self.path = tempfile.mkstemp(prefix=f"{SPILL_PREFIX}{os.getpid()}-{kind}-",
-                                             suffix=".spill", dir=directory)
+            if not os.path.isdir(directory):
+                os.makedirs(os.path.dirname(directory) or ".", exist_ok=True)
+                try:
+                    winacl.make_private_dir(directory)
+                except FileExistsError:
+                    pass                                # another job made it first
+            fd = path = None
+            for _ in range(100):
+                path = os.path.join(directory, f"{SPILL_PREFIX}{os.getpid()}-{kind}-"
+                                               f"{secrets.token_hex(6)}.spill")
+                try:
+                    fd = winacl.create_private_file(path)
+                    break
+                except FileExistsError:
+                    continue
+            if fd is None:
+                raise FileExistsError(f"no free spill name in {directory}")
+            self.path = path
         except OSError as exc:
             raise SpillFull(f"no spill file could be made in {directory}: {exc}") from None
         self.fh = os.fdopen(fd, "wb")
@@ -905,16 +923,22 @@ def _lsp_usages(root: str, code_root: str, d: Definition, host: Any) -> Dict[str
     locs = res if isinstance(res, list) else []
     cache = L._Lines()
     rows = []
+    skipped = 0
     for x in locs:
         loc = L.location(code_root, x, cache, snippet=False)
+        if loc is None:                                    # malformed: counted, said, not fatal
+            skipped += 1
+            continue
         if not loc["outside"] and loc["path"] == d.path and loc["line"] == d.line:
             continue                                       # the declaration is not a usage
         rows.append(_row(loc["path"] or "", loc["line"], loc["col"], "", "", loc["outside"]))
     rows = _dedupe(rows)
     fill_snippets(code_root, rows, d.name)
-    return {"rows": rows, "backend": srv.name, "basis": "lsp",
+    return {"rows": rows, "backend": srv.name, "basis": "lsp", "skipped": skipped,
             "label": f"as resolved by {srv.name} (its own project view; dynamic uses it cannot "
-                     "type are not included); the declaration is excluded",
+                     "type are not included); the declaration is excluded"
+                     + (f"; {skipped} location{'s' if skipped != 1 else ''} the server sent "
+                        "malformed were skipped" if skipped else ""),
             "asked_by": "position", "definitions": None, "candidates": [],
             "lsp": {"state": "ready", "server": srv.name}}
 
@@ -1126,20 +1150,11 @@ def build_block(root: str, code_root: str, rel: str, lo: int, hi: int, shape: st
 
 
 #: A private key is ONE unit from its BEGIN line through its END line (V1): the shared scanner
-#: flags the BEGIN line only, and a narrow-wrapped body line is too short for its entropy layer.
-#: The markers are matched as a hand-edited or tool-written key spells them (REDACT-FIX): any case,
-#: any type words (RSA, EC, DSA, OPENSSH, ENCRYPTED, SSH2 ENCRYPTED, PGP ... BLOCK), extra spaces
-#: or tabs, three or more dashes. Space is `[ \t]`, never `\s`: a marker never spans two lines.
-#: Each end of a marker matches EXACTLY three dashes (the last three before BEGIN/END, the first
-#: three after KEY): an END never swallows the dashes of a BEGIN glued to it (`cat a b` with no
-#: newline at the end of `a`; REDACT-FIX round 2, M1), and a try at any dash of a long run fails
-#: after three characters, so a line of a million dashes is linear, not quadratic.
-#: These two patterns and `pem_step` are the ONE key parser; every redactor that sends text out
-#: of the process (Copy with Context here, session context in `ide/context.py`) uses them.
-_PEM = r"-{{3}}[ \t]*{word}[ \t]+(?:[A-Z0-9]+[ \t]+)*PRIVATE[ \t]+KEY(?:[ \t]+BLOCK)?[ \t]*-{{3}}"
-PEM_BEGIN = re.compile(_PEM.format(word="BEGIN"), re.IGNORECASE)
-PEM_END = re.compile(_PEM.format(word="END"), re.IGNORECASE)
-_B64_BODY = re.compile(r"[A-Za-z0-9+/]{4,}={0,2}")
+#: flags a key's marker lines, and a narrow-wrapped body line is too short for its entropy layer.
+#: REDACT-MANGLED-KEY: the markers — strict, mangled, cut, split across literals, Unicode-spelled,
+#: or absent (an unmarked base64 body) — are recognised by THE ONE detector in
+#: `govern.secrets` (`key_markers`, `KeyWalk`, `UnmarkedRun`). This module holds no marker pattern
+#: of its own; `pem_lines`, `pem_state_before`, `_residual` and `redact_text` only drive it.
 #: base64-looking lines held back while waiting to see whether an END line closes them (a key
 #: whose BEGIN is above the selection); past this many they are let through, and an END after
 #: them then REFUSES the copy (the start of that key already went out).
@@ -1150,115 +1165,128 @@ REPLACED = "‹line replaced by mokata's secret scan: {kind}›"
 
 
 def _replace(line: str, kind: str, mark: str = REPLACED) -> str:
-    eol = line[len(line.rstrip("\r\n")):]
-    return mark.format(kind=kind) + eol
+    """`line` replaced by the mark, keeping its own line break — any of the 11 separators."""
+    from ..govern.secrets import _body_of
+    return mark.format(kind=kind) + line[len(_body_of(line)):]
 
 
-def _b64_body(line: str) -> bool:
-    t = line.strip().replace("\\n", "").strip("\"'`,+;() ").strip()
-    return bool(t) and _B64_BODY.fullmatch(t) is not None
-
-
-#: characters of a line kept across read blocks so a marker split by a block is still seen
-_PEM_TAIL = 4096
-
-
-def _pem_walk(inside: bool, text: str) -> Tuple[bool, bool, int]:
-    """(key material?, inside after, where the last marker ended) for one run of text."""
-    key = inside
-    pos = 0
-    while True:
-        m = (PEM_END if inside else PEM_BEGIN).search(text, pos)
-        if m is None:
-            return key, inside, pos
-        key = True
-        inside = not inside
-        pos = m.end()
-
-
-def pem_step(inside: bool, text: str) -> Tuple[bool, bool]:
-    """One line through the key state machine: (is this line key material, inside a key after
-    it). `inside` is the state BEFORE the line. Every marker on the line counts, in order, so an
-    END followed by the next key's BEGIN on one line leaves the state inside."""
-    return _pem_walk(inside, text)[:2]
-
-
-def pem_state_before(root: str, rel: str, lo: int) -> bool:
-    """Is line `lo` of the file inside a private key (a BEGIN above it with no END yet)? Streamed:
-    a line is read in blocks, and the unconsumed end of each block (after the last marker, at
-    most `_PEM_TAIL` characters) is carried into the next, so a marker split by a block is seen
-    once and never twice."""
+def pem_state_before(root: str, rel: str, lo: int) -> Any:
+    """The key state line `lo` of the file starts in: True inside a private key (a BEGIN above it
+    with no END yet, or a tolerant BEGIN not yet judged), `"run"` inside a base64 run that is an
+    unmarked key (its head can be above `lo`, and is judged by reading on), else False. Streamed
+    in blocks: a line longer than one block is handed to the walker block by block (it keeps a
+    bounded tail, so a marker split by a block is seen once) and is never held whole. Lines are
+    the viewer's (`\\n`). Pass the answer to `pem_lines(inside=…)`."""
+    from ..govern.secrets import RUN_CHARS, KeyRunTooLong, KeyWalk
     from ..knowledge.cancel import checkpoint
-    inside = False
+    walk = KeyWalk(hold=PEM_HOLD_LINES)
     dec = codecs.getincrementaldecoder("utf-8")("replace")
+    after: List[str] = []
     with open(os.path.join(root, *rel.split("/")), "rb") as fh:
         ln = 1
-        tail = ""
         for raw in iter(lambda: fh.readline(_block()), b""):
             if ln >= lo:
-                break
-            text = tail + dec.decode(raw)
-            _key, inside, end = _pem_walk(inside, text)
-            if raw.endswith(b"\n"):
-                ln += 1
-                tail = ""
-                if ln % 4096 == 0:
-                    checkpoint()
-            else:
-                tail = text[max(end, len(text) - _PEM_TAIL):]
-    return inside
+                if not walk.run.cands or len(after) > RUN_CHARS // 4 or not raw.endswith(b"\n"):
+                    break
+                after.append(dec.decode(raw)[:-1])
+                continue
+            text = dec.decode(raw)
+            try:
+                if raw.endswith(b"\n"):
+                    walk.feed(text[:-1], None)
+                    ln += 1
+                    if ln % 4096 == 0:
+                        checkpoint()
+                else:
+                    walk.feed(text, None, eol=False)
+            except KeyRunTooLong:
+                return True
+    return walk.peek(after)
 
 
 def pem_lines(lines: Iterable[str], counts: Dict[str, int], rel: str,
-              inside: bool = False, mark: str = REPLACED) -> Iterator[str]:
-    """`lines` with every private key replaced WHOLE: BEGIN through END (an unterminated BEGIN to
-    the end), and a base64 run that an END line closes (its BEGIN was above). Counts each line.
-    `inside`: the first line is inside a key (the caller knows its BEGIN is above). `mark`: the
-    replacement line's wording (`{kind}` is filled in)."""
-    pending: List[str] = []
-    let_through = False                      # a base64 run was let through un-held
+              inside: Any = False, mark: str = REPLACED) -> Iterator[str]:
+    """`lines` (each with its own line break) with every private key replaced WHOLE by the one
+    walker (`govern.secrets.KeyWalk`): BEGIN through END (an unterminated BEGIN to the end), a
+    base64 run that an END line closes (its BEGIN was above), and an unmarked base64 run that
+    decodes to a private key. Counts each line. `inside`: the first line is inside a key (the
+    caller knows its BEGIN is above). `mark`: the replacement line's wording."""
+    from ..govern.secrets import KeyRunTooLong, KeyWalk, _body_of, quiet_inside
+    walk = KeyWalk(inside=inside, hold=PEM_HOLD_LINES)
+    feed = walk.feed
+    text = mark.format(kind="private-key")
+    n = 0
+    hot = walk.hot()
+    last = None
+    try:
+        for ln in lines:
+            if hot and quiet_inside(ln):            # the hot path: a key's body line
+                n += 1
+                if ln.endswith("\n") and not ln.endswith("\r\n"):
+                    yield text + "\n"
+                else:
+                    yield text + ln[len(_body_of(ln)):]
+                last = ln
+                continue
+            if last is not None:
+                walk.ran(_body_of(last))
+                last = None
+            for got, key in feed(_body_of(ln), ln):
+                if key:
+                    n += 1
+                    yield text + got[len(_body_of(got)):]
+                else:
+                    yield got
+            hot = walk.hot()
+        for got, key in walk.finish():
+            if key:
+                n += 1
+                yield text + got[len(_body_of(got)):]
+            else:
+                yield got
+    except KeyRunTooLong:
+        raise RefRefused(f"the context for {rel} holds a private key longer than mokata can "
+                         "hold back — nothing is copied") from None
+    finally:
+        counts["replaced"] = counts.get("replaced", 0) + n
 
-    def rep(line: str) -> str:
-        counts["replaced"] = counts.get("replaced", 0) + 1
-        return _replace(line, "private-key", mark)
-    for ln in lines:
-        body = ln.rstrip("\r\n")
-        if inside:
-            yield rep(ln)
-            inside = pem_step(True, body)[1]
-            continue
-        b = PEM_BEGIN.search(body)
-        e = PEM_END.search(body)
-        if e and (b is None or e.start() < b.start()):
-            # an END before any BEGIN: it closes a key whose BEGIN was above this text
-            if let_through:
-                raise RefRefused(f"the context for {rel} holds a private key longer than mokata "
-                                 "can hold back — nothing is copied")
-            for p in pending:
-                yield rep(p)
-            pending = []
-            yield rep(ln)
-            inside = pem_step(False, body[e.end():])[1]
-            continue
-        if b:
-            yield from pending
-            pending = []
-            let_through = False
-            yield rep(ln)
-            inside = pem_step(False, body)[1]
-            continue
-        if _b64_body(body):
-            pending.append(ln)
-            if len(pending) > PEM_HOLD_LINES:
-                yield from pending
-                pending = []
-                let_through = True
-            continue
-        yield from pending
-        pending = []
-        let_through = False
-        yield ln
-    yield from pending
+
+def redact_text(text: str, path: str, *, inside: Any = False,
+                mark: str = REPLACED) -> Tuple[str, int]:
+    """THE line redactor every caller that sends text out uses (session context, the explainer's
+    grounding, its bundle and CI evidence): `(text with every secret-bearing line replaced, how
+    many lines)`. Split with the scanner's own `splitlines(keepends=True)` and re-joined keeping
+    each line's own separator, so the scanner's line numbers and the replaced lines agree for
+    all 11 separators and the line COUNT (so every cite) is unchanged. A private key is replaced
+    whole (`pem_lines`); every other finding replaces its own line. The output is scanned again:
+    anything secret-shaped left raises `RefRefused` (the caller refuses or fails closed). A
+    sensitive PATH raises `RefRefused` before anything is read."""
+    from ..govern.secrets import KEY_FIRM, KEY_TOLERANT, scan
+    findings = scan(text, path=path or None)
+    if any(f.layer == "path" for f in findings):
+        raise RefRefused(f"{path} is a sensitive location — its text is never sent")
+    if not text:
+        return text, 0
+    pieces = text.splitlines(keepends=True)
+    out = list(pem_lines(pieces, {}, path, inside=inside, mark=mark))
+    for f in findings:
+        if f.layer in ("signature", "entropy") and f.line and 1 <= f.line <= len(out) \
+                and out[f.line - 1] == pieces[f.line - 1]:
+            if f.kind in (KEY_FIRM, KEY_TOLERANT):
+                # the walker and the scanner are ONE detector: a key line the walker left is a
+                # disagreement, and the only safe answer is to send nothing (fail closed)
+                raise RefRefused("the text still carries a secret after redaction")
+            out[f.line - 1] = _replace(pieces[f.line - 1], f.kind, mark)
+    n = sum(1 for a, b in zip(pieces, out) if a != b)
+    joined = "".join(out) if n else text
+    # the re-scan looks for what is NOT a key: a key line the walker left has just been refused
+    # line by line above, so a key half here was unreachable (0.0.28 E1 round 2: a 40k-case fuzz
+    # changed no output) — dead code, not a guard. `verify_assembled` keeps its key half: there
+    # it IS the guard (the copy path has no per-line key check).
+    if any(f.layer in ("signature", "entropy") and f.kind not in (KEY_FIRM, KEY_TOLERANT)
+           for f in scan(joined)):
+        raise RefRefused("the text still carries a secret after redaction")
+    return joined, n
 
 
 def _line_findings(line: str) -> Optional[str]:
@@ -1270,9 +1298,9 @@ def _line_findings(line: str) -> Optional[str]:
 
 
 def _residual(text: str) -> bool:
+    """Anything secret- or key-shaped left in `text` — the one detector, whole text."""
     from ..govern.secrets import scan
-    return (PEM_BEGIN.search(text) is not None or PEM_END.search(text) is not None
-            or any(f.layer in ("signature", "entropy") for f in scan(text)))
+    return any(f.layer in ("signature", "entropy") for f in scan(text))
 
 
 def verify_assembled(path: str, rel: str) -> None:

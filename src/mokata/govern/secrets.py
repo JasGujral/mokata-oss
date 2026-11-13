@@ -14,11 +14,16 @@ Dependency-free and deterministic.
 
 from __future__ import annotations
 
+import binascii
+import copy
 import math
 import os
 import re
+import unicodedata
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, Iterable, List, NamedTuple, Optional, Tuple
+
+from ..errors import MokataError
 
 LAYERS = ("signature", "entropy", "path", "egress")
 
@@ -30,9 +35,8 @@ _SIGNATURES = [
     # AWS — access key id (long-term AKIA / temporary ASIA). The 40-char secret key has no
     # distinctive prefix; it's caught by the secret-assignment rule + the entropy backstop.
     ("aws-access-key", re.compile(r"(?:AKIA|ASIA)[0-9A-Z]{16}")),
-    # Private keys (PEM) — covers OpenSSH and GCP service-account `private_key` blocks too.
-    ("private-key", re.compile(
-        r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP |ENCRYPTED )?PRIVATE KEY-----")),
+    # Private keys are NOT a pattern here: `_scan_key_material` (the one key detector below)
+    # reports them — firm `private-key` and tolerant `key-marker-tolerant` (REDACT-MANGLED-KEY).
     # GitHub: classic ghp_/gho_/ghs_/ghr_/ghu_ + fine-grained github_pat_.
     ("github-token", re.compile(r"gh[posru]_[A-Za-z0-9]{20,}")),
     ("github-pat", re.compile(r"github_pat_[0-9A-Za-z_]{20,}")),
@@ -65,7 +69,7 @@ _SIGNATURES = [
 
 _SENSITIVE_NAMES = (".env", "id_rsa", "id_dsa", "credentials", ".npmrc", ".pgpass",
                     ".netrc")
-_SENSITIVE_SUFFIXES = (".pem", ".key", ".p12", ".pfx")
+_SENSITIVE_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".ppk")
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9+/=_\-]{20,}")
 # Path / URL / filename separators. A matched token is broken on these before the entropy
@@ -352,6 +356,1021 @@ class Finding:
     token: str = ""
 
 
+# --- REDACT-MANGLED-KEY: THE ONE private-key detector ------------------------------------------
+# Every surface that judges or replaces private-key text calls this block: the signature layer
+# below (`_scan_key_material`), `ide.usages` (`pem_lines`, `pem_state_before`, `_residual`,
+# `redact_text`) and so every line site and every whole-text site. There is no second marker
+# pattern in `src/` (`test_e1_marker_detector.OneDetector` holds that), and no regex here carries
+# an unbounded quantifier next to another one: a marker is found by a hand scanner that does
+# O(1) bounded work per BEGIN/END keyword, so a line is examined in time linear in its length.
+#
+# THE RULE (0.0.28 REDACT-MANGLED-KEY; rulings E-Q3, E-Q5):
+#   * keyword BEGIN or END; look back over <=16 blanks and count <=64 dashes. Three or more
+#     dashes ("dashed") allow any case; fewer need every word UPPER-case (E-Q3).
+#   * then <=6 type words, PRIVATE, KEY (required), optional BLOCK, optional trailing dashes.
+#     A public word among THIS marker's type words cancels it.
+#   * CUT (dashed BEGIN only): the line ends after BEGIN, after key-type words (or a prefix of
+#     one), inside PRIVATE, or inside KEY.
+#   * the view is NORMALISED first (non-ASCII lines only): Cf, Mn and soft hyphen dropped, every
+#     dash to `-`, every Zs to a space, a char whose NFKC is one ASCII char to that char.
+#   * a split string literal is matched on the GLUED view (junctions deleted) and across the
+#     previous line (JOINED view); a base64 token `LS0t…` is decoded and judged as a marker.
+#   * FIRM (signature `private-key`, never ignorable): direct view, dashed, every type word a key
+#     type, PRIVATE KEY complete and followed by >=3 dashes or the end of the line; or the base64
+#     of a PRIVATE marker. Everything else that matches is TOLERANT (`key-marker-tolerant`):
+#     blocked at whole-text sites but recordable through `secret_ignore`; fatal on egress.
+#   * an unmarked body (a base64 RUN whose decoded head is a private key's DER, or an OpenSSH
+#     key) is tolerant too: `UnmarkedRun`.
+KEY_FIRM = "private-key"
+KEY_TOLERANT = "key-marker-tolerant"
+_KEY_TYPES = ("RSA", "EC", "DSA", "OPENSSH", "ENCRYPTED", "PGP", "SSH2")
+_KEY_TYPE_SET = frozenset(_KEY_TYPES)
+_PUBLIC_WORDS = frozenset(("PUBLIC", "CERTIFICATE", "REQUEST", "CMS", "PKCS7", "X509",
+                           "TRUSTED", "PARAMETERS"))
+_MAX_DASHES = 64
+_MAX_BLANKS = 16
+_MAX_WORDS = 6
+_MAX_WORD = 16
+_CUT_LOOK = 64                 # how far past a cut the rest of the line is looked at
+_JOIN_TAIL = 256               # chars of the previous line a split literal is joined from
+_JOIN_HEAD = 1024              # chars of this line the joined view takes
+_B64_MARKER = 128              # base64 chars of an `LS0t…` token decoded
+RUN_CHARS = 128                # base64 chars of a run decoded by the unmarked-body backstop
+B64_LINE_MAX = 4096            # a longer line is never a base64 body line (no copy is made)
+B64_TAIL_MIN = 24              # a base64 run behind a code prefix is at least this long
+KEY_WINDOW = 1 << 20           # a longer line is examined in windows …
+KEY_OVERLAP = 4096             # … overlapping by this many characters
+_BLANK = " \t"
+#: the 11 `str.splitlines` breaks — the cut rule treats any of them as the end of the line
+LINE_SEPARATORS = "\n\r\v\f\x1c\x1d\x1e\x85  "
+_PEM_HEADERS = ("PROC-TYPE: 4,ENCRYPTED", "DEK-INFO:")
+_BODY_HEADERS = ("PROC-TYPE:", "DEK-INFO:", "COMMENT:", "VERSION:", "HASH:")
+
+#: candidate keywords — no quantifier, so one search is linear
+_KW = re.compile(r"(?i:begin|end)")
+#: a line is examined at all only if its normalised view holds one of these (bounded quantifier)
+_PRE = re.compile(r"(?i:priv)|---[ \t]{0,16}(?i:b)|LS0t|(?i:proc-type|dek-info)")
+#: what may follow a cut and still be "the end of the line": blanks, quotes, glue, `\n` escapes
+_CUT_REST = re.compile(r"(?:[ \t\"'`,;+)]|\\[nr]?)*")
+#: a string-literal junction: quote, glue operator, quote (`"a" + "b"`, `'a' . 'b'`, `"a" "b"`)
+_JUNCTION = re.compile(r"[\"'`][ \t]{0,16}(?:\+|\.\.|\.|,|&|\|\||\\|_)?[ \t]{0,16}[\"'`]")
+_LS0T = re.compile(r"LS0t[A-Za-z0-9+/]{0,124}")
+_B64_BODY = re.compile(r"[A-Za-z0-9+/]{4,}={0,2}|[A-Za-z0-9+/]{2,3}={1,2}")
+_B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+_CONT_END = "+\\,(.&|\"'`"
+_CONT_START = "+.&|\"'`"
+_PKCS5 = bytes.fromhex("2a864886f70d0105")
+_PKCS12_PBE = bytes.fromhex("2a864886f70d010c01")
+_OPENSSH_MAGIC = b"openssh-key-v1\x00"
+
+
+class _NormTable(dict):
+    """`str.translate` table for the marker view, filled on first sight of each code point."""
+
+    def __missing__(self, code: int) -> Any:
+        ch = chr(code)
+        cat = unicodedata.category(ch)
+        if cat in ("Cf", "Mn") or ch == "\xad":
+            val: Any = None
+        elif cat == "Pd" or code in (0x2212, 0xFE58, 0xFE63, 0xFF0D, 0x2043):
+            val = "-"
+        elif cat == "Zs":
+            val = " "
+        else:
+            n = unicodedata.normalize("NFKC", ch)
+            val = n if (len(n) == 1 and n.isascii() and n != ch) else code
+        self[code] = val
+        return val
+
+
+_NORM = _NormTable()
+
+
+def normalise_for_markers(text: str) -> str:
+    """The view markers are matched on. ASCII text is its own view (no copy); otherwise each
+    character maps to at most one, so a view index maps back to a RAW index (`_raw_index`)."""
+    return text if text.isascii() else text.translate(_NORM)
+
+
+def _raw_index(raw: str, v: int) -> int:
+    """The smallest raw index whose normalised prefix is `v` long (binary search, C-speed)."""
+    if raw.isascii():
+        return v
+    lo, hi = 0, len(raw)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if len(raw[:mid].translate(_NORM)) < v:
+            lo = mid + 1
+        else:
+            hi = mid
+    return lo
+
+
+class Marker(NamedTuple):
+    """One key marker on a line. `start`/`end` are RAW indices into the line. `begin`: True a
+    BEGIN, False an END, None a self-contained blob or a PEM header (it opens a run, no END).
+    `clear`: nothing but glue follows it on its line. `whole`: found on a glued/joined view, so
+    it stands for the whole line."""
+    start: int
+    end: int
+    begin: Optional[bool]
+    firm: bool
+    clear: bool = False
+    whole: bool = False
+
+
+def _rest_clear(v: str, pos: int, at_eol: bool) -> bool:
+    """Is everything after `pos` up to the end of the line glue only (bounded look)?"""
+    lim = min(len(v), pos + _CUT_LOOK + 1)
+    p = _CUT_REST.match(v, pos, lim).end()
+    if p < len(v):
+        return v[p] in LINE_SEPARATORS
+    return at_eol
+
+
+#: the words after a keyword: up to 9 (6 type words, PRIVATE, KEY, BLOCK), each 1..16 letters or
+#: digits after 1..16 blanks — every quantifier bounded, so one match is O(1)
+_SEQ = re.compile(r"(?:[ \t]{1,16}[A-Za-z0-9]{1,16}(?![A-Za-z0-9])){0,9}")
+_TRAIL = re.compile(r"[ \t]{0,16}(-{1,64})")
+
+
+def _parse(v: str, s: int, e: int, at_eol: bool) -> Optional[Marker]:
+    """The marker whose keyword is `v[s:e]`, or None. O(1) bounded work: the look-back reads at
+    most 16 blanks and 64 dashes, the look-forward one bounded match."""
+    kw = v[s:e]
+    begin = kw.upper() == "BEGIN"
+    back = v[max(0, s - _MAX_BLANKS - _MAX_DASHES - 1):s]
+    t = back.rstrip(" \t")
+    blanks = len(back) - len(t)
+    dashes = 0 if blanks > _MAX_BLANKS else min(len(t) - len(t.rstrip("-")), _MAX_DASHES)
+    dashed = dashes >= 3
+    if not dashed:
+        if kw != kw.upper():
+            return None                              # E-Q3: a dash-less marker is upper-case
+        if s > 0 and v[s - 1].isascii() and v[s - 1].isalnum():
+            return None                              # SEND, APPEND, XBEGIN
+    start = s - blanks - dashes if dashes else s
+    seq = _SEQ.match(v, e).group()
+    raw = seq.split()
+    ups = seq.upper().split()
+
+    def end_of(j: int) -> int:                       # the index just past word `j`
+        at = 0
+        for w in raw[:j + 1]:
+            at = seq.index(w, at) + len(w)
+        return e + at
+    k = ups.index("PRIVATE") if "PRIVATE" in ups else -1
+    if not dashed:                                   # E-Q3: the marker's own words upper-case
+        own = raw[:k + 3] if k >= 0 else raw
+        if k >= 0 and len(own) == k + 3 and own[-1] != "BLOCK":
+            own = own[:-1]
+        if any(w != w.upper() for w in own):
+            return None
+    words = ups[:k] if k >= 0 else ups
+    if len(words) > _MAX_WORDS or not _PUBLIC_WORDS.isdisjoint(words):
+        return None
+    if k < 0:                                        # no PRIVATE: only a CUT can be a marker
+        pos = end_of(len(raw) - 1) if raw else e
+        if not (dashed and begin) or not _rest_clear(v, pos, at_eol):
+            return None
+        if words:
+            last = words[-1]
+            if not _KEY_TYPE_SET.issuperset(words[:-1]):
+                return None
+            if not ("PRIVATE".startswith(last) or any(t.startswith(last) for t in _KEY_TYPES)):
+                return None
+        return Marker(start, pos, True, False, True)
+    nxt = ups[k + 1] if k + 1 < len(ups) else ""
+    if nxt == "KEY":
+        if k + 2 < len(ups) and ups[k + 2] == "BLOCK" and (dashed or raw[k + 2] == "BLOCK"):
+            pos = end_of(k + 2)
+        else:
+            pos = end_of(k + 1)
+        tm = _TRAIL.match(v, pos)
+        d = len(tm.group(1)) if tm else 0
+        end = tm.end() if tm else pos
+        clear = _rest_clear(v, end, at_eol)
+        firm = dashed and _KEY_TYPE_SET.issuperset(words) and (d >= 3 or clear)
+        return Marker(start, end, begin, firm, clear)
+    if dashed and begin:                             # CUT inside PRIVATE K…
+        if nxt and "KEY".startswith(nxt) and _rest_clear(v, end_of(k + 1), at_eol):
+            return Marker(start, end_of(k + 1), True, False, True)
+        if not nxt and _rest_clear(v, end_of(k), at_eol):
+            return Marker(start, end_of(k), True, False, True)
+    return None
+
+
+def _b64_marker(v: str, p: int) -> Optional[Marker]:
+    """An `LS0t…` token at `p` that decodes to a BEGIN … PRIVATE marker: FIRM, self-contained."""
+    m = _LS0T.match(v, p)
+    tok = m.group(0)
+    tok = tok[:len(tok) // 4 * 4]
+    try:
+        dec = binascii.a2b_base64(tok).decode("latin-1")
+    except (binascii.Error, ValueError):
+        return None
+    dec = dec.split("\n", 1)[0]
+    if "PRIVATE" not in dec.upper():
+        return None
+    for k in _KW.finditer(dec):
+        mk = _parse(dec, k.start(), k.end(), False)
+        if mk is not None and mk.begin:
+            return Marker(p, m.end(), None, True, False)
+    return None
+
+
+def _view_markers(v: str, at_eol: bool) -> List[Marker]:
+    """Markers on one normalised view, in order, VIEW coordinates."""
+    if _PRE.search(v) is None:
+        return []
+    out: List[Marker] = []
+    for k in _KW.finditer(v):
+        mk = _parse(v, k.start(), k.end(), at_eol)
+        if mk is not None:
+            out.append(mk)
+    p = v.find("LS0t")
+    while p >= 0:
+        mk = _b64_marker(v, p)
+        if mk is not None:
+            out.append(mk)
+        p = v.find("LS0t", p + 4)
+    head = v[:96].lstrip(" \t\"'`#;/*").upper()
+    if head.startswith(_PEM_HEADERS):
+        out.append(Marker(0, len(v), None, False, True))
+    if len(out) > 1:
+        out.sort(key=lambda m: m.start)
+    return out
+
+
+def _glue(v: str) -> str:
+    v = _JUNCTION.sub("", v)
+    if "concat!(" in v:
+        v = v.replace("concat!(", "")
+    if "\\" in v:
+        v = v.replace("\\n", "").replace("\\r", "")
+    return v
+
+
+_OWN: Tuple[Any, List[Marker]] = (None, [])
+
+
+def _own_markers(gp: str) -> List[Marker]:
+    """The previous line's own (glued) markers — the walker asks for the same line twice in a
+    row (as `prev` of this line), so one entry is cached (rebound whole: a reader on another
+    thread sees an old pair or a new pair, never a mix). A miss only recomputes."""
+    global _OWN
+    key, val = _OWN
+    if key != gp:
+        val = _view_markers(gp, True)
+        _OWN = (gp, val)
+    return val
+
+
+def _window_markers(raw: str, offset: int, prev: str, at_eol: bool) -> List[Marker]:
+    v = normalise_for_markers(raw)
+    direct = _view_markers(v, at_eol)
+    if v is not raw:
+        direct = [Marker(_raw_index(raw, m.start), _raw_index(raw, m.end), m.begin, m.firm,
+                         m.clear) for m in direct]
+    best = direct
+    if "\"" in v or "'" in v or "`" in v or "concat!(" in v or "\\" in v:
+        glued = _view_markers(_glue(v), at_eol)
+        if len(glued) > len(best):
+            best = [Marker(0, len(raw), m.begin, False, m.clear, True) for m in glued]
+    if prev and offset == 0:
+        pv = normalise_for_markers(prev[-_JOIN_TAIL:]).rstrip()
+        cv = v[:_JOIN_HEAD].lstrip()
+        if pv and cv and (pv[-1] in _CONT_END or cv[0] in _CONT_START):
+            if pv.endswith("\\"):
+                pv = pv[:-1]                         # a `\` line continuation joins the two
+            gp = _glue(pv)
+            joined = _view_markers(_glue(pv + cv), at_eol or len(v) <= _JOIN_HEAD)
+            if joined:
+                own = _own_markers(gp)
+                new = [m for m in joined if m.start < len(gp) and not any(
+                    o.start == m.start and o.end >= m.end for o in own)]
+                if new:
+                    lead = [Marker(0, len(raw), m.begin, False, m.clear, True) for m in new]
+                    best = lead + [m for m in best]
+    if best is not direct:
+        firm = [m for m in direct if m.firm]
+        best = sorted(best + firm, key=lambda m: (m.start, not m.firm)) if firm else best
+    return [Marker(m.start + offset, m.end + offset, m.begin, m.firm, m.clear, m.whole)
+            for m in best]
+
+
+def _joins(prev: str, line: str) -> bool:
+    """Would the joined view look at this line (its trigger, on the raw text)?"""
+    if not prev:
+        return False
+    p = prev[-1]
+    if p == " " or p == "\t":
+        p = prev.rstrip()[-1:]
+        if not p:
+            return False
+    c = line[:1]
+    if c == " " or c == "\t":
+        c = line[:_JOIN_HEAD].lstrip()[:1]
+    if not c:
+        return False
+    return p in _CONT_END or c in _CONT_START or not p.isascii() or not c.isascii()
+
+
+def quiet(line: str, prev: str = "") -> bool:
+    """True when `line` certainly holds no marker in ANY view. An ASCII line without `---` has
+    no dashed marker; without `PRIV` no dash-less one (E-Q3: upper-case); without a quote or a
+    backslash nothing for the glued view; without `LS0t` no base64 marker; and the PEM headers
+    are spelled canonically. Substring probes only (C-speed): the hot path for a key's body and
+    for ordinary code."""
+    return (len(line) <= KEY_WINDOW and line.isascii() and "---" not in line
+            and "PRIV" not in line and '"' not in line and "'" not in line and "`" not in line
+            and "\\" not in line and "LS0t" not in line and "Proc-Type" not in line
+            and "DEK-Info" not in line and "PROC-TYPE" not in line and "DEK-INFO" not in line
+            and not _joins(prev, line))
+
+
+def quiet_inside(line: str) -> bool:
+    """Inside a marked key only an END matters, and an END needs `---` (dashed), `PRIV`
+    (dash-less, upper-case), a quote or backslash (glued view) or a non-ASCII character
+    (normalised view). The joined view needs a continuation character at a line edge — never a
+    letter or a dash — so it cannot assemble `---`/`PRIV` onto a line holding no quote: the worst
+    it can do is miss an END split across an unquoted continuation, which keeps the walker inside
+    (over-redaction, never a leak). True when `line` cannot end the key. C-speed probes only."""
+    return (line.isascii() and "---" not in line and "PRIV" not in line and '"' not in line
+            and "'" not in line and "`" not in line and "\\" not in line)
+
+
+def key_markers(line: str, prev: str = "") -> List[Marker]:
+    """Every key marker on `line` (one line, no separator at its end), in order, RAW
+    coordinates. `prev`: the line above, for a literal split across the two. A line longer than
+    `KEY_WINDOW` is examined in overlapping windows; the normalised and glued copies are made
+    per window, never for the whole line."""
+    if len(line) <= KEY_WINDOW:
+        return _window_markers(line, 0, prev, True)
+    out: List[Marker] = []
+    w = 0
+    while w < len(line):
+        last = w + KEY_WINDOW >= len(line)
+        chunk = line[w:w + KEY_WINDOW + KEY_OVERLAP]
+        for m in _window_markers(chunk, w, prev if w == 0 else "", last):
+            if last or m.start - w < KEY_WINDOW:
+                out.append(m)
+        w += KEY_WINDOW
+    return out
+
+
+#: a backslash escape inside a literal (`\n`, `\r`, `\t`): a SEPARATOR, never base64 (the `n` of
+#: `\n` is in the base64 alphabet, so an escape left in place would glue onto the span)
+_ESCAPE = re.compile(r"\\[nrt]")
+#: one maximal base64 span (with its padding)
+_SPAN = re.compile(r"[A-Za-z0-9+/]+={0,2}")
+#: the first span after the opening glue (any leading non-base64 characters)
+_FIRST_SPAN = re.compile(r"[^A-Za-z0-9+/]*([A-Za-z0-9+/]+={0,2})")
+#: a line holds a span long enough to be a key's head at all (one C-speed search)
+_LONG_SPAN = re.compile(r"[A-Za-z0-9+/]{%d}" % B64_TAIL_MIN)
+
+
+def b64_body(line: str) -> Optional[str]:
+    """The base64 text of a body line, or None. THE RULE (round 4, a predicate, not a list): the
+    line holds exactly ONE base64 span and nothing else but glue — any character outside the
+    base64 alphabet. A line wrapped in more code than that (an escape, a `+`, a literal
+    junction, a comment) is `b64_tail`'s on a run's first line and `run_line`'s after it."""
+    if len(line) > B64_LINE_MAX:
+        return None
+    spans = _SPAN.findall(line, 0, B64_LINE_MAX)
+    if len(spans) != 1 or _B64_BODY.fullmatch(spans[0]) is None:
+        return None
+    return spans[0]
+
+
+def _wordish(span: str) -> bool:
+    """A word, not base64: one case only, or letters only."""
+    core = span.rstrip("=")
+    return core.lower() == core or core.upper() == core or core.isalpha()
+
+
+def _opens_run(b64: str) -> bool:
+    """Does this base64 open an unmarked-run candidate (`UnmarkedRun.feed`'s own rule)?"""
+    return b64[:1] == "M" or b64.startswith("b3Bl")
+
+
+def _head_span(t: str) -> Optional[str]:
+    """The longest span of `t` that can be a key's first body line (`B64_TAIL_MIN`+ characters,
+    not a word); None when there is none."""
+    if _LONG_SPAN.search(t) is None:
+        return None
+    heads = [m.group(0) for m in _SPAN.finditer(t)
+             if len(m.group(0)) >= B64_TAIL_MIN and not _wordish(m.group(0))]
+    if not heads:
+        return None
+    return max(heads, key=len)
+
+
+def b64_tail(line: str) -> Optional[str]:
+    """A key's FIRST body line written into code, whatever wraps it — `k = (\"\"\"MII…`,
+    `let k = r#"MII…"#;`, `{"k":"MII…\\n"}`, `| a | MII… |`, `MII…", // c` — or None. THE RULE
+    (round 4): the head is the longest base64 span on the line (escapes are separators) that is
+    `B64_TAIL_MIN`+ characters and not a word; what sits around it is code, whatever it is — no
+    list of prefixes or closers. Only for a line that is not a body line itself (`b64_body`).
+
+    A body line split across string literals on this line (`k = "MII…" "…"`) is also read on the
+    JUNCTION-GLUED view; the glued head is taken when it opens an unmarked-run candidate
+    (`M…` / `b3Bl…`) and the raw one does not, or when both do and the glued one is a private-key
+    head. Linear: one C-speed search rejects almost every line; the rest take one span pass."""
+    if len(line) > B64_LINE_MAX:
+        return None
+    t = _ESCAPE.sub(" ", line) if "\\" in line else line
+    raw = _head_span(t)
+    if ('"' in t or "'" in t or "`" in t) and _JUNCTION.search(t):
+        glued = _head_span(_JUNCTION.sub("", t))
+        if glued is not None and glued != raw and _opens_run(glued) and (
+                raw is None or not _opens_run(raw) or der_private_key(glued[:RUN_CHARS])):
+            return glued
+    return raw
+
+
+def run_line(line: str, width: int, total: int,
+             orig: Optional[str] = None) -> Tuple[Optional[str], bool]:
+    """THE CONTINUATION RULE (round 4): a line inside an ESTABLISHED unmarked run (its first
+    line `width` base64 characters wide, `total` characters so far). The line's body is its
+    first maximal base64 span after the opening glue — escapes are separators, string-literal
+    junctions are glued — and whatever follows it is code, whatever it is (no list of closers).
+    Returns `(span, last)`:
+      - a span at least `width` wide continues the run (cut to `width`: a `/` or `+` glued
+        after a body line is code, `…/>`);
+      - the run's SECOND line may be shorter and still continue it — it settles the width (the
+        first may carry a glued second, `k = "…" "…"`) — unless it is a code word;
+      - otherwise a SHORTER span is the key's LAST line, and the run ends after it, when it is
+        not a code word (`_code_word`) nor only `/`/`+`, and it is padded, or the whole line, or
+        8+ characters, or starts alphanumeric and is 4+ characters or makes the run's base64 a
+        multiple of 4;
+      - anything else is `(None, False)`: the line is not the key's, and ends the run.
+    A code word (`return`, `pass`, `fooBar`, `EOF`) is never absorbed, nor a span of only `/`
+    and `+` (`// c`, `*/`), nor a short one starting `/` inside code (`</pre>`): what follows a
+    headerless key keeps its own line."""
+    if len(line) > B64_LINE_MAX or width <= 0:
+        return None, False
+    t = _ESCAPE.sub(" ", line) if "\\" in line else line
+    if ('"' in t or "'" in t or "`" in t) and _JUNCTION.search(t):
+        t = _JUNCTION.sub("", t)
+    m = _FIRST_SPAN.match(t)
+    if m is None:
+        return None, False
+    span = m.group(1)
+    if len(span) >= width:                           # a body line is exactly `width` wide: a
+        return span[:width], False                   # `/` or `+` glued after it is code (`/>`)
+    if total == width and len(span) >= 4 and not _code_word(span):
+        return span, False                           # the run's 2nd line: it SETTLES the width
+    if _code_word(span) or not span.strip("+/="):  # (the 1st may carry a glued 2nd: `"…" "…"`)
+        return None, False
+    if span.endswith("=") or (line if orig is None else orig).strip() == span:
+        return span, True                            # padded, or the whole line: base64's own
+    if len(span) >= 8:
+        return span, True
+    if span[0].isalnum() and (len(span) >= 4 or (total + len(span)) % 4 == 0 or (
+            len(span) >= 2 and not span.isdigit())):
+        return span, True                            # a `/` or `+` glued after every line
+    return None, False                               # (`…/>`) shifts the count, not the line
+
+
+#: the base64 alphabet (a `str.strip` / membership set)
+_B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+#: what the block rule keeps of a line's ends (bounded: linear per line)
+BLOCK_GLUE_MAX = 64
+
+
+def _common_prefix(a: str, b: str) -> str:
+    n = min(len(a), len(b))
+    i = 0
+    while i < n and a[i] == b[i]:
+        i += 1
+    return a[:i]
+
+
+def block_lead(prefix: str) -> str:
+    """THE BLOCK RULE (round 5): of the longest common PREFIX of a run's block of lines (2 or
+    more), the glue is the part up to its last character OUTSIDE the base64 alphabet — key text
+    never crosses such a character — plus the `/` and `+` glued right after it (`//`, `=/`,
+    `; +`). A letter or digit is never glue. A wrongly stripped key `/` costs nothing: the line's
+    own reading keeps it, and a reading that continues the run beats one that ends it
+    (`KeyWalk._cont`)."""
+    cut = max((i for i, c in enumerate(prefix) if c not in _B64_CHARS), default=-1)
+    if prefix[cut + 1:].strip("+/"):
+        return prefix[:cut + 1]
+    return prefix                                    # `//`, `=/`, `; +`: `/`/`+` glued on too
+
+
+def _skip_lead(line: str, width: int) -> Optional[str]:
+    """A continuation line's OWN lead, before the block has formed (its first line carried an
+    extra lead, `key = "…`): characters outside the alphabet, spans of only `/`/`+`, and code
+    words (`REM`, `dnl`), skipped when a span at least `width` wide follows them."""
+    for m in _SPAN.finditer(line):
+        span = m.group(0)
+        if len(span) >= width:
+            return line[m.start():]
+        if span.strip("+/=") and not _code_word(span):
+            return None
+    return None
+
+
+#: a code word: lower case (`return`, `pass`), camel or Pascal case (`fooBar`, `None`), or a
+#: short upper-case one (`EOF`, `NULL`, `TRUE`); a longer upper-case span is base64
+_CODE_WORD = re.compile(r"(?:[A-Z]?[a-z]+(?:[A-Z][a-z]+)*|[A-Z]{1,6})[0-9]*")
+
+
+def _code_word(span: str) -> bool:
+    """Could this short span be a code token rather than a key's last line?"""
+    return _CODE_WORD.fullmatch(span) is not None
+
+
+def _der_len(d: bytes, p: int) -> int:
+    """Index after the DER length at `p`; -1 if it is not a plausible length."""
+    b = d[p]
+    if b < 0x80:
+        return p + 1
+    if 0x81 <= b <= 0x84:
+        return p + 1 + (b - 0x80)
+    return -1
+
+
+def der_private_key(b64: str) -> bool:
+    """Does this base64 head decode to a PRIVATE key by STRUCTURE? PKCS#1 RSA, DSA, SEC1 EC,
+    PKCS#8 v1/v2 (RSA, EC, Ed25519 …): SEQUENCE, INTEGER 0|1, then INTEGER | SEQUENCE{OID} |
+    OCTET STRING. Encrypted PKCS#8: SEQUENCE, SEQUENCE{OID PKCS#5 / PKCS#12-PBE}. OpenSSH: its
+    magic. A certificate, SPKI or PKCS#1 public key never matches. Padding ends a blob: a run
+    of one-blob-per-line values is judged on the first blob, never refused for padding inside."""
+    b64 = b64.split("=", 1)[0]
+    b64 = b64[:len(b64) // 4 * 4]
+    try:
+        d = binascii.a2b_base64(b64)
+    except (binascii.Error, ValueError):
+        return False
+    if d.startswith(_OPENSSH_MAGIC):
+        return True
+    try:
+        if d[0] != 0x30:
+            return False
+        p = _der_len(d, 1)
+        if p < 0:
+            return False
+        if d[p] == 0x02:
+            if d[p + 1] != 1 or d[p + 2] not in (0, 1):
+                return False
+            q = p + 3
+            if d[q] in (0x02, 0x04):
+                return True
+            if d[q] == 0x30:
+                r = _der_len(d, q + 1)
+                return r > 0 and d[r] == 0x06
+            return False
+        if d[p] == 0x30:
+            q = _der_len(d, p + 1)
+            if q < 0 or d[q] != 0x06:
+                return False
+            oid = d[q + 2:q + 2 + d[q + 1]]
+            return oid.startswith(_PKCS5) or oid.startswith(_PKCS12_PBE)
+    except IndexError:
+        return False
+    return False
+
+
+class UnmarkedRun:
+    """The backstop for a key with no marker: a RUN of base64 body lines. Each line starting
+    `M` (DER SEQUENCE) or `b3Bl` (OpenSSH) opens a candidate that collects `RUN_CHARS` base64
+    characters (or what the run has when it ends) and is decoded once. O(1) per line: at most
+    `RUN_CHARS // 4` candidates are open at a time."""
+
+    def __init__(self) -> None:
+        self.cands: List[List[Any]] = []
+        self.hit = ""                                # the decoded head of the hit, once hit
+        self.n = 0
+        self.width = 0                               # the established run's first line
+        self.total = 0                               # … and its base64 characters so far
+
+    def feed(self, b64: str) -> bool:
+        """One body line's base64. True when this line made the run a key."""
+        if self.hit:
+            return False
+        if not self.cands and not _opens_run(b64) and _opens_run(b64.lstrip("+/")):
+            b64 = b64.lstrip("+/")                   # `//MII…`: a comment lead, not key text
+        if _opens_run(b64):
+            if not self.cands:                       # the run is ESTABLISHED from this line:
+                self.width, self.total = len(b64), 0  # its width, and its count from here
+            self.cands.append([self.n, ""])
+        if self.cands:
+            if self.total == self.width and len(b64) < self.width:
+                self.width = len(b64)                # the 2nd line settles the width
+            self.total += len(b64)
+        self.n += 1
+        keep = []
+        for c in self.cands:
+            c[1] += b64[:RUN_CHARS - len(c[1])]
+            if len(c[1]) >= RUN_CHARS:
+                if der_private_key(c[1]):
+                    self.hit = c[1]
+                    return True
+            else:
+                keep.append(c)
+        self.cands = keep
+        return False
+
+    def close(self) -> bool:
+        """The run ended: judge the candidates still open on what they have."""
+        if not self.hit:
+            for c in self.cands:
+                if len(c[1]) >= 16 and der_private_key(c[1]):
+                    self.hit = c[1]
+                    break
+        self.cands = []
+        return bool(self.hit)
+
+    def first_open(self) -> int:
+        return min((c[0] for c in self.cands), default=self.n)
+
+
+#: `KeyWalk.state()` for "inside a base64 run that is a key" (it ends at a non-base64 line)
+RUN_STATE = "run"
+
+
+class KeyRunTooLong(MokataError, ValueError):
+    """An END closes a base64 run longer than the walker could hold back: the run's start has
+    already been let through, so the caller must refuse rather than send the rest. HARD: every
+    line site turns it into its own refusal (`RefRefused`, `ContextRefused`, or "inside")."""
+
+
+def _body_header(line: str) -> bool:
+    """A PEM/PGP/SSH2 header line inside a key (`Proc-Type:`, `DEK-Info:`, `Comment:` …)."""
+    return line[:96].lstrip(" \t\"'`#;/*").upper().startswith(_BODY_HEADERS)
+
+
+#: a line that OPENS a value whose text starts on the next line: a YAML block scalar (`key: |`),
+#: an opening triple quote, a backtick, a bracket
+_VALUE_OPENERS = ("|", "|-", "|+", ">", ">-", ">+", '"""', "'''", "`", "(", "[", "{")
+
+
+def _opens_value(line: str) -> bool:
+    """Does `line` only open a value (see `_VALUE_OPENERS`)? A pending tolerant BEGIN reads
+    past it, as past a blank line: the key's first body line is the one after it."""
+    return line.rstrip().endswith(_VALUE_OPENERS)
+
+
+def _body_of(piece: str) -> str:
+    if piece.endswith("\r\n"):
+        return piece[:-2]
+    if piece and piece[-1] in LINE_SEPARATORS:
+        return piece[:-1]
+    return piece
+
+
+class KeyWalk:
+    """THE line-by-line key state machine, shared by every line site. `feed(body, item)` takes
+    one line (no separator) and returns `[(item, is_key), …]` for the lines now decided, in
+    order: base64 lines are held until their run is judged (at most `hold` of them; past that
+    they are let through and an END that closes them raises `KeyRunTooLong`).
+
+    States: INSIDE a marked key; a FORCED run (an unmarked-body hit, a base64 marker, a PEM
+    header: base64 lines are key until a non-base64 line or an END); a PENDING tolerant BEGIN
+    (it opens a key only if the next non-blank line is a body line or a PEM header — a dash-less
+    or cut BEGIN in prose replaces its own line and nothing else); HELD base64 lines."""
+
+    def __init__(self, inside: Any = False, hold: int = 4096) -> None:
+        self.inside = inside is True or (bool(inside) and inside != RUN_STATE)
+        self.forced = inside == RUN_STATE
+        self.pending = False
+        self.held: List[Any] = []
+        self.run = UnmarkedRun()
+        self.let_through = False
+        self.hold = hold
+        self.prev = ""
+        self._carry = ""
+        self._long = False
+        self.hdr = False                             # the forced run is in a PEM header block
+        self.fw = 0                                  # a forced run's line width (0: not known)
+        self.bp = ""                                 # the block's common prefix
+        self.bk = 0                                  # … over this many consecutive lines
+        self.last = ""                               # the line before (a run's head)
+        self.ft = 0                                  # … and its base64 characters so far
+
+    def state_inside(self) -> bool:
+        """Would the NEXT line start inside a key? (A pending tolerant BEGIN reads as inside:
+        fail closed at a window edge.)"""
+        return bool(self.state())
+
+    def state(self) -> Any:
+        """The state the NEXT line starts in, as `KeyWalk(inside=…)` takes it: True inside a
+        marked key (or a pending tolerant BEGIN — fail closed at a window edge), `RUN_STATE`
+        inside a base64 run that is a key (it ends at the first non-base64 line), else False."""
+        if self.inside or self.pending:
+            return True
+        if self.forced or self.run.hit:
+            return RUN_STATE
+        return False
+
+    def peek(self, following: Iterable[str]) -> Any:
+        """`state()`, but an undecided base64 run open at this point is judged by reading ON:
+        a window that starts in the middle of an unmarked key cannot see its head below it. Reads
+        at most until that run is decided (`RUN_CHARS` characters per candidate)."""
+        now = self.state()
+        if now or not self.run.cands:
+            return now
+        probe = copy.deepcopy(self)
+        probe.held = [None] * len(self.held)
+        for ln in following:
+            b64 = b64_body(ln)
+            if b64 is None:
+                return RUN_STATE if probe.run.close() else False
+            if probe.run.feed(b64):
+                return RUN_STATE
+            if not probe.run.cands:
+                return False
+        return RUN_STATE if probe.run.close() else False
+
+    def hot(self) -> bool:
+        """May the caller replace lines that pass `quiet_inside` without a `feed`? (Inside a
+        marked key, nothing pending.) After such lines the caller calls `ran(last_body)`."""
+        return self.inside and not self.pending and not self._carry
+
+    def ran(self, last_body: str) -> None:
+        self.prev = last_body[-_JOIN_TAIL:]
+
+    def _walk(self, ms: List[Marker]) -> None:
+        """Advance the marker state over one line's markers, in order."""
+        for i, m in enumerate(ms):
+            if m.begin is None:
+                if not self.inside:
+                    self.forced = True
+            elif self.inside:
+                if m.begin is False:
+                    self.inside = False
+            elif m.begin:
+                if m.firm:
+                    self.inside = True
+                    self.forced = False
+                elif m.clear and i == len(ms) - 1:
+                    self.pending = True
+            elif self.forced:
+                self.forced = False
+
+    def _release(self, out: List[Tuple[Any, bool]], key: bool) -> None:
+        out.extend((h, key) for h in self.held)
+        self.held = []
+
+    def _close_run(self, out: List[Tuple[Any, bool]]) -> None:
+        hit = self.run.close()
+        self._release(out, hit)
+        self.run = UnmarkedRun()
+        self.let_through = False
+
+    def feed(self, body: str, item: Any = None, eol: bool = True) -> List[Tuple[Any, bool]]:
+        out: List[Tuple[Any, bool]] = []
+        if not eol:                                  # one block of a line too long to hold
+            text = self._carry + body
+            ms = [m for m in key_markers(text, "") if m.start < len(text) - KEY_OVERLAP]
+            if ms and not (self.inside or self.forced or self.pending):
+                self._close_run(out)
+            self._walk(ms)
+            self._carry = text[-KEY_OVERLAP:]
+            self._long = self._long or bool(ms)
+            return out
+        long_line = bool(self._carry) or self._long
+        if self._carry:
+            body = self._carry + body
+            self._carry = ""
+            self._long = False
+        if not long_line and not self.pending and quiet(body, self.prev):
+            self.prev = body[-_JOIN_TAIL:]
+            if self.inside:                          # the hot path: a key's body line
+                return [(item, True)]
+            ms = []
+        else:
+            ms = key_markers(body, self.prev)
+            self.prev = body[-_JOIN_TAIL:]
+        if self.run.cands or (self.forced and self.fw):
+            lead = self._block(body)                 # in a run: its block of lines
+        else:
+            self.bk, lead = 0, ""                    # off a run: no block, no cost
+        self.last = body
+        if self.pending:
+            if not body.strip() or _opens_value(body):
+                out.append((item, True))
+                return out
+            self.pending = False
+            if b64_body(body) is not None or _body_header(body) or b64_tail(body) is not None:
+                self.inside = True
+        if self.inside:
+            out.append((item, True))
+            self._walk(ms)
+            return out
+        if self.forced:
+            if ms and any(m.begin is False for m in ms):
+                out.append((item, True))
+                self._walk(ms)
+                return out
+            if self.fw:
+                b64, last = self._cont(body, lead, self.fw, self.ft)
+                if b64 is not None and not last and self.ft == self.fw and len(b64) < self.fw:
+                    self.fw = len(b64)               # the 2nd line settles the width
+            else:                                    # opened by a marker: no width yet
+                b64, last = b64_body(body), False
+                if b64 is None:
+                    b64 = b64_tail(body)
+                if b64 is not None:
+                    self.fw = len(b64)
+            if b64 is not None:
+                self.hdr = False
+                self.ft += len(b64)
+                if last:
+                    self.forced = False
+                    self.fw = self.ft = 0
+                out.append((item, True))
+                return out
+            if _body_header(body) or (self.hdr and not body.strip()):
+                self.hdr = bool(body.strip())        # headers, then the one blank line after them
+                out.append((item, True))
+                return out
+            self.forced = False
+            self.hdr = False
+            self.fw = self.ft = 0
+        if ms or long_line:
+            first = next((m for m in ms if m.begin is not None), None)
+            if first is not None and first.begin is False and self.held:
+                if self.let_through:
+                    raise KeyRunTooLong("an END closes a base64 run longer than was held")
+                self._release(out, True)
+                self.run = UnmarkedRun()
+            else:
+                self._close_run(out)
+            out.append((item, bool(ms) or long_line and self.state_inside()))
+            self._walk([m for m in ms if not (m is first and m.begin is False)])
+            self.hdr = self.forced and any(m.begin is None and not m.firm for m in ms)
+            return out
+        b64, last = None, False
+        if self.run.cands:                           # an established run: the continuation rule
+            b64, last = self._cont(body, lead, self.run.width, self.run.total)
+            if b64 is None:
+                self._close_run(out)                 # not the key's: the run ends before it
+        if b64 is None:
+            b64 = b64_body(body)
+            if b64 is not None and body.strip() != b64:
+                self._close_run(out)                 # wrapped in code: it can only START a run
+            elif b64 is None:
+                b64 = b64_tail(body)                 # a key's head wrapped in code: it, too,
+                if b64 is not None:                  # can only START a run
+                    self._close_run(out)
+                elif _escaped_key(body):             # a key escaped onto one line: this line
+                    self._close_run(out)
+                    out.append((item, True))
+                    return out
+        if b64 is not None:
+            self.held.append(item)
+            if self.run.feed(b64):
+                self._release(out, True)
+                self.forced = not last
+                self.fw, self.ft = (self.run.width, self.run.total) if not last else (0, 0)
+                self.run = UnmarkedRun()
+                self.let_through = False
+                return out
+            if last:                                 # the key's last line: judge the run now
+                self._close_run(out)
+                return out
+            if len(self.held) > self.hold:
+                keep = self.run.first_open() - (self.run.n - len(self.held))
+                keep = max(0, min(keep, len(self.held)))
+                out.extend((h, False) for h in self.held[:keep])
+                self.held = self.held[keep:]
+                self.let_through = True
+            return out
+        self._close_run(out)
+        out.append((item, False))
+        return out
+
+    def _block(self, body: str) -> str:
+        """Fold `body` into the block of consecutive lines of the run (their common prefix, at
+        most `BLOCK_GLUE_MAX`) and return the glue lead the block now trusts for this line. The
+        block starts at the run's head (the line before its first continuation); a line sharing
+        no prefix with the block (a blank one too) starts a new block. The TRAILING side needs no
+        block: `run_line` reads a line's first span, so whatever follows it is already glue."""
+        if not self.bk:                              # the run's head opens the block
+            self.bp, self.bk = self.last[:BLOCK_GLUE_MAX], 1
+        if self.bk:
+            p = _common_prefix(self.bp, body)
+            if p:
+                self.bp, self.bk = p, self.bk + 1
+                return block_lead(p)
+        self.bp, self.bk = body[:BLOCK_GLUE_MAX], 1
+        return ""
+
+    @staticmethod
+    def _cont(body: str, lead: str, width: int, total: int) -> Tuple[Optional[str], bool]:
+        """A continuation line, read in order: with the block's lead stripped; with only the
+        lead's part before its glued `/`/`+` stripped; as it is (`run_line`); then with its own
+        lead skipped (`_skip_lead`: a first line that carried an extra lead, `key = "// …`). A
+        reading that CONTINUES the run beats one that ENDS it — a `/` the lead took from key
+        text leaves the line one short — and otherwise the first reading that ends it wins. The
+        whole-line test always judges `body` itself (round 5)."""
+        reads = [body]
+        if lead and body.startswith(lead):
+            core = lead.rstrip("+/")
+            reads = [body[len(lead):]] + ([body[len(core):]] if core else []) + reads
+        ends = None
+        for t in reads:
+            got, glast = run_line(t, width, total, body)
+            if got is not None and not glast:
+                return got, glast                    # it continues the run
+            if got is not None and ends is None:
+                ends = (got, glast)
+        if ends is not None:
+            return ends
+        rest = _skip_lead(body, width)
+        if rest is not None:
+            got, glast = run_line(rest, width, total, body)
+            if got is not None:                      # a full-width span: it continues the run
+                return got, glast
+        return None, False
+
+    def finish(self) -> List[Tuple[Any, bool]]:
+        out: List[Tuple[Any, bool]] = []
+        self._close_run(out)
+        return out
+
+
+_U_ESC = re.compile(r"\\u([0-9a-fA-F]{4})")
+
+
+def _unescaped(line: str) -> Optional[str]:
+    """`line` with its `\\n`/`\\r\\n` escapes made real breaks and `\\uXXXX` decoded, when it
+    has any: a key JSON-encoded onto one line (a session bundle value, a service-account file)
+    is judged as the lines it encodes. None when there is nothing to expand."""
+    if "\\n" not in line and "\\u" not in line:
+        return None
+    out = line.replace("\\r\\n", "\n").replace("\\n", "\n")
+    if "\\u" in out:
+        out = _U_ESC.sub(lambda m: chr(int(m.group(1), 16)), out)
+    # (`"private_key": "MII…\n…"` puts the key's first body line after `: "` on the same
+    # line: `b64_tail` reads it there, as on any code line)
+    return out
+
+
+def _escaped_key(line: str) -> List[Finding]:
+    """The key findings inside a one-line ESCAPED text (see `_unescaped`), one level deep."""
+    sub = _unescaped(line)
+    if sub is None or "\n" not in sub and sub == line:
+        return []
+    return _scan_key_material(sub, escaped=False)
+
+
+def _scan_key_material(text: str, escaped: bool = True) -> List[Finding]:
+    """The signature layer's private-key findings over WHOLE text: one per marker (firm or
+    tolerant), and one tolerant finding per unmarked base64 run that is a key."""
+    out: List[Finding] = []
+    prev = ""
+    run = UnmarkedRun()
+    start = 0
+    lines = text.splitlines() or [text]
+
+    def judge(run: UnmarkedRun, start: int, closing: bool) -> None:
+        if (run.hit or (closing and run.close())):
+            out.append(Finding("signature", KEY_TOLERANT,
+                               "an unmarked private-key body (base64 run)", start,
+                               token=run.hit))
+    for i, line in enumerate(lines, start=1):
+        ms = key_markers(line, prev)
+        prev = line[-_JOIN_TAIL:]
+        b64 = None if ms else b64_body(line)
+        if b64 is None and not ms:
+            b64 = b64_tail(line)                     # a key's head behind a code prefix: it
+        if b64 is not None and line.strip() != b64:  # (any line wrapped in code) can only
+            if run.n:                                # START a run
+                if not run.hit:
+                    judge(run, start, True)
+                run = UnmarkedRun()
+        if b64 is not None:
+            if run.n == 0:
+                start = i
+            if not run.hit and run.feed(b64):
+                judge(run, start, False)
+            continue
+        if run.n:
+            if not run.hit:
+                judge(run, start, True)
+            run = UnmarkedRun()
+        if not ms and escaped:
+            for f in _escaped_key(line):
+                out.append(Finding(f.layer, f.kind, f.detail + " (escaped on one line)", i,
+                                   token=f.token or (line.strip() if f.kind == KEY_TOLERANT
+                                                     else "")))
+            continue
+        for m in ms:
+            if m.firm:
+                out.append(Finding("signature", KEY_FIRM, "matched known pattern", i))
+            else:
+                out.append(Finding("signature", KEY_TOLERANT,
+                                   "a damaged private-key marker", i, token=line.strip()))
+    if run.n and not run.hit:
+        judge(run, start, True)
+    return out
+
+
 def _shannon(s: str) -> float:
     if not s:
         return 0.0
@@ -366,7 +1385,7 @@ def _scan_signatures(text: str) -> List[Finding]:
         for kind, rx in _SIGNATURES:
             if rx.search(line):
                 out.append(Finding("signature", kind, "matched known pattern", i))
-    return out
+    return out + _scan_key_material(text)
 
 
 def _segments(tok: str) -> List[str]:
@@ -653,14 +1672,18 @@ def scan(text: str = "", path: Optional[str] = None,
     repo has RECORDED as false positives. Three properties make that safe, and all three live
     here rather than in the store:
 
-      * ONLY `is_ignorable` findings are eligible — the entropy backstop's guess, and nothing
-        else. `_scan_signatures` and the known-shape FLOOR (which also reports on layer
+      * ONLY `is_ignorable` findings are eligible — the entropy backstop's guess and the
+        TOLERANT key marker (`key-marker-tolerant`: a damaged-looking marker or an unmarked key
+        body, 0.0.28 E-Q5), and nothing else. A FIRM key finding (`private-key`), the rest of
+        `_scan_signatures` and the known-shape FLOOR (which also reports on layer
         `entropy`, as `known-secret-shape`) are filtered before this and never consulted
         against the store. A forged store cannot reach them.
       * The suppression is keyed to hash(token) + `path`, so it is this exact string in this
         one file. `path=None` matches nothing.
       * Egress is computed AFTER suppression, not before: an ignored guess is not a secret and
-        must not manufacture an egress block, while a real finding still must.
+        must not manufacture an egress block, while a real finding still must. A tolerant key
+        finding is the exception: on a send (`for_send=True`) it is NEVER suppressed — a record
+        lets a write through a gate, never a key out of the machine.
 
     `ignores=None` (every pre-0.0.16 caller) is byte-identical to before."""
     findings: List[Finding] = []
@@ -671,8 +1694,11 @@ def scan(text: str = "", path: Optional[str] = None,
         findings += _scan_path(path)
     if ignores is not None:
         from .secret_ignore import is_ignorable
+        # E-Q5: a TOLERANT key finding is recordable at the gate and the hook, but egress is
+        # fatal for both tiers — on a send it is never suppressed.
         findings = [f for f in findings
-                    if not (is_ignorable(f) and ignores.is_ignored(f.token, path))]
+                    if not (is_ignorable(f) and not (for_send and f.kind == KEY_TOLERANT)
+                            and ignores.is_ignored(f.token, path))]
     if for_send and any(f.layer in ("signature", "entropy") for f in findings):
         findings.append(Finding("egress", "secret-egress-blocked",
                                 "secret content must not leave the machine"))

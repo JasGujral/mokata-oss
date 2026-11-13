@@ -38,6 +38,10 @@ def j(*parts):
     return "".join(parts)
 
 
+#: the marker keyword from its code points, so no line here is itself a key marker (0.0.28 E1)
+_BEGIN = "".join(map(chr, (66, 69, 71, 73, 78)))
+
+
 # Each value is built from fragments so no source line is itself a blockable literal.
 TRUE_POSITIVES = {
     "aws-access-key":   j("AKIA", "IOSFODNN7", "EXAMPLE"),
@@ -58,8 +62,8 @@ TRUE_POSITIVES = {
                           "sigABC123x", "yzDEF"),
     "npm":              j("npm_", "abcdefghij", "klmnopqrst", "uvwxyz0123", "ABCDEF"),
     "pypi":             j("pypi-", "AgEIcHlwaS", "5vcmc6abcd", "efghij"),
-    "private-key-pem":  j("-----BEGIN ", "RSA PRIVATE ", "KEY-----"),
-    "openssh-key-pem":  j("-----BEGIN ", "OPENSSH PRIVATE ", "KEY-----"),
+    "private-key-pem":  j("-----", _BEGIN, " RSA PRIVATE KEY-----"),
+    "openssh-key-pem":  j("-----", _BEGIN, " OPENSSH PRIVATE KEY-----"),
     "postgres-dsn":     j("postgres", "ql://user:", "p4ssw0rd@", "host:5432/db"),
     "secret-assign":    "api_key = \"" + j("Xy9KqWmZ3b", "PnL7vTsRdG") + "\"",
 }

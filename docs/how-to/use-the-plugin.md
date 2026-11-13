@@ -210,8 +210,8 @@ can call these too (see [Integrate with other AI tools](integrate-other-ai-tools
 5. `/mokata:ship` to finish — mokata verifies it's *truly* green (tests + ACs + review) and
    lets **you** choose how to land it (merge / PR / keep / discard). It never merges, opens a
    PR, or deletes on its own — only on your explicit confirmation. Work in a session worktree
-   lands through the gated merge: `mokata worktree test <worktree>` runs the full suite there,
-   then `mokata worktree merge <worktree>` shows the evidence and proposes the merge for you to
+   lands through the gated merge: `mokata worktree test <worktree>` runs the full suite and then
+   the spec legs (spec-awareness, spec-drift) there (Ctrl-C stops it with nothing recorded), then `mokata worktree merge <worktree>` shows the evidence and proposes the merge for you to
    approve (`mokata approve <id>`).
 6. Memory captures the decisions (human-gated); next session inherits them.
 

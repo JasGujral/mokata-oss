@@ -227,7 +227,13 @@ def cmd_ci_check(args: argparse.Namespace) -> int:
                     print(f"warning: could not write comment file: {exc}", file=sys.stderr)
             return REFUSED_EXIT
     symbols = _split_csv(args.symbols) if args.symbols else None
-    result = CI.run_ci_check(args.path, files, changed_symbols=symbols)
+    from ..knowledge.cancel import Cancelled
+    try:
+        with CI.cancel_on_sigint():          # 0.0.28 F: Ctrl-C ends the check with no verdict
+            result = CI.run_ci_check(args.path, files, changed_symbols=symbols)
+    except Cancelled:
+        print(f"mokata ci-check: {CI.CANCELLED_TEXT}")
+        return CI.CANCELLED_EXIT
     print(result.render(ascii_only=args.ascii))
     # G3-EVIDENCE — links point at this repo on GitHub at the checked-out SHA, and only when the
     # base is https (from --link-base, else GITHUB_SERVER_URL + GITHUB_REPOSITORY).

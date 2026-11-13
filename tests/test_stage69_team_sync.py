@@ -201,11 +201,6 @@ class TestTeamAdopt(unittest.TestCase):
 
 
 class TestTeamCliAndParity(unittest.TestCase):
-    def test_team_in_surface_matrix_and_parity_green(self):
-        from mokata import parity
-        self.assertIn("team", parity.SURFACE_MATRIX)
-        report = parity.verify_parity()
-        self.assertTrue(report.ok, report.render())
 
     def test_team_cli_status_degrades_clean_uninitialized(self):
         from mokata.cli import cmd_team

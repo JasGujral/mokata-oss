@@ -158,7 +158,8 @@ a PR, keep the branch, or discard. mokata may prepare a commit/branch or a PR de
 runs a git action **only on your explicit confirmation**; it never merges, PRs, or deletes on
 its own, and the finish decision is recorded in the audit ledger. A run bound to a session worktree
 lands through the **gated merge** (`mokata worktree test <worktree>`, then `mokata worktree merge
-<worktree>`): evidence at the branch's head, then your approval of exactly that merge.
+<worktree>`): evidence at the branch's head (the suite, the acceptance criteria, the spec legs and
+the review), then your approval of exactly that merge.
 
 ## Progress & visibility — one model, many channels
 
@@ -226,20 +227,28 @@ above. Degrade-clean: no active run → an empty summary and no items.
 ### Proactive resume surfacing (SessionStart)
 
 You never lose your place when you step away. When you reopen a repo, mokata's **SessionStart
-briefing** (the sub-2k-token context injection) leads off with **one line** (max two) when
-there's something to pick up:
+briefing** (the sub-2k-token context injection) says what your run owes next, in **one line**:
 
 ```text
-▸ Resume: pipeline at 'strawman' (last passed 'analysis') — run `mokata resume`
-▸ Resume: in-progress brainstorm 'auth-refactor' — run `/brainstorm` (or `mokata brainstorm`)
+Next step for run r-42: 2 test(s) failing at the last run 3 min ago: test_totals — `/develop` (derived 4 min ago)
 ```
 
-It's **derived read-only** from the same run-state — `progress.list_sessions` (the active,
-incomplete run with a passed gate) plus `brainstorm.restore_brainstorm_progress` (a
-mid-stream, not-yet-approved exploration). When there's nothing to resume the line is simply
-**absent** — no noise. It costs no extra reads (no stat/counter bumps), is deterministic, and
-**degrades clean** (no sessions, no brainstorm, or a corrupt checkpoint → no line, never an
-error). It stays within the briefing's token budget and never displaces the always-on rules.
+It is the **same derivation** as `mokata suggest` (and the MCP `suggest` tool, bare `mokata` and the
+IDE's next-step card): the line's command is the one `mokata suggest` gives for that run. The one
+difference is by design: a gate block raised in the session you are in says "clear the block" in
+that session, while `mokata suggest` from a terminal (no session) reads the same block as one in a
+session that ended and says `mokata resume`.
+When the next step cannot be known (a record it needs is unreadable) the line says so and points at
+`mokata doctor` — it is never silence. It is absent only when nothing is owed: no run, a finished
+run, or a repo that is not set up yet (the briefing offers setup instead).
+
+Every session start gets the line, including a brand-new session. A background refresher stores the
+last answer, keyed on exactly the files it was derived from (never on which session asked). When
+nothing the starting session would read has changed, and no time boundary the answer depends on
+(the 15-minute liveness window, the review's age limit) has passed, the briefing prints the stored
+answer with its age, as in the example above. Otherwise the briefing derives it on the spot, which
+fits inside the session-start time budget. There is no "check back later" line. The line stays
+within the briefing's token budget and never displaces the always-on rules.
 
 ### Flow legibility — verdicts, the next step, and counters (Stage 54c)
 

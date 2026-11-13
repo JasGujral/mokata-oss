@@ -10,7 +10,8 @@
 //                  strategy and edit the message; the page PROPOSES, you approve in your terminal
 //                  (`mokata approve <id>`), then "Merge now" runs it as a job (progress, Cancel
 //                  until the commit point). The worktree is kept — delete it separately.
-//   * Run suite  — mokata's full-suite runner in that worktree: the merge's test evidence.
+//   * Run suite  — mokata's full-suite runner in that worktree, then the spec legs: the merge's
+//                  test and spec evidence (an absent leg shows as ⚠ NOT CHECKED, never ✓).
 //   * Recover    — an interrupted merge (listed above the table) is finished or reported from git.
 //   * Delete     — gated the same way; a worktree with work is refused unless you tick "discard".
 //   * Clean merged — gated bulk removal of merged, clean, unlocked worktrees.
@@ -137,7 +138,7 @@
       if ((w.behind || 0) > 0)
         acts.append(button("Sync", "Rebase onto " + (data.into || "the main branch") + " (" + w.behind +
           " new commit(s) there) — you approve it; then re-run its tests", () => act("sync", { path: w.path }, w)));
-      acts.append(button("Run suite", "Run the full test command in this worktree — the merge's test evidence", () => runSuite(w)));
+      acts.append(button("Run suite", "Run the full test command and the spec legs in this worktree — the merge's evidence", () => runSuite(w)));
       acts.append(button("Merge…", "Plan the gated merge into " + (data.into || "the main branch") + " — evidence first, then you approve it", () => planMerge(w)));
       acts.append(button("Delete", "Delete this worktree — you approve it", () => del(w)));
       const p = pending[w.path + "|sync"] || pending[w.path + "|delete"];
@@ -239,6 +240,7 @@
     for (const e of card.evidence || []) ev.append(el("li", "wt-ok", "✓ " + e));
     for (const b of plan.blocked || []) ev.append(el("li", "wt-blocked", `✗ [${b.code}] ${b.text}`));
     if (card.override) ev.append(el("li", "wt-warn", "⚠ override: " + card.override));
+    for (const u of card.unchecked || []) ev.append(el("li", "wt-warn", "⚠ " + u));
     box.append(ev);
     const ctl = el("div", "wt-merge-ctl");
     const sel = el("select", "wt-strategy");

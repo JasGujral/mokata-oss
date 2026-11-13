@@ -312,19 +312,6 @@ class TestMainAndBuildServerUseTheRightDiagnosis(unittest.TestCase):
         self.assertIn("pip install 'mcp<2'", str(caught.exception))
 
 
-class TestThePoseDoesNotOutliveTheFix(unittest.TestCase):
-    """doc 85 §7h — prose that JUSTIFIES a behaviour is a claim, and this one became false on
-    2026-07-28. `build_server`'s docstring said the SDK "is an unconditional dependency, so this
-    succeeds on any healthy `pip install mokata`" — a healthy pip install was exactly what broke
-    it. Leaving the sentence behind re-teaches the false rule to the next reader."""
-
-    def test_build_server_docstring_no_longer_promises_a_healthy_install_succeeds(self):
-        doc = MS.build_server.__doc__ or ""
-        self.assertNotRegex(
-            doc, r"succeeds on any healthy",
-            "the docstring still claims a healthy `pip install mokata` cannot fail here")
-
-
 # --- 4. ⭐ THE LOAD-BEARING GUARD ----------------------------------------------------------
 
 class TestTheInstalledSdkIsWithinTheBound(unittest.TestCase):

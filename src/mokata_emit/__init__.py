@@ -11,7 +11,8 @@ in `re`/`enum`/`functools`) and NOTHING from `mokata`:
 
   * `dirty-track`, `stop`, `session-end`, `pre-compact` are SPOOLED: the payload, argv, cwd, the
     `CLAUDE_*`/`MOKATA_*` environment and — for `dirty-track` — the written file's bytes AS THEY ARE
-    AT HOOK TIME are written to one owner-only file in the per-user spool, and a detached DRAINER is
+    AT HOOK TIME are written to one file in the per-user spool (0600 in a 0700 directory on POSIX; the
+    profile's ACL on Windows — the spool is not in mokata's private set, 0.0.28 C1), and a detached DRAINER is
     started to do the work. The hook exits 0. Doc 109's "append to the event log and exit 0".
   * `run-bind` stays SYNCHRONOUS: it writes the session→run binding the phase gate reads on the very
     next tool call, so deferring it would be a correctness change, not a latency trade. Its common
@@ -543,15 +544,15 @@ def _publish(spool: str, tmp: str, ns: int) -> str:
 
 
 def spool_entry(spool: str, argv: list, raw: bytes, observed: dict = None) -> str:
-    """Write ONE entry, owner-only (0600 in a 0700 directory), and publish it under its arrival
-    name; return its path. Raises OSError (the caller then runs the hook inline).
+    """Write ONE entry (0600 in a 0700 directory on POSIX; the profile's ACL on Windows), and publish
+    it under its arrival name; return its path. Raises OSError (the caller then runs the hook inline).
 
     Format: `MKS2 \0 cwd \0 argc \0 argv… \0 envc \0 K=V… \0 obsc \0 (path \0 state \0 size
     \0 t \0 len \0)…` then the observed files' bytes back to back, then the raw hook payload."""
     ns = time.time_ns()
     os.makedirs(spool, mode=0o700, exist_ok=True)
     if os.name != "nt" and os.stat(spool).st_mode & 0o077:
-        os.chmod(spool, 0o700)               # owner-only, even if something else created it
+        os.chmod(spool, 0o700)               # 0700 even if something else created it (POSIX)
     env = [f"{k}={v}" for k, v in os.environ.items()
            if k.startswith(ENV_PREFIXES) and k != SPOOL_ENV]
     obs = list((observed or {}).items())

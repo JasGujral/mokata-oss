@@ -48,11 +48,24 @@
     },
     {
       "path": "/api/jobs/{id}/leave", "method": "POST", "kind": "action",
-      "params": {"path": {"id": "the job"}, "body": {"client": "the page's id (this page no longer wants it)"}},
+      "params": {"path": {"id": "the job"}, "body": {"client": "the page's id", "token": "the request's token (X-Mokata-Request): that one request no longer wants it"}},
       "responses": {
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}},
         "404": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
       },
-      "probes": [{"path": {"id": "nope"}, "body": {"client": "c"}, "status": 404}]
+      "probes": [{"path": {"id": "nope"}, "body": {"client": "c", "token": "t"}, "status": 404},
+                 {"path": {"id": "tree-walk-3c6f8ca7-1"}, "body": {"client": "c"}, "status": 400}]
+    },
+    {
+      "path": "/api/jobs/leave", "method": "POST", "kind": "action",
+      "params": {"body": {"client": "the page's id", "token": "the request's token (X-Mokata-Request): a request superseded before its page learned its job — it leaves every job it is in, and a job it starts later never takes its want"}},
+      "responses": {
+        "200": {"media": "json", "schema": {"type": "object", "required": ["left"],
+          "properties": {"left": {"type": "boolean"}}}},
+        "400": {"media": "json", "schema": {"$ref": "#/schemas/Error"}}
+      },
+      "probes": [{"body": {"client": "c", "token": "t"}, "status": 200},
+                 {"body": {"client": "c"}, "status": 400}]
     }
   ]
 }

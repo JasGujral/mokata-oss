@@ -77,9 +77,13 @@ NOT_MERGED, LOCK_HELD, CONTENT_CHANGED = "not-merged", "lock-held", "content-cha
 HIDDEN, CASE, UNPORTABLE, SUBMODULE = ("hidden-local-change", "case-collision", "unportable-path",
                                        "submodule-change")
 UNSUPPORTED_INDEX = "unsupported-index"
+#: 0.0.28 F — the spec legs (spec-awareness, spec-drift) as merge evidence (`merge_spec`).
+SPEC_BLOCKED, SPEC_DEGRADED = "spec-leg-blocked", "spec-leg-degraded"
+SPEC_NOT_RUN, SPEC_STALE = "spec-leg-not-run", "spec-leg-stale"
 #: A blocker whose code IS the outcome state (named, not a generic "blocked").
 NAMED = frozenset({NEEDS_FILTER, NEEDS_DRIVER, NO_IDENTITY, GIT_TOO_OLD, HIDDEN, CASE, UNPORTABLE,
-                   SUBMODULE, UNSUPPORTED_INDEX, EXEC_CHANGED})
+                   SUBMODULE, UNSUPPORTED_INDEX, EXEC_CHANGED, SPEC_BLOCKED, SPEC_DEGRADED,
+                   SPEC_NOT_RUN, SPEC_STALE})
 
 _SAFE_BRANCH = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./-]{0,200}$")
 _SHA = re.compile(r"^[0-9a-f]{40}([0-9a-f]{24})?$")
@@ -131,6 +135,8 @@ class MergePlan:
                  "git commands there wait"]
         for e in c.get("evidence") or []:
             lines.append(f"evidence  : {e}")
+        for u in c.get("unchecked") or []:
+            lines.append(f"unchecked : {u}")
         if c.get("override"):
             lines.append(f"override  : merging WITHOUT run evidence — {c['override']}")
         if self.args.get("message") is not None:
@@ -324,13 +330,16 @@ def read_override(main: str, common: str, worktree: str, head: str) -> Optional[
     return data
 
 
-def evidence(main: str, run_id: str, worktree: str, head: str, base: str
+def evidence(main: str, run_id: str, worktree: str, head: str, base: str,
+             changes: List[Tuple[str, str, str, str]]
              ) -> Tuple[List[Dict[str, str]], Dict[str, Any], List[str]]:
-    """(blockers, fingerprint, card lines) for P2–P4 of `run_id` at this worktree and head."""
+    """(blockers, fingerprint, card lines) for P2–P4 of `run_id` at this worktree and head (and
+    P3b, the spec legs over `changes`; its NOT CHECKED lines are `fingerprint["spec_unchecked"]`
+    and the card's `unchecked`)."""
     from .config import Surface
     from .run_resolver import SPEC_PREFIX
     from .tdd_state import TDD_STATE_PREFIX, from_state
-    from .test_runs import key as test_key, mapped_tests, _map
+    from .test_runs import PASSED, key as test_key, mapped_tests, suite_verdict, _map
     store = _store(main)
     out: List[Dict[str, str]] = []
     lines: List[str] = []
@@ -384,8 +393,15 @@ def evidence(main: str, run_id: str, worktree: str, head: str, base: str
         elif not (tree.get("clean_before") is True and tree.get("clean_after") is True):
             out.append(_block("suite-dirty", "the worktree had uncommitted changes during the last "
                               "run — what ran is not the commit being merged", cite))
-        elif not suite.get("passed") or suite.get("exit_code") not in (0,):
-            out.append(_block("suite-failed", "the last full test run FAILED", cite))
+        elif suite_verdict(suite)[0] != PASSED or suite.get("exit_code") not in (0,):
+            v, said = suite_verdict(suite)
+            # each verdict its own block and its own words (0.0.28 D): a cancelled or partial run
+            # is never told as "FAILED", and a pre-verdict record is refused with what to do
+            out.append(_block({"passed": "suite-failed", "failed": "suite-failed",
+                               "cancelled": "suite-cancelled",
+                               "not-all-ran": "suite-not-all-ran"}.get(v, "unknown-evidence"),
+                              said if v != PASSED else
+                              f"the last full test run exited {suite.get('exit_code')!r}", cite))
         else:
             lines.append(f"tests green at {head[:12]}: `{suite.get('command')}` "
                          f"({cite}, by {suite.get('actor') or '?'})")
@@ -412,6 +428,8 @@ def evidence(main: str, run_id: str, worktree: str, head: str, base: str
         out.append(_block("ac-unproven", "no mapped test PASSED for " + ", ".join(unproven[:10])))
     if acs and not unmapped and not unproven:
         lines.append(f"{len(acs)} acceptance criteria, each with a passing test")
+    # P3b — the spec legs (0.0.28 F): one record, read three-state, judged here
+    out += _spec_leg(main, store, run_id, worktree, head, base, changes, fp, lines)
     # P4 — review
     try:
         from .progress_events import latest_review_verdict_event, ship_review_gate
@@ -447,6 +465,94 @@ def evidence(main: str, run_id: str, worktree: str, head: str, base: str
                          + ("" if gate.independent else " (inline two-pass, not an independent "
                                                         "reviewer)"))
     return out, fp, lines
+
+
+def _spec_leg(main: str, store: Any, run_id: str, worktree: str, head: str, base: str,
+              changes: List[Tuple[str, str, str, str]], fp: Dict[str, Any],
+              lines: List[str]) -> List[Dict[str, str]]:
+    """P3b — the spec legs' record (`merge_spec`), valid only for this worktree at `head` against
+    `base`, clean before and after, over this change and this spec corpus, inside the freshness
+    bound. `pass` is a card line; `absent` is NOT CHECKED (allowed, ruling F-Q1, and bound into the
+    approval through `fp`); `block`, `degraded`, no record, unreadable and stale each block."""
+    from . import merge_spec as MSL
+    fp["spec_unchecked"] = []
+    redo = (f"re-run the spec legs at {head[:12]}: `mokata worktree test {worktree}` (or Run suite "
+            f"in the IDE)")
+    st, rec = read3(store, MSL.key(run_id))
+    if st == "unreadable":
+        return [_block("unknown-evidence", "the spec legs' record could not be read — the "
+                       "evidence is UNKNOWN, which never passes (`mokata doctor`)", "spec leg")]
+    if st == "absent":
+        return [_block(SPEC_NOT_RUN, "the spec legs (spec-awareness, spec-drift) have not run on "
+                       f"this change — {redo}")]
+    legs = rec.get("legs")
+    rows = {x.get("name"): x for x in legs if isinstance(x, dict)} if isinstance(legs, list) else {}
+    if any(not isinstance(rows.get(n), dict)
+           or rows[n].get("status") not in ("pass", "block", "absent")
+           or not isinstance(rows[n].get("degraded"), bool) for n in MSL.LEGS):
+        return [_block("unknown-evidence", "the spec legs' record does not say how each leg "
+                       "ended — the evidence is UNKNOWN, which never passes (`mokata doctor`)",
+                       "spec leg")]
+    at = rec.get("at") if isinstance(rec.get("at"), (int, float)) else 0.0
+    cite = f"spec legs at {time.strftime('%Y-%m-%d %H:%M', time.localtime(at))}"
+    max_age = _review_max_age(main)
+    stale = ""
+    if not _same(str(rec.get("worktree") or ""), worktree):
+        stale = f"they ran in another worktree ({rec.get('worktree')}), not this one"
+    elif rec.get("head_before") != rec.get("head") or rec.get("base_after") != rec.get("base"):
+        stale = "the branch or the base moved WHILE they ran — what was checked is not one commit"
+    elif rec.get("head") != head:
+        stale = f"they ran at {str(rec.get('head'))[:12]}, not at {head[:12]}"
+    elif rec.get("base") != base:
+        stale = f"they ran against base {str(rec.get('base'))[:12]}, the base is now {base[:12]}"
+    elif not (rec.get("clean_before") is True and rec.get("clean_after") is True):
+        stale = "the worktree had uncommitted changes while they ran"
+    elif rec.get("files_sha") != MSL.files_digest(changes):
+        stale = "they checked a different change than the one being merged"
+    elif rec.get("corpus_fp") != MSL.corpus_fp(main):
+        stale = "the saved spec corpus changed since they ran"
+    elif max_age > 0 and (time.time() - at) / 3600.0 > max_age:
+        stale = (f"they ran more than {max_age:g} h ago — decisions recorded since are not in "
+                 "them")
+    if stale:
+        return [_block(SPEC_STALE, f"the spec legs are stale: {stale} — {redo}", cite)]
+    fp["spec_leg_at"] = at
+    fp["spec_leg"] = _sha({n: rows[n] for n in MSL.LEGS})
+    out: List[Dict[str, str]] = []
+    for n in MSL.LEGS:
+        leg = rows[n]
+        summary = str(leg.get("summary") or "")
+        if leg["degraded"]:
+            out.append(_block(SPEC_DEGRADED, f"{n} ran on an INCOMPLETE read ({summary}) — it "
+                              "compared the change with what it could read, not with the corpus; "
+                              "`mokata doctor`, then re-run the spec legs", cite))
+        elif leg["status"] == "block":
+            out.append(_block(SPEC_BLOCKED, f"{n} blocks: {summary} — "
+                              f"{leg.get('unblock') or 'see `mokata ci-check`'}", cite))
+        elif leg["status"] == "absent":
+            fp["spec_unchecked"].append(n)
+        else:
+            lines.append(f"{n} passed at {head[:12]}: {summary} ({cite})")
+    return out
+
+
+def _review_max_age(main: str) -> float:
+    from .config import ConfigError, Surface
+    from .manifest import ManifestError
+    from .progress_events import REVIEW_VERDICT_MAX_AGE_HOURS, review_verdict_max_age_hours
+    try:
+        return review_verdict_max_age_hours(Surface.load(main))
+    except (ConfigError, ManifestError, OSError):
+        return REVIEW_VERDICT_MAX_AGE_HOURS   # an unloadable surface keeps the bound ON
+
+
+def _unchecked_lines(main: str, run_id: str, names: List[str]) -> List[str]:
+    """The card's NOT CHECKED lines: each absent leg with what it said (it looked at nothing)."""
+    from . import merge_spec as MSL
+    _st, rec = read3(_store(main), MSL.key(run_id))
+    said = {x.get("name"): str(x.get("summary") or "") for x in (rec or {}).get("legs") or []
+            if isinstance(x, dict)}
+    return [f"NOT CHECKED: {n} ({said.get(n) or 'nothing to check'})" for n in names]
 
 
 # ================================================================================ the plan
@@ -522,11 +628,14 @@ def _unportable(path: str, main: str, longpaths: bool) -> str:
 
 #: What a merge WITHOUT run evidence (the override path) has not shown, named in its message.
 OVERRIDE_UNMET = ("no mokata run is bound to this branch", "no full-suite run by mokata's runner",
-                  "no acceptance criterion proven by a passing test", "no review at this head")
+                  "no acceptance criterion proven by a passing test", "no review at this head",
+                  "no spec-awareness or spec-drift leg at this head")
+#: The override path's card line for the spec legs: never run, so never passed.
+OVERRIDE_UNCHECKED = "NOT CHECKED: spec-awareness, spec-drift (override: no run is bound)"
 
 
 def _evidence_line(head: str, run_id: Optional[str], blocked: List[Dict[str, str]],
-                   override: Optional[Dict[str, Any]]) -> str:
+                   override: Optional[Dict[str, Any]], unchecked: List[str]) -> str:
     """The message's evidence line, built from the evidence ACTUALLY present at `head` — never a
     claim the plan did not verify. A clean plan says what was verified; an override says it is one
     and names each unmet item; a blocked plan names each blocker (it cannot be proposed as is)."""
@@ -538,11 +647,14 @@ def _evidence_line(head: str, run_id: Optional[str], blocked: List[Dict[str, str
         return (f"Gated merge by mokata {at}: merged under override "
                 f"{override.get('id')} by {override.get('actor')}: {override.get('reason')}. "
                 f"Unmet: " + "; ".join(OVERRIDE_UNMET) + ".")
-    return f"Gated merge by mokata: tests green and review passed {at}."
+    spec = ("Spec legs: NOT CHECKED: " + ", ".join(unchecked) + " (nothing to check)."
+            if unchecked else "Spec legs (spec-awareness, spec-drift): passed.")
+    return f"Gated merge by mokata: tests green and review passed {at}.\n{spec}"
 
 
 def _draft_message(main: str, run_id: Optional[str], branch: str, head: str,
-                   blocked: List[Dict[str, str]], override: Optional[Dict[str, Any]]) -> str:
+                   blocked: List[Dict[str, str]], override: Optional[Dict[str, Any]],
+                   unchecked: List[str]) -> str:
     title, acs = "", []
     if run_id:
         from .run_resolver import SPEC_PREFIX
@@ -555,7 +667,7 @@ def _draft_message(main: str, run_id: Optional[str], branch: str, head: str,
     if acs:
         lines += ["", "Acceptance criteria:"]
         lines += [f"- {c.get('id')}: {str(c.get('text') or '')[:160]}" for c in acs[:30]]
-    lines += ["", _evidence_line(head, run_id, blocked, override)]
+    lines += ["", _evidence_line(head, run_id, blocked, override, unchecked)]
     return "\n".join(lines)
 
 
@@ -743,15 +855,19 @@ def plan_merge(root: str, target: str, strategy: str = "merge-commit",
         else:
             card["override"] = (f"{override.get('id')} by {override.get('actor')}: "
                                 f"{override.get('reason')}")
+            card["unchecked"] = [OVERRIDE_UNCHECKED]
     else:
         run_id = runs[0]
-        ev_block, fp, lines = evidence(main, run_id, wt, head, base)
+        ev_block, fp, lines = evidence(main, run_id, wt, head, base, changes)
         blocked += ev_block
+        card["unchecked"] = _unchecked_lines(main, run_id, fp.get("spec_unchecked") or [])
+    card.setdefault("unchecked", [])
     card["evidence"] = lines
     card["run"] = run_id
     msg = None if strategy == "ff" else (message if message is not None
                                           else _draft_message(main, run_id, branch, head,
-                                                              blocked, override))
+                                                              blocked, override,
+                                                              fp.get("spec_unchecked") or []))
     args = {"repo": os.path.realpath(common) if common else "", "worktree": os.path.realpath(wt),
             "branch": branch, "head": head, "head_tree": head_tree, "into": into, "base": base,
             "strategy": strategy, "message": msg,

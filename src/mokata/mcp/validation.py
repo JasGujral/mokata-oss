@@ -62,11 +62,20 @@ class ValidationError(MokataError):
     running degraded."""
 
     def __init__(self, field: str, reason: str,
-                 allowed: Optional[Sequence[str]] = None) -> None:
+                 allowed: Optional[Sequence[str]] = None, *,
+                 accepted: Optional[Sequence[str]] = None,
+                 did_you_mean: Optional[Sequence[str]] = None,
+                 retry_with: Optional[Dict[str, Any]] = None) -> None:
         super().__init__(f"invalid `{field}`: {reason}")
         self.field = field
         self.reason = reason
         self.allowed: Optional[Tuple[str, ...]] = tuple(allowed) if allowed is not None else None
+        # 0.0.28 I1 front door (`validate_call`): the closed set of argument NAMES the tool takes,
+        # the nearest of them to an unknown name, and the corrected call's shape (types/enums only
+        # — never a value the caller sent).
+        self.accepted: Optional[Tuple[str, ...]] = tuple(accepted) if accepted is not None else None
+        self.did_you_mean: Tuple[str, ...] = tuple(did_you_mean or ())
+        self.retry_with = retry_with
 
 
 def refusal(exc: ValidationError, op: str) -> Dict[str, Any]:
@@ -83,11 +92,20 @@ def refusal(exc: ValidationError, op: str) -> Dict[str, Any]:
     }
     if exc.allowed is not None:
         out["allowed"] = list(exc.allowed)
+    if exc.accepted is not None:
+        out["accepted"] = list(exc.accepted)
+    if exc.did_you_mean:
+        out["did_you_mean"] = list(exc.did_you_mean)
+    if exc.retry_with is not None:
+        out["retry_with"] = {"tool": op, "arguments": dict(exc.retry_with)}
     out["reason"] = f"the `{exc.field}` argument to '{op}' {exc.reason}"
+    fix = (f"use `{exc.did_you_mean[0]}` instead" if exc.did_you_mean
+           else f"a corrected `{exc.field}`"
+           + (f" (one of: {', '.join(exc.allowed)})" if exc.allowed else ""))
     out["hint"] = (
         f"this is a bad ARGUMENT, not a missing approval and not a mokata fault — nothing ran and "
-        f"nothing was committed. Re-call '{op}' with a corrected `{exc.field}`"
-        + (f" (one of: {', '.join(exc.allowed)})." if exc.allowed else "."))
+        f"nothing was committed. Re-call '{op}' with {fix}"
+        + ("; `retry_with` is the corrected call's shape." if exc.retry_with is not None else "."))
     return out
 
 
@@ -232,3 +250,175 @@ def validate_surface_params(args: tuple, kwargs: dict) -> None:
     fmt = kwargs.get("response_format")
     if isinstance(fmt, str):
         validate_response_format(fmt)
+
+
+# ======================================================================================
+# 0.0.28 I1 — the FRONT DOOR: every served call, checked against the tool's live schema
+# ======================================================================================
+#
+# `MCP-FIRST-CALL-FAILS`. Before this, FastMCP silently DROPPED an unknown argument name
+# (`remember(text=…)` minted a proposal for an EMPTY memory, `query(q=…)` answered about target
+# ""), a missing parameter fell back to its default, and pydantic's lax mode turned `passed="yes"`
+# into a recorded verdict. `validate_call` runs before FastMCP's own pre-parse, against the schema
+# the client itself was shown (`tools/list`), with one table (design note I §3c, binding):
+#
+#   unknown argument name                      refused, `did_you_mean` + `accepted`
+#   missing required argument                  refused, `retry_with`
+#   array/object given a JSON string of it     ACCEPTED (the SDK's `pre_parse_json` does it today)
+#   integer given "2" / number given "2.5"     ACCEPTED (unambiguous)
+#   boolean given true/false or "true"/"false" ACCEPTED (any case)
+#   boolean given anything else                refused ("yes", "1", 1, 0 — ambiguous)
+#   enum value not in the set (exact)          refused, `allowed`
+#   null for a non-nullable / unparseable      refused, `retry_with`
+#
+# Strict on NAMES and PRESENCE, lenient on REPRESENTABLE conversions, strict on AMBIGUOUS ones: a
+# model that stringifies a nested array (they do) is not failed for it, and a model that typed a
+# wrong name is told the right one instead of being silently ignored. A refusal never echoes a value.
+
+_BOOL_STRINGS = {"true": True, "false": False}
+
+
+def _alternatives(prop: Dict[str, Any]) -> List[Dict[str, Any]]:
+    alts = prop.get("anyOf") or prop.get("oneOf")
+    if isinstance(alts, list) and alts:
+        return [a for a in alts if isinstance(a, dict)]
+    return [prop]
+
+
+def _type_hint(prop: Dict[str, Any]) -> str:
+    """The shape of a valid value, for `retry_with` — a type or the enum, never a sample value."""
+    parts = []
+    for alt in _alternatives(prop):
+        if alt.get("type") == "null":
+            continue
+        if "enum" in alt:
+            parts.append("one of: " + " | ".join(str(v) for v in alt["enum"]))
+        elif alt.get("type") == "boolean":
+            parts.append("<boolean: true | false>")
+        elif alt.get("type"):
+            parts.append(f"<{alt['type']}>")
+        else:
+            parts.append("<any>")
+    return " or ".join(parts) or "<any>"
+
+
+_NO = object()
+
+
+def _match(alt: Dict[str, Any], value: Any) -> Any:
+    """`value` as this alternative accepts it (possibly converted), or `_NO`."""
+    import json
+    import math
+    import re
+    if "enum" in alt:
+        for member in alt["enum"]:
+            if value == member and type(value) is type(member):
+                return value
+        return _NO
+    if "const" in alt:
+        return value if value == alt["const"] and type(value) is type(alt["const"]) else _NO
+    t = alt.get("type")
+    if t is None:
+        return value
+    if t == "null":
+        return _NO
+    if t == "boolean":
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str) and value.strip().lower() in _BOOL_STRINGS:
+            return _BOOL_STRINGS[value.strip().lower()]
+        return _NO
+    if t == "integer":
+        if isinstance(value, bool):
+            return _NO
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        if isinstance(value, str) and re.fullmatch(r"\s*[+-]?\d+\s*", value):
+            return int(value)
+        return _NO
+    if t == "number":
+        if isinstance(value, bool):
+            return _NO
+        if isinstance(value, (int, float)):
+            return value
+        if isinstance(value, str):
+            try:
+                f = float(value)
+            except ValueError:
+                return _NO
+            return f if math.isfinite(f) else _NO
+        return _NO
+    if t == "string":
+        return value if isinstance(value, str) else _NO
+    if t in ("array", "object"):
+        want = list if t == "array" else dict
+        if isinstance(value, want):
+            return value
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except ValueError:
+                return _NO
+            return parsed if isinstance(parsed, want) else _NO
+        return _NO
+    return value
+
+
+def _check_value(field: str, prop: Dict[str, Any], value: Any) -> Any:
+    alts = _alternatives(prop)
+    if value is None:
+        if any(a.get("type") == "null" for a in alts) or not any("type" in a or "enum" in a
+                                                                 for a in alts):
+            return None
+        raise ValidationError(field, "must not be null", retry_with={field: _type_hint(prop)})
+    for alt in alts:
+        got = _match(alt, value)
+        if got is not _NO:
+            return got
+    enum = next((a["enum"] for a in alts if "enum" in a), None)
+    if enum is not None:
+        raise ValidationError(field, "is not one of the values this tool accepts",
+                              allowed=[str(v) for v in enum],
+                              retry_with={field: _type_hint(prop)})
+    if any(a.get("type") == "boolean" for a in alts):
+        raise ValidationError(field, "must be a boolean: true or false (an ambiguous value such "
+                                     "as \"yes\", \"1\" or 1 is never guessed)",
+                              allowed=["true", "false"], retry_with={field: _type_hint(prop)})
+    raise ValidationError(field, f"must be {_type_hint(prop)}",
+                          retry_with={field: _type_hint(prop)})
+
+
+def validate_call(tool: str, schema: Dict[str, Any], arguments: Optional[Dict[str, Any]]
+                  ) -> Dict[str, Any]:
+    """Check one call's arguments against the tool's input schema (the table above). Returns the
+    arguments to serve — the caller's own, with only the table's representable conversions applied
+    — or RAISES `ValidationError` naming the first faulty field. Pure; never echoes a value."""
+    import difflib
+    args = dict(arguments or {})
+    props: Dict[str, Any] = dict((schema or {}).get("properties") or {})
+    names = sorted(props)
+    required = [r for r in (schema or {}).get("required") or [] if r in props]
+    for key in args:
+        if key not in props:
+            near = difflib.get_close_matches(key, names, n=3, cutoff=0.6)
+            missing_now = {r: _type_hint(props[r]) for r in required if r not in args}
+            fix = dict(missing_now)
+            if near:
+                fix[near[0]] = _type_hint(props[near[0]])
+            raise ValidationError(key, "is not an argument of this tool; it would have been "
+                                       "ignored", accepted=names, did_you_mean=near,
+                                  retry_with=fix)
+    missing = [r for r in required if r not in args]
+    if missing:
+        raise ValidationError(missing[0], "is required and was not given", accepted=names,
+                              retry_with={r: _type_hint(props[r]) for r in missing})
+    out: Dict[str, Any] = {}
+    for key, value in args.items():
+        try:
+            out[key] = _check_value(key, props[key], value)
+        except ValidationError as bad:
+            bad.accepted = tuple(names)
+            raise
+    return out

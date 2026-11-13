@@ -23,8 +23,9 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from typing import Any, Iterator, List, Optional
 
 # ----------------------------------------------------------------- changed-file → touch-set
 def symbols_in_files(root: str, files: List[str]) -> List[str]:
@@ -36,9 +37,12 @@ def symbols_in_files(root: str, files: List[str]) -> List[str]:
     from . import languages
     out: List[str] = []
     seen = set()
-    from .knowledge.cancel import checkpoint
-    for rel in files:
+    from .knowledge.cancel import checkpoint, report
+    total = len(files)
+    for i, rel in enumerate(files):
         checkpoint()            # cancellable per file; a no-op outside a job
+        # visible long work (0.0.28 F): true progress, one unit (files), done never past total
+        report(done=i + 1, total=total, unit="files", note="reading the changed files")
         if not languages.is_source_file(rel):
             continue
         path = rel if os.path.isabs(rel) else os.path.join(root, rel)
@@ -483,14 +487,30 @@ def _committed_specs_leg(root: str) -> CheckLeg:
 
 
 # ----------------------------------------------------------------- the check
+#: The legs, in the order they run. `legs=` selects a subset by these names.
+LEG_NAMES = ("completeness", "spec-awareness", "spec-drift")
+
+
 def run_ci_check(root: str, changed_files: List[str],
-                 changed_symbols: Optional[List[str]] = None) -> CICheckResult:
+                 changed_symbols: Optional[List[str]] = None,
+                 legs: Optional[tuple] = None) -> CICheckResult:
     """Run the completeness + spec-awareness legs over a PR's changed files. Pure of git/network
     (the caller supplies the changed-file list). NEVER raises — an uninitialized/unreadable repo
-    degrades to a clean PASS (nothing to check)."""
+    degrades to a clean PASS (nothing to check).
+
+    `legs` (0.0.28 F) selects which legs run, by `LEG_NAMES`; None runs them all (the CLI and MCP
+    check). The merge gate's spec leg asks for spec-awareness + spec-drift only: completeness is
+    P3's question, answered there with the run's own evidence."""
+    want = LEG_NAMES if legs is None else tuple(legs)
+    unknown_legs = [n for n in want if n not in LEG_NAMES]
+    if unknown_legs:
+        raise ValueError(f"unknown ci_check leg(s): {', '.join(unknown_legs)}")
     from .config import ConfigError, Surface
     changed_files = list(changed_files or [])
-    if not Surface.is_initialized(root):
+    # A linked worktree holds no `.mokata/` of its own (the manifest is never committed): it is
+    # initialized when the repo is (0.0.28 F — the merge's spec leg runs IN the session worktree).
+    from .repo_identity import resolve_mokata_root
+    if not Surface.is_initialized(root) and resolve_mokata_root(root).root is None:
         return CICheckResult(legs=[], initialized=False)
     try:
         surface = Surface.load(root)
@@ -500,8 +520,8 @@ def run_ci_check(root: str, changed_files: List[str],
         # reported as uninitialized — the same friendly PASS a repo with no mokata gets.
         return CICheckResult(legs=[], initialized=False)
 
-    symbols = changed_symbols if changed_symbols is not None \
-        else symbols_in_files(root, changed_files)
+    symbols = changed_symbols if changed_symbols is not None else (
+        symbols_in_files(root, changed_files) if "spec-awareness" in want else [])
 
     # CANCEL, WITHOUT A TIMER: the same `knowledge.cancel` flag the IDE jobs, the merge suite and
     # the graph walks arm. Between legs, per spec, per changed file and per file of the test walk
@@ -509,13 +529,44 @@ def run_ci_check(root: str, changed_files: List[str],
     # cancelled check has no verdict, and returning a half-built result would be the partial read
     # shown as complete). Outside a job every checkpoint is a no-op, so the CLI is unchanged.
     from .knowledge.cancel import checkpoint
-    legs = []
-    for leg_fn in (lambda: _completeness_leg(root, surface.state),
-                   lambda: _spec_awareness_leg(surface, changed_files, symbols),
-                   lambda: _committed_specs_leg(root)):
+    run = {"completeness": lambda: _completeness_leg(root, surface.state),
+           "spec-awareness": lambda: _spec_awareness_leg(surface, changed_files, symbols),
+           "spec-drift": lambda: _committed_specs_leg(root)}
+    done = []
+    for name in LEG_NAMES:
+        if name not in want:
+            continue
         checkpoint()
-        legs.append(leg_fn())
+        done.append(run[name]())
     checkpoint()
     from .run_record import load_for_pr
-    return CICheckResult(legs=legs, initialized=True, records=load_for_pr(root, changed_files),
+    return CICheckResult(legs=done, initialized=True, records=load_for_pr(root, changed_files),
                          root=root)
+
+
+# ----------------------------------------------------------------- Ctrl-C in the CLI
+@contextmanager
+def cancel_on_sigint() -> Iterator[Any]:
+    """Arm `knowledge.cancel` for a CLI command (0.0.28 F): Ctrl-C — SIGINT, or CTRL_C_EVENT on
+    Windows, which Python delivers as SIGINT — SETS the flag instead of raising mid-write, and the
+    next checkpoint raises `Cancelled`, so a half-done check records nothing. The handler is
+    installed only on the main thread (where Python allows one) and the previous one is restored."""
+    import signal
+    import threading
+    from .knowledge import cancel as C
+    flag = threading.Event()
+    on_main = threading.current_thread() is threading.main_thread()
+    prev = signal.getsignal(signal.SIGINT) if on_main else None
+    if on_main:
+        signal.signal(signal.SIGINT, lambda _signum, _frame: flag.set())
+    try:
+        with C.scope(flag):
+            yield flag
+    finally:
+        if on_main:
+            signal.signal(signal.SIGINT, prev if prev is not None else signal.default_int_handler)
+
+
+#: What a cancelled CLI check prints; the exit status is 2, "did not run" (as `REFUSED_EXIT`).
+CANCELLED_TEXT = "cancelled — nothing recorded"
+CANCELLED_EXIT = 2
