@@ -574,7 +574,7 @@ page offers the same walk as **Calculate the full blast radius**.
 Build/refresh the per-file freshness index (incremental); report added/changed/removed and
 current stale files. The index covers **Python files only**: the output names the languages
 indexed and how many source files in other languages were skipped as unsupported
-(`index: languages indexed: python; 40 file(s) skipped as unsupported (3 go, 37 javascript). Skipped files are counted only for javascript, go, rust, java; ...`). Files in languages outside that set (C, Ruby, Kotlin, ...) are neither indexed nor counted, and the line says so.
+(`index: languages indexed: python; 40 file(s) skipped as unsupported (3 go, 12 javascript, 25 typescript). Skipped files are counted only for go, java, javascript, rust, typescript; ...`). Files in languages outside that set (C, Ruby, Kotlin, ...) are neither indexed nor counted, and the line says so.
 The MCP `index_status` tool reports the same counts.
 
 ### `mokata lat-check`
@@ -1195,7 +1195,8 @@ own copy of a built-in server, which the trust prompt shows), found in the proje
 `node_modules/<pkg>/package.json` `bin` (run as `node <script>`; `node_modules` must resolve inside
 the repo and the script inside `node_modules`), or on your PATH (absolute entries only — never the current directory, and never a
 copy inside the repo for a server you configured or for `node`) — never installed by mokata, and
-never through a shell (a `.cmd`/`.bat` file is never run or read). The trust prompt lists the exact command lines trusting allows. The bridge sends only read methods; a rename, code action, formatting or
+never through a shell (a `.cmd`/`.bat` file is never run; a yarn v1 global `.cmd` shim is read to
+find its script, used only when that script lies inside `yarn global dir` and you own that directory). The trust prompt lists the exact command lines trusting allows. The bridge sends only read methods; a rename, code action, formatting or
 command is refused before it reaches the server. A language server **executes project code**
 (`build.rs`, Go modules, tsconfig plugins), so none starts until you mark the workspace **trusted**:
 `mokata ide --trust` (a human at a TTY, never inside a Claude Code session; `--untrust` revokes and

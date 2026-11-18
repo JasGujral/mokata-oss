@@ -67,7 +67,7 @@ def cmd_onboard(args: argparse.Namespace) -> int:
         except (ConfigError, ManifestError):
             surface = None
     grounding = ground(surface.router) if surface is not None else ground(None)
-    sys.stdout.write(render_skill(skill, grounding))
+    sys.stdout.write(render_skill(skill, grounding, args.path))
 
     # Stage 59 — surface AUTO-PROPOSED guardrails: rule PROPOSALS distilled from recurring
     # ledger corrections (declined writes / reverts / spec conflicts, G5). PROPOSAL-ONLY —
@@ -154,7 +154,8 @@ def cmd_spec_check(args: argparse.Namespace) -> int:
     change = ChangeSet(symbols=_split_csv(args.symbols), files=_split_csv(args.files),
                        text=args.text or "")
     specs = load_spec_corpus(surface.state)
-    store = MemoryStore.from_surface(surface)
+    # decisions are read by key: no model is loaded or fetched (0.0.29 C1 verify M2)
+    store = MemoryStore.from_surface(surface, knowledge=False, load_model=False)
     decisions = load_decisions(store)
     layer = KnowledgeLayer.from_surface(surface)
     ledger = AuditLedger.from_mokata_dir(surface.mokata_dir)
@@ -214,8 +215,10 @@ def cmd_ci_check(args: argparse.Namespace) -> int:
     # check → that leg is ABSENT (never a pass, never a false block). Reuses the existing engines (no logic duplicated).
     from .. import ci_check as CI
     files = _split_csv(args.files)
+    diff_base = ""
     if args.base and not files:
         files = _git_changed_files(args.path, args.base)
+        diff_base = args.base
         if files is None:
             text = base_refusal(args.base)
             print("error: " + text, file=sys.stderr)
@@ -230,9 +233,10 @@ def cmd_ci_check(args: argparse.Namespace) -> int:
     from ..knowledge.cancel import Cancelled
     try:
         with CI.cancel_on_sigint():          # 0.0.28 F: Ctrl-C ends the check with no verdict
-            result = CI.run_ci_check(args.path, files, changed_symbols=symbols)
-    except Cancelled:
-        print(f"mokata ci-check: {CI.CANCELLED_TEXT}")
+            result = CI.run_ci_check(args.path, files, changed_symbols=symbols,
+                                     diff_base=diff_base)
+    except Cancelled as exc:
+        print(f"mokata ci-check: {exc}")
         return CI.CANCELLED_EXIT
     print(result.render(ascii_only=args.ascii))
     # G3-EVIDENCE — links point at this repo on GitHub at the checked-out SHA, and only when the

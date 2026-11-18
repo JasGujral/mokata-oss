@@ -133,9 +133,16 @@ class TheLaunchIsLockedOnEveryOS(unittest.TestCase):
         answers = iter([{"pid": 7}, {"pid": 7}, None])
         with mock.patch.object(L.os, "kill", side_effect=lambda pid, sig: calls.append((pid, sig))), \
                 mock.patch.object(L, "running", side_effect=lambda root: next(answers)), \
-                mock.patch.object(L.time, "sleep"):
-            L._stop(7, "/repo", wait=5)
+                mock.patch.object(L.time, "sleep"), \
+                mock.patch.object(L, "listener_owned", return_value=True):
+            L._stop(7, "/repo", wait=5, port=4444)
         self.assertEqual([(7, signal.SIGTERM)], calls)
+        # 0.0.29 H4: a pid the OS cannot prove is the port's listener is never signalled
+        calls.clear()
+        with mock.patch.object(L.os, "kill", side_effect=lambda pid, sig: calls.append((pid, sig))), \
+                mock.patch.object(L, "listener_owned", return_value=None):
+            self.assertEqual("not-signalled", L._stop(7, "/repo", wait=5, port=4444))
+        self.assertEqual([], calls)
         self.assertIsNone(re.search(r"os \. kill \( \w+ , 0 \)", _code("launch.py")))
 
     def test_the_child_is_detached_on_windows_too(self):

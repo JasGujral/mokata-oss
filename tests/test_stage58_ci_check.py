@@ -229,6 +229,45 @@ class TestCliSurface(unittest.TestCase):
             self.assertIn("BLOCKED", out)
 
 
+class TheEmptyDiffIsNamedForWhatItIs(unittest.TestCase):
+    """CI-CHECK-EMPTY-BASE-WORDING: a --base that RESOLVED to an empty diff is not "no files
+    supplied" -- the user did pass a base. Still ABSENT (never a pass)."""
+
+    def _git(self, d, *args):
+        import subprocess
+        subprocess.run(["git", "-C", d, "-c", "user.email=t@t", "-c", "user.name=t", *args],
+                       check=True, stdin=subprocess.DEVNULL, capture_output=True)
+
+    def _run(self, argv):
+        return TestCliSurface._run(self, argv)
+
+    def test_empty_diff_against_a_resolved_base_says_no_files_differ(self):
+        with tempfile.TemporaryDirectory() as d:
+            _init(d)
+            _write(d, "a.py", "x = 1\n")
+            self._git(d, "init", "-q")
+            self._git(d, "add", "-A")
+            self._git(d, "commit", "-q", "-m", "c")
+            rc, out, err = self._run(["ci-check", "--base", "HEAD", "--path", d])
+            self.assertEqual(rc, 0, err)
+            self.assertIn("no files differ from HEAD", out)
+            self.assertNotIn("no changed files supplied", out)
+            self.assertIn("NOT CHECKED", out)
+            self.assertNotIn("PASSED", out)
+
+    def test_no_files_and_no_base_keeps_the_old_wording(self):
+        with tempfile.TemporaryDirectory() as d:
+            _init(d)
+            rc, out, err = self._run(["ci-check", "--path", d])
+            self.assertEqual(rc, 0, err)
+            self.assertIn("no changed files supplied", out)
+            self.assertNotIn("no files differ", out)
+
+    def test_run_ci_check_docstring_never_calls_not_checked_a_pass(self):
+        self.assertNotIn("clean PASS", CI.run_ci_check.__doc__)
+        self.assertIn("NOT CHECKED", CI.run_ci_check.__doc__)
+
+
 # ============================================================ the reusable action + workflow
 class TestAction(unittest.TestCase):
     def test_action_yml_is_a_valid_composite_action(self):

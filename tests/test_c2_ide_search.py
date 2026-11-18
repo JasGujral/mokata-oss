@@ -184,6 +184,16 @@ class MeaningUnavailableIsSaid(unittest.TestCase):
 
         from mokata.memory.embed import MODEL_FILES
 
+        def hf_hub_download(repo, filename, etag_timeout=None):
+            # 0.0.29 C1 re-verify: the fetch is memory's one door (`embed._hub_fetch`), per file
+            if filename == MODEL_FILES[0]:
+                calls.append(False)
+            where = os.path.join(models, repo.replace("/", "--"))
+            os.makedirs(where, exist_ok=True)
+            open(os.path.join(where, filename), "w", encoding="utf-8").close()
+            have_model["on_disk"] = True
+            return os.path.join(where, filename)
+
         def try_to_load_from_cache(repo, filename, **_kw):
             if filename == MODEL_FILES[0]:            # one offline question per lookup
                 calls.append(True)
@@ -201,6 +211,7 @@ class MeaningUnavailableIsSaid(unittest.TestCase):
                 return FakeModel()
         hub = types.ModuleType("huggingface_hub")
         hub.snapshot_download = snapshot_download
+        hub.hf_hub_download = hf_hub_download
         hub.try_to_load_from_cache = try_to_load_from_cache
         m2v = types.ModuleType("model2vec")
         m2v.StaticModel = StaticModel

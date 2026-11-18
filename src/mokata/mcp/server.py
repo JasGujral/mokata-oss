@@ -14,6 +14,7 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 from __future__ import annotations
 
 import functools
+import os
 import re
 import sys
 import threading
@@ -148,6 +149,23 @@ MCP_SURFACE_TIMEOUT_SECONDS = 60.0
 # Only results whose caller was told `running` are kept; nothing else is cached.
 _RESULT_KEEP_SECONDS = 1800.0
 
+# 0.0.29 lane B (round 4, verifier M3) — a finished WRITE nobody collected is never re-run, but it
+# is not kept forever either:
+#   * at most `_KEPT_WRITES_MAX` whole results are held; past that the OLDEST-finished is evicted,
+#     and a TOMBSTONE stays in its place — the op, when it ran, ok/failed, ~200 bytes;
+#   * a tombstone answers the next identical call ONCE ("this write already ran at T with outcome
+#     X; its full result is no longer held") and never runs it again;
+#   * tombstones are bounded on their own: `_TOMBSTONE_MAX_AGE_S` (7 days) and `_TOMBSTONES_MAX`.
+#     Past that window an identical call is a NEW request and runs (docs/reference/mcp-tools.md).
+# The numbers: a whole result is one tool answer (a few KB; the verifier measured ~7 KB with
+# 200-byte arguments), so 256 of them is ~2 MB worst case — and reaching 256 needs 256 distinct
+# writes answered `running` and never re-called in one server's life. A tombstone is ~200 bytes,
+# so 4096 is <1 MB; 7 days covers a long weekend plus a week of "I'll re-run that tomorrow", the
+# longest gap after which "it already ran" is still the answer a person expects.
+_KEPT_WRITES_MAX = 256
+_TOMBSTONES_MAX = 4096
+_TOMBSTONE_MAX_AGE_S = 7 * 24 * 3600.0
+
 # R5 — fire-and-forget self-registration threads, tracked so tests/diagnostics can drain them. The
 # SERVED path never joins these; draining is a test/diagnostic affordance only.
 _REG_LOCK = threading.Lock()
@@ -184,45 +202,48 @@ def _await_registrations(timeout: float = 5.0) -> None:
 
 
 def _mcp_timeout_for(op: str, path: str = ".") -> float:
-    """The wall-clock MCP-surface budget for `op` (R1). `baseline` — a READ tool that runs the whole
-    test suite — gets its own named cap far below its 600s terminal bound (R7); everything else gets
-    the interactive default. Read at CALL time so the budget is patchable/tunable."""
-    if op == "baseline":
-        # 0.0.24 (OSS #82) — the repo's `settings.mcp.test_timeout_seconds` raises it (clamped to
-        # the 600s terminal bound); the subprocess in `tools_read.baseline` reads the same value.
-        from ..baseline import mcp_test_timeout
-        return mcp_test_timeout(_manifest_or_none(path))
+    """The MCP-surface REPLY budget for `op` (R1) — one number for every tool. 0.0.29 lane G
+    (#82-1b): `baseline` no longer has its own; the reply budget is not the suite's life (the suite
+    runs on with no clock and a re-call joins it). Read at CALL time so tests can seam it."""
     return MCP_SURFACE_TIMEOUT_SECONDS
 
 
-def _manifest_or_none(path: str):
-    """The repo's manifest for a budget read, or None — never raises (an unreadable repo gets the
-    default budget, and the tool body reports the real problem)."""
-    try:
-        from ..config import Surface
-        if Surface.is_initialized(path):
-            return Surface.load(path).manifest
-    except Exception:  # noqa: BLE001
-        return None
-    return None
+#: 0.0.29 lane G — how the told-running `baseline` is reached after its `running` answer (lane B's
+#: lifecycle: no `stop` parameter exists; the lever is pulled when the LAST attached request is
+#: cancelled, and every live run is ended when the server exits).
+_BASELINE_END_ROAD = (" A suite has no wall clock: it ends on exit, after "
+                      "`settings.baseline.silence_seconds` with no output, or when stopped — re-call "
+                      "and cancel that request (the client's cancel), or end this MCP server.")
 
 
-def _still_running(op: str, budget: float, elapsed: float, call_id: str) -> Dict[str, Any]:
+def _still_running(op: str, budget: float, elapsed: float, call_id: str,
+                   progress: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """O14 — the reply-budget verdict. The work was NOT cut: it is still running in this server and
     a re-call with the SAME arguments joins it (it never runs twice) and returns its result. Names
-    the OPERATION and a short call id; NEVER the args (a slow call must not echo a DSN/path/arg)."""
-    return {
+    the OPERATION and a short call id; NEVER the args (a slow call must not echo a DSN/path/arg).
+    0.0.29 lane G: `progress` is the work's last numeric report (lane B's I4 sink) — an ALLOW-LIST
+    of numbers and a short unit, never a `note` (notes carry paths)."""
+    out: Dict[str, Any] = {
         "status": _status.RUNNING, "isError": False, "operation": op, "call_id": call_id,
         "elapsed_s": round(elapsed, 1),
         "reason": (f"the '{op}' operation is still working after {elapsed:.0f}s (mokata answers "
                    f"within {int(budget)}s and keeps the work going)"),
-        "hint": (f"re-call '{op}' with exactly the same arguments to receive the result — it joins "
-                 f"the work already in flight and is never started twice. Do not switch to the "
-                 f"CLI for the same write: that WOULD run it twice."
-                 + (" A suite that needs longer per reply: `mokata config set "
-                    "settings.mcp.test_timeout_seconds <seconds>` (up to 600)."
-                    if op == "baseline" else "")),
+        "hint": (f"re-call '{op}' with exactly the same arguments to join the work in flight and "
+                 f"receive its result — it is never started twice; running the same thing another "
+                 f"way (the CLI) starts a second run."
+                 + (_BASELINE_END_ROAD if op == "baseline" else "")),
     }
+    shown: Dict[str, Any] = {}
+    for k in ("done", "total", "quiet_s"):
+        v = (progress or {}).get(k)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            shown[k] = v
+    unit = (progress or {}).get("unit")
+    if shown and isinstance(unit, str):
+        shown["unit"] = unit[:40]
+    if shown:
+        out["progress"] = shown
+    return out
 
 
 def _as_error(op: str, exc: BaseException) -> Dict[str, Any]:
@@ -366,11 +387,18 @@ def _with_tree(out: Dict[str, Any], scope: Any) -> Dict[str, Any]:
 # so a queued write still answers `running` at the budget rather than hanging the caller.
 
 class _Call:
+    """One piece of work (O14), and since 0.0.29 lane B (R-B2) the server-held handle to it: who
+    is attached (`tickets`), its cancel `lever`, whether a cancelled caller left it to be
+    `collectable`, the tree it ran on (`tree_start`/`tree_end`, TREE_KEYED ops) and the last
+    numeric report of its progress (`progress`, I4 for lane G's `running`)."""
     __slots__ = ("key", "call_id", "started", "done", "out", "told_running", "finished_at",
-                 "elapsed_ms")
+                 "finish_seq", "elapsed_ms", "op", "kind", "lever", "tickets", "collectable", "cancelled",
+                 "cancelled_at", "tree_start", "tree_end", "progress", "emitted", "ran_at")
 
-    def __init__(self, key: str) -> None:
+    def __init__(self, key: str, op: str = "", kind: Optional[str] = None,
+                 tree_start: Optional[str] = None) -> None:
         import hashlib
+        from ..knowledge.cancel import Lever
         self.key = key
         self.call_id = hashlib.sha256(key.encode("utf-8", "replace")).hexdigest()[:12]
         self.started = time.perf_counter()
@@ -378,12 +406,151 @@ class _Call:
         self.out: Dict[str, Any] = {}
         self.told_running = False
         self.finished_at = 0.0
+        self.finish_seq = 0                # the order it finished in (`_finished_next`), never a clock
         self.elapsed_ms = 0
+        self.op = op
+        self.kind = kind
+        self.lever = Lever()
+        self.tickets: "set" = set()
+        self.collectable = False
+        self.cancelled = False             # the body ended `Cancelled`
+        self.cancelled_at = 0.0
+        self.tree_start = tree_start
+        self.tree_end: Optional[str] = None
+        self.progress: Dict[str, Any] = {}
+        self.emitted = False               # its one `ToolCall` event has been claimed
+        self.ran_at = 0.0                  # wall time it finished — for the "ran at T" label only
+
+    @property
+    def is_write(self) -> bool:
+        return self.kind in _WRITE_KINDS
+
+
+_WRITE_KINDS = ("write", "approve")
+
+
+class _Ticket:
+    """One REQUEST's attachment to a `_Call` (0.0.29 R-B2). Built by the async handler BEFORE the
+    worker runs (attack M1), so a cancel on the event loop always has a ticket to cancel. `gone`:
+    the request was cancelled — its wrapper answers nothing, finishes nothing (attack H4)."""
+    __slots__ = ("gone", "wake", "call", "left", "kept", "deferred", "pending")
+
+    def __init__(self) -> None:
+        self.gone = False
+        self.wake = threading.Event()
+        self.call: Optional[_Call] = None
+        self.left = False
+        self.kept = False                  # attached to work that had already finished
+        # Round 5 (round-4 verifier M2): a request the SDK answers is `deferred` — its finished
+        # WRITE result is consumed only when the response is WRITTEN (`delivered`), never when it
+        # is computed; until then it stays attached (`pending`), so a cancel keeps it collectable.
+        self.deferred = False
+        self.pending = False
+
+    def delivered(self) -> None:
+        """The response carrying this request's result was written: consume it (`_finish`)."""
+        with _INFLIGHT_LOCK:
+            call = self.call
+            if call is None or not self.pending:
+                return
+            self.pending = False
+            _leave(self, call)
+            if _INFLIGHT.get(call.key) is call:
+                del _INFLIGHT[call.key]
+
+    def undelivered(self) -> None:
+        """The result was computed but never written (a cancel, an error frame, a failed write,
+        a crash): exactly a cancel — the result stays for the next identical call."""
+        self.pending = False
+        self.cancel()
+
+    def cancel(self) -> None:
+        """The client cancelled this request (on the event loop). The work is stopped iff this was
+        the LAST request attached to it; a write (and a read that finishes anyway) is left
+        COLLECTABLE, so a re-call collects it and never runs it twice — in whatever order the
+        cancel, the finish and the re-call arrive (B1 verifier M1). Idempotent."""
+        with _INFLIGHT_LOCK:
+            self.gone = True
+            self.wake.set()
+            call = self.call
+            if call is None or not _leave(self, call):
+                return
+            if call.tickets:
+                return
+            if call.done.is_set():
+                # Finished, and its last waiter left before collecting: nothing to stop, but the
+                # result of a write is kept for the re-call — dropping it would run the write twice.
+                if call.is_write:
+                    call.collectable = True
+                    call.cancelled_at = time.time()
+                return
+            call.lever.pull()
+            call.collectable = True
+            call.cancelled_at = time.time()
+
+
+def _leave(ticket: _Ticket, call: _Call) -> bool:
+    """Detach `ticket` from `call` (caller holds `_INFLIGHT_LOCK`). True the FIRST time only —
+    an answer racing a cancel detaches once (attack/refute M2d)."""
+    if ticket.left:
+        return False
+    ticket.left = True
+    call.tickets.discard(ticket)
+    return True
 
 
 _INFLIGHT_LOCK = threading.Lock()
 _INFLIGHT: Dict[str, _Call] = {}
 _WRITE_LOCKS: Dict[str, threading.Lock] = {}
+_TICKET = threading.local()
+#: How long one wait for the per-repo write gate lasts before the lever is looked at again.
+_GATE_SLICE_S = 0.25
+
+#: The tools whose answer describes the WORKING TREE (0.0.29 R-B2, G-H2): a finished result is
+#: served only to a call made on the same tree. Lane G adds a long tree-reading tool here.
+TREE_KEYED = frozenset({"baseline", "ci_check", "coverage", "lat_check"})
+
+
+def tree_key(path: str) -> Optional[str]:
+    """`HEAD` + every `git status` entry (untracked files one by one) with its `(size,
+    mtime_ns, mode)`, hashed — or None where git cannot say (not a repo, no git). Never raises."""
+    import hashlib
+    import os
+    try:
+        from ..git_safe import Git, GitSafeError
+        root = os.path.abspath(path or ".")
+        with Git(root) as git:
+            code, head, _err = git.run(root, "rev-parse", "HEAD", read=True, cancellable=False)
+            if code != 0:
+                return None
+            code, raw, _err = git.run(root, "status", "--porcelain=v1", "-z",
+                                      "--untracked-files=all", read=True, cancellable=False)
+            if code != 0:
+                return None
+            code, top, _err = git.run(root, "rev-parse", "--show-toplevel", read=True,
+                                      cancellable=False)
+            base = top.decode("utf-8", "replace").strip() if code == 0 else root
+    except (GitSafeError, OSError, ValueError):
+        return None
+    h = hashlib.sha256(head.strip())
+    entries = raw.split(b"\0")
+    i = 0
+    while i < len(entries):
+        e = entries[i]
+        i += 1
+        if len(e) < 4:
+            continue
+        h.update(b"\0" + e)
+        if e[:1] in (b"R", b"C") or e[1:2] in (b"R", b"C"):
+            i += 1                                     # -z: the rename source follows
+        rel = e[3:].decode("utf-8", "surrogateescape")
+        try:
+            st = os.lstat(os.path.join(base, rel))
+            # the mode too: a chmod of an already-modified file moves nothing else (B1 verifier)
+            h.update(f"\0{st.st_size}\0{st.st_mtime_ns}\0{st.st_mode}".encode())
+        except OSError:
+            h.update(b"\0-")
+    return h.hexdigest()
 
 
 def _call_key(op: str, args: tuple, kwargs: dict) -> str:
@@ -405,57 +572,266 @@ def _write_lock(path: str) -> threading.Lock:
         return lock
 
 
+_FINISH_SEQ = [0]
+
+
+def _finished_next() -> int:
+    """The next number in the one order finishes and evictions are recorded in (caller holds
+    `_INFLIGHT_LOCK`). Eviction is by this order, never by a clock reading (X1)."""
+    _FINISH_SEQ[0] += 1
+    return _FINISH_SEQ[0]
+
+
 def _prune_kept(now: float) -> None:
-    """Drop finished calls nobody came back for (caller holds `_INFLIGHT_LOCK`)."""
+    """Drop finished READS nobody came back for (caller holds `_INFLIGHT_LOCK`). A finished WRITE
+    still here was never collected — it was answered `running`, or its request was cancelled — so
+    it is kept until it is collected or the server exits (0.0.29 R-B2; B1 re-verifier A1i: pruning
+    a told-running write let the next identical call run it a second time). The cost is one result
+    dict per distinct uncollected write; a delivered write is forgotten at once (`_finish`), so
+    only writes nobody heard the end of are held — and at most `_KEPT_WRITES_MAX` of them: past
+    that the oldest-finished is EVICTED to a tombstone (round 4, verifier M3), which still answers
+    "it already ran" and never lets the write run twice. Tombstones are pruned by age and count."""
     for k in [k for k, c in _INFLIGHT.items()
-              if c.done.is_set() and now - c.finished_at > _RESULT_KEEP_SECONDS]:
+              if c.done.is_set() and now - c.finished_at > _RESULT_KEEP_SECONDS
+              and not c.is_write]:
         del _INFLIGHT[k]
+    # Oldest-finished = lowest FINISH SEQUENCE, never a clock reading (X1): a stored time is
+    # compared against readings the next finish takes, and a clock that is reset, coarse or lower
+    # than a stored value evicts the newest instead (CI 43869782006, a fresh Linux runner).
+    kept = sorted((c for c in _INFLIGHT.values()
+                   if c.is_write and c.done.is_set() and not c.tickets),
+                  key=lambda c: c.finish_seq)
+    for c in kept[:max(0, len(kept) - _KEPT_WRITES_MAX)]:
+        del _INFLIGHT[c.key]
+        _TOMBSTONES[c.key] = _Tombstone(c, now)
+    for k in [k for k, t in _TOMBSTONES.items() if now - t.evicted_at > _TOMBSTONE_MAX_AGE_S]:
+        del _TOMBSTONES[k]
+    over = len(_TOMBSTONES) - _TOMBSTONES_MAX
+    if over > 0:
+        # The table's own order IS the eviction order (a dict keeps insertion order; a key leaves
+        # the table before it can be live again, `_join_or_start`): oldest-evicted first, never
+        # a clock reading.
+        for k in list(_TOMBSTONES)[:over]:
+            del _TOMBSTONES[k]
+
+
+class _Tombstone:
+    """What is left of an evicted, never-collected write: enough to say it ran, never its result."""
+    __slots__ = ("op", "ran_at", "ok", "evicted_at")
+
+    def __init__(self, call: _Call, now: float) -> None:
+        out = call.out if isinstance(call.out, dict) else {}
+        self.op = call.op
+        self.ran_at = call.ran_at
+        if out.get("reason_code") == "already_ran":    # a tombstone answer evicted again
+            self.ok = bool(out.get("committed"))
+        else:
+            self.ok = bool(out.get("ok", out.get("status") not in (_status.ERROR, _status.REFUSED,
+                                                                  _status.BLOCKED)))
+        self.evicted_at = now              # its AGE (the 7-day bound) only; the count bound is by order
+
+
+_TOMBSTONES: Dict[str, _Tombstone] = {}
+
+
+def _ran_at_text(ran_at: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ran_at)) if ran_at else "unknown"
+
+
+def _tombstone_answer(t: _Tombstone) -> Dict[str, Any]:
+    """The answer a tombstone gives the next identical call — once (it is consumed)."""
+    at = _ran_at_text(t.ran_at)
+    return {
+        "status": _status.REFUSED, "isError": False, "operation": t.op, "committed": t.ok,
+        "retryable": False, "reason_code": "already_ran", "ran_at": at,
+        "outcome": "ok" if t.ok else "failed",
+        "reason": (f"this '{t.op}' write already ran at {at} with outcome "
+                   f"{'ok' if t.ok else 'failed'}; its full result is no longer held, and it was "
+                   f"not run again"),
+        "hint": (f"call '{t.op}' again with the same arguments to run it anew — this answer is "
+                 f"given once"),
+    }
+
+
+def _kept_label(call: _Call, out: Any) -> Any:
+    """A result served to a LATER call (it finished before that call attached) says when it ran
+    (round 4, verifier M3): a result collected 3 hours late is labelled as 3 hours old."""
+    if not isinstance(out, dict):
+        return out
+    out = dict(out)
+    out["kept"] = {
+        "ran_at": _ran_at_text(call.ran_at),
+        "age_s": max(0, int(time.time() - call.ran_at)) if call.ran_at else None,
+        "note": (f"this '{call.op}' result was produced at {_ran_at_text(call.ran_at)} by an "
+                 f"earlier identical call and kept for you; it was not run again"),
+    }
+    return out
+
+
+def _serves(live: _Call, kind: Optional[str], key_now: Optional[str]) -> bool:
+    """May a new request attach to `live` (caller holds `_INFLIGHT_LOCK`)? (R-B2)"""
+    if not live.done.is_set():
+        # Live work is joined on (op, args) alone — the suite's own writes must not fork a second
+        # run (attack H3). A READ whose lever is already pulled is replaced instead (attack M2);
+        # a write is always joined: it must never run twice.
+        return live.is_write or not live.lever.is_set()
+    if live.is_write and (live.collectable or live.tickets):
+        return True                                    # collected / still being collected — never re-run
+    if live.cancelled:
+        return False                                   # a read that ended Cancelled: run again
+    if not (live.told_running or live.collectable):
+        return False
+    if live.op in TREE_KEYED:
+        # A finished result describes the tree it ran on: served only to a call on that tree — as
+        # it was at the start, or as the run left it (the suite's own writes must not fork a second
+        # run, attack H3). When the two differ the tree changed WHILE it ran — by an edit or by
+        # the run, the key cannot tell — and the result is served LABELLED, never as current
+        # (`_tree_changed`, B1 verifier M2).
+        if key_now is None:
+            return live.tree_start is None
+        return key_now in (live.tree_start, live.tree_end)
+    return True
+
+
+def _tree_changed(call: _Call, out: Any) -> Any:
+    """`out`, labelled when the tree changed while the call ran (TREE_KEYED ops; B1 verifier M2):
+    the result describes the tree as it was at the START, never the tree as it is now."""
+    if call.op not in TREE_KEYED or call.tree_start == call.tree_end or not isinstance(out, dict):
+        return out
+    out = dict(out)
+    out["tree_changed"] = {
+        "changed_while_running": True,
+        "note": (f"the working tree changed while this '{call.op}' ran — by an edit or by the run "
+                 f"itself; this result describes the tree as it was when the run started, not as "
+                 f"it is now. Call '{call.op}' again to run it on the tree as it is now."),
+    }
+    return out
 
 
 def _join_or_start(op: str, kind: Optional[str], fn: Callable[..., Any], args: tuple,
-                   kwargs: dict, call_path: str) -> "tuple":
-    """The in-flight call for exactly this (op, args), joined — or a new one, started. Returns
-    `(call, joined)`."""
+                   kwargs: dict, call_path: str, ticket: Optional[_Ticket] = None,
+                   key_now: Optional[str] = None) -> "tuple":
+    """The work for exactly this (op, args), joined — or a new one, started — with `ticket`
+    attached to it UNDER `_INFLIGHT_LOCK` (R-B2). Returns `(call, joined)`; `(None, False)` when
+    the ticket was already gone: a cancelled request starts nothing."""
     key = _call_key(op, args, kwargs)
     now = time.perf_counter()
+    ticket = ticket if ticket is not None else _Ticket()
     with _INFLIGHT_LOCK:
+        if ticket.gone:
+            return None, False
         _prune_kept(now)
         live = _INFLIGHT.get(key)
-        if live is not None and (not live.done.is_set() or live.told_running):
+        if live is not None and _serves(live, kind, key_now):
+            live.tickets.add(ticket)
+            ticket.call = live
+            if live.done.is_set():
+                ticket.kept = True                        # served late: labelled with its age
+                ticket.wake.set()
             return live, True
-        call = _INFLIGHT[key] = _Call(key)
+        stone = _TOMBSTONES.pop(key, None) if live is None and kind in _WRITE_KINDS else None
+        if stone is not None:
+            # An evicted, never-collected write: say it ran; never run it again (M3). The answer
+            # goes back into the table as a finished, COLLECTABLE write (round 5, verifier M2), so
+            # it is consumed exactly as a kept result is — when an answer is DELIVERED — and a
+            # join that is cancelled before then leaves it for the next identical call.
+            gone = _INFLIGHT[key] = _Call(key, op, kind)
+            gone.out = _tombstone_answer(stone)
+            gone.ran_at = stone.ran_at
+            gone.finished_at = stone.evicted_at
+            gone.finish_seq = _finished_next()
+            gone.collectable = True
+            gone.emitted = True                           # its work was evented when it ran
+            gone.done.set()
+            gone.tickets.add(ticket)
+            ticket.call = gone
+            ticket.wake.set()
+            return gone, True
+        call = _INFLIGHT[key] = _Call(key, op, kind, key_now)
+        call.tickets.add(ticket)
+        ticket.call = call
     scope = _tree_scope_for(op, call_path)                # P41 — which tree a code answer is for
 
     def _run() -> None:
+        from ..knowledge import cancel as C
+
+        def sink(**kw: Any) -> None:                      # I4 — numbers only, never `note`
+            for k in ("done", "total", "quiet_s"):
+                if isinstance(kw.get(k), (int, float)) and not isinstance(kw.get(k), bool):
+                    call.progress[k] = kw[k]
+            if isinstance(kw.get("unit"), str):
+                call.progress["unit"] = kw["unit"][:40]
         call.out = _coerce(op, None)       # what the caller gets if even the shaping below dies
         try:
-            call.out = _work(op, kind, fn, args, kwargs, call_path, scope)
+            with C.scope(call.lever), C.reporting(sink):
+                call.out = _work(op, kind, fn, args, kwargs, call_path, scope)
+        except C.Cancelled:
+            call.cancelled = True
+            call.out = _cancelled(op, call)
         except Exception as exc:                          # noqa: BLE001 - never leave a caller waiting
             call.out = _as_error(op, exc)
         finally:
             # ⚠ `perf_counter`, NOT `monotonic` (0.0.21 cut): on Windows `monotonic` ticks ~15.6 ms.
             call.elapsed_ms = int((time.perf_counter() - call.started) * 1000)
-            call.finished_at = time.perf_counter()
-            call.done.set()
+            if op in TREE_KEYED:
+                call.tree_end = tree_key(call_path)
+            with _INFLIGHT_LOCK:
+                call.finished_at = time.perf_counter()
+                call.finish_seq = _finished_next()
+                call.ran_at = time.time()
+                call.done.set()
+                _prune_kept(call.finished_at)             # L3: the cap holds between calls too
+                orphaned = not call.tickets and not call.told_running and not call.emitted
+                if orphaned:
+                    call.emitted = True
+                for t in list(call.tickets):
+                    t.wake.set()
+            if orphaned:
+                # Nobody is attached to hear it (its request was cancelled): the one event for
+                # this work is emitted here — `ok=False` when it ended cancelled.
+                _emit_tool_call(call_path, op, kind, call.out, call.elapsed_ms)
 
     threading.Thread(target=_run, name=f"mokata-mcp-{op}", daemon=True).start()
     return call, False
 
 
+def _cancelled(op: str, call: _Call) -> Dict[str, Any]:
+    """The answer for work that stopped at a checkpoint (0.0.29 R-B2). Never `error`: a cancel is
+    not a fault. What it says it did comes from the lever's record (attack M3), never from the
+    exception's type."""
+    done = list(call.lever.recorded)
+    out: Dict[str, Any] = {
+        "status": _status.REFUSED, "isError": False, "operation": op,
+        "committed": bool(done), "retryable": True, "reason_code": "cancelled",
+        "reason": (f"the '{op}' operation was cancelled after it recorded: {', '.join(done)}"
+                   if done else
+                   f"the '{op}' operation was cancelled before its commit point — nothing "
+                   f"changed"),
+        "hint": f"call '{op}' again to start it",
+    }
+    return out
+
+
 def _work(op: str, kind: Optional[str], fn: Callable[..., Any], args: tuple, kwargs: dict,
           call_path: str, scope: Any) -> Dict[str, Any]:
     """Run one tool body and shape its outcome (R2/R3/D1d/P41/AXI-OUT) — on the call's worker."""
+    from ..knowledge import cancel as C
     from ..tree_scope import serving
-    gate = _write_lock(call_path) if kind in ("write", "approve") else None
+    gate = _write_lock(call_path) if kind in _WRITE_KINDS else None
     try:
         if gate is not None:
-            gate.acquire()
+            # 0.0.29 R-B2 (M2e): the wait for the per-repo write gate is cancellable — sliced,
+            # with the lever looked at between slices.
+            while not gate.acquire(timeout=_GATE_SLICE_S):
+                C.checkpoint()
         try:
             with serving(scope):
                 result = fn(*args, **kwargs)
         finally:
             if gate is not None:
                 gate.release()
+    except C.Cancelled:
+        raise                                             # a control signal, never a failure
     except ValidationError as bad:
         # D1d — a tool-local validator raises from inside the body. It is still a caller fault, so
         # it converts through the SAME single site as the pre-step's, ahead of R2.
@@ -471,6 +847,15 @@ def _finish(call: _Call) -> None:
     with _INFLIGHT_LOCK:
         if _INFLIGHT.get(call.key) is call:
             del _INFLIGHT[call.key]
+
+
+def cancel_all() -> int:
+    """Server exit (R-B6): pull every lever. Returns how many pieces of work were live."""
+    with _INFLIGHT_LOCK:
+        calls = [c for c in _INFLIGHT.values() if not c.done.is_set()]
+    for c in calls:
+        c.lever.pull()
+    return len(calls)
 
 
 _TOOL_LIMITER: Any = None
@@ -494,17 +879,89 @@ def _tool_limiter() -> Any:
     return _TOOL_LIMITER
 
 
+def _with_ticket(ticket: _Ticket, served: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    _TICKET.ticket = ticket
+    try:
+        return served(*args, **kwargs)
+    finally:
+        _TICKET.ticket = None
+
+
 def _offloop(served: Callable[..., Any]) -> Callable[..., Any]:
     """O14 — the handler FastMCP registers: async, and it runs `_serve` on a worker thread, so the
     event loop (pings, cancellations, every other parallel call) never waits on a tool body.
+    0.0.29 R-B2: the request's `_Ticket` is made HERE, before the worker starts, and a cancel of the
+    request (the SDK cancels this coroutine's scope on `notifications/cancelled`) cancels the
+    ticket — which stops the work iff no other request is attached to it.
     Signature-transparent: `functools.wraps` carries `__wrapped__` down to the tool function, so the
     tool schema FastMCP builds is the unwrapped function's, byte for byte."""
     @functools.wraps(served)
     async def handler(*args: Any, **kwargs: Any) -> Any:
         import anyio
-        return await anyio.to_thread.run_sync(functools.partial(served, *args, **kwargs),
-                                              abandon_on_cancel=True, limiter=_tool_limiter())
+        ticket = _Ticket()
+        receipt = _receipt_key()
+        if receipt is not None:
+            ticket.deferred = True
+            _RECEIPTS[receipt] = ticket
+        try:
+            return await anyio.to_thread.run_sync(
+                functools.partial(_with_ticket, ticket, served, *args, **kwargs),
+                abandon_on_cancel=True, limiter=_tool_limiter())
+        except BaseException:
+            # Cancelled, or the request failed: nothing of this result was written (M2).
+            if receipt is not None:
+                _RECEIPTS.pop(receipt, None)
+            ticket.undelivered()
+            raise
     return handler
+
+
+# Round 5 (round-4 verifier M2) — the DELIVERY point. A finished write's result (a kept result or
+# a tombstone answer) is consumed only when the response carrying it is WRITTEN to the client: the
+# SDK's `ServerSession._send_response`, wrapped once by `_install_delivery_hook`. A result frame
+# delivers; an error frame (`Request cancelled`, a failure) or a write that raised does not, and
+# the result stays for the next identical call. Keyed by (session, request id).
+_RECEIPTS: Dict[Any, "_Ticket"] = {}
+
+
+def _receipt_key() -> Any:
+    """`(id(session), request_id)` of the MCP request being handled, or None off the SDK path."""
+    try:
+        from mcp.server.lowlevel.server import request_ctx
+        ctx = request_ctx.get()
+    except (ImportError, LookupError):
+        return None
+    return (id(ctx.session), ctx.request_id)
+
+
+def _delivering(send: Callable[..., Any]) -> Callable[..., Any]:
+    """`send` (the SDK's `_send_response`), resolving the request's receipt after the write."""
+    async def _send_response(self: Any, request_id: Any, response: Any) -> None:
+        from mcp.types import ErrorData
+        ticket = _RECEIPTS.pop((id(self), request_id), None)
+        try:
+            await send(self, request_id, response)
+        except BaseException:
+            if ticket is not None:
+                ticket.undelivered()
+            raise
+        if ticket is not None:
+            if isinstance(response, ErrorData):
+                ticket.undelivered()
+            else:
+                ticket.delivered()
+    _send_response._mokata_delivery = True  # type: ignore[attr-defined]
+    return _send_response
+
+
+def _install_delivery_hook() -> None:
+    """Wrap `ServerSession._send_response` once (idempotent). The SDK is pinned `<2`; a missing
+    seam is an ImportError/AttributeError at server build, never a silent fallback."""
+    from mcp.server.session import ServerSession
+    current = ServerSession._send_response
+    if getattr(current, "_mokata_delivery", False):
+        return
+    ServerSession._send_response = _delivering(current)  # type: ignore[method-assign]
 
 
 def _serve(fn: Callable[..., Any], name: Optional[str] = None,
@@ -514,6 +971,10 @@ def _serve(fn: Callable[..., Any], name: Optional[str] = None,
     a structured, single-vocab `status` — `running` while the work continues past the budget (O14:
     a re-call with the same arguments joins it), `error` on any uncaught exception (R2) or
     None/non-dict return (R3) — reclaiming the outcome from silence.
+
+    0.0.29 R-B2: the request is attached to its work by a `_Ticket` (made by `_offloop`, or here
+    for a direct call). A cancelled request answers nothing and finishes nothing; a request that
+    answers detaches without stopping the work.
 
     R4 progress/heartbeat stays a documented no-op (see the module note); `running` carries
     liveness in its place.
@@ -536,24 +997,64 @@ def _serve(fn: Callable[..., Any], name: Optional[str] = None,
         except ValidationError as bad:
             return refusal(bad, op)
 
+        ticket = getattr(_TICKET, "ticket", None) or _Ticket()
         call_path = _call_path(args, kwargs)
         _spawn_registration(call_path)                    # R5 — concurrent, never gates the body
         budget = _mcp_timeout_for(op, call_path)          # R1/R7 — per-tool reply budget
-        call, joined = _join_or_start(op, kind, fn, args, kwargs, call_path)
-        call.done.wait(budget)
+        key_now = tree_key(call_path) if op in TREE_KEYED else None
+        call, joined = _join_or_start(op, kind, fn, args, kwargs, call_path, ticket, key_now)
+        if call is None:                                  # cancelled before it could attach
+            return None
+        ticket.wake.wait(budget)
 
-        if not call.done.is_set():                        # O14 — still working: SAY so, keep going
-            call.told_running = True
+        with _INFLIGHT_LOCK:
+            gone = ticket.gone
+            done = call.done.is_set()
+            if not gone and not done:                     # O14 — still working: SAY so, keep going
+                call.told_running = True
+            # Round 5 (verifier M2): a finished WRITE answered through the SDK stays attached
+            # until its response is written (`_Ticket.delivered`); a cancel before then keeps it.
+            defer = not gone and done and call.is_write and ticket.deferred
+            if defer:
+                ticket.pending = True
+            elif not gone:
+                _leave(ticket, call)                      # answering detaches, never pulls
+            # ONE event per piece of work, claimed once under the lock: by the request that
+            # answers it (running, or its result), else by a finished call's last cancelled
+            # waiter (B1 verifier M1: the cancel landed after the finish), else by the worker.
+            # (A `running` answer is evented every time, as before.)
+            emit = (not gone and not done) or not call.emitted and (
+                (not gone) or (done and not call.tickets and not call.told_running))
+            if emit:
+                call.emitted = True
+        if gone:
+            if emit:
+                _emit_tool_call(call_path, op, kind, call.out, call.elapsed_ms)
+            return None                                   # nobody is listening (attack H4)
+        if not done:
             elapsed = time.perf_counter() - call.started
-            out = with_remedy(_still_running(op, budget, elapsed, call.call_id))
-            _emit_tool_call(call_path, op, kind, out, int(elapsed * 1000))
+            out = with_remedy(_still_running(op, budget, elapsed, call.call_id,
+                                             dict(call.progress)))
+            if emit:
+                _emit_tool_call(call_path, op, kind, out, int(elapsed * 1000))
             return out
-        _finish(call)
+        collected = joined and call.collectable
+        if not defer:
+            _finish(call)                                 # a direct caller holds it: delivered
         # R1.S1b — the event's real duration, measured by the call itself (a joined re-call reports
         # the work's duration, not the re-call's wait). ONE event per piece of work: a re-call that
-        # joined does not event it a second time.
-        out = call.out
-        if not joined:
+        # joined after the work's event was claimed does not event it a second time.
+        out = _tree_changed(call, call.out)
+        if ticket.kept:                                   # it finished before this call came
+            out = _kept_label(call, out)
+        if collected and isinstance(out, dict):
+            out = dict(out)
+            out["collected"] = {
+                "cancelled_at": round(call.cancelled_at, 3),
+                "note": (f"this is the result of an earlier identical '{op}' call that was "
+                         f"cancelled while it ran; it was not run again"),
+            }
+        if emit:
             _emit_tool_call(call_path, op, kind, out, call.elapsed_ms)
         return out
 
@@ -856,6 +1357,7 @@ def build_server() -> Any:
     state = _public_module().sdk_state()
     if not state.usable:
         raise RuntimeError(f"the mokata MCP server cannot be built: {state.diagnosis()}")
+    _install_delivery_hook()                              # round 5: consume on delivery (M2)
     try:
         from mcp.server.fastmcp import FastMCP
         from mcp.types import ToolAnnotations
@@ -930,10 +1432,21 @@ CHILD_PROMPT_ENV = {"GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "", "SSH_ASKPASS_
 CHILD_SSH_COMMAND = "ssh -o BatchMode=yes"
 
 
-def _disable_child_prompts() -> None:
+#: Windows only (0.0.29 `WINDOWS-GIT-ASKPASS-EMPTY`): there `os.environ["GIT_ASKPASS"] = ""` REMOVES
+#: the variable, so git fell through to `core.askPass` / `SSH_ASKPASS` and a GUI prompt could open.
+#: `SSH_ASKPASS` is removed and Git Credential Manager is told never to be interactive.
+CHILD_PROMPT_ENV_WINDOWS = {"GCM_INTERACTIVE": "never"}
+CHILD_PROMPT_POP_WINDOWS = ("SSH_ASKPASS",)
+
+
+def _disable_child_prompts(nt: Optional[bool] = None) -> None:
     import os
     os.environ.update(CHILD_PROMPT_ENV)
     os.environ.setdefault("GIT_SSH_COMMAND", CHILD_SSH_COMMAND)
+    if (os.name == "nt") if nt is None else nt:
+        os.environ.update(CHILD_PROMPT_ENV_WINDOWS)
+        for k in CHILD_PROMPT_POP_WINDOWS:
+            os.environ.pop(k, None)
 
 
 def _park_stdin() -> Optional[int]:
@@ -1035,8 +1548,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         sys.stderr.write(f"mokata-mcp: {state.diagnosis()}\n")
         return 1
 
-    rpc_out = _park_stdout() if rpc_in is not None else None
+    # 0.0.29 (M1): fd 1 is parked whenever it can be — a closed fd 0 no longer un-parks it.
+    rpc_out = _park_stdout()
     _disable_child_prompts()
+    # 0.0.29 R-B6 — nothing this server starts outlives it: on POSIX every door tree runs under the
+    # lifeline shim (ends its group if this process dies, SIGKILL included).
+    from .. import quiet_spawn
+    if not quiet_spawn.enable_lifeline() and os.name != "nt":
+        sys.stderr.write("mokata-mcp: the process lifeline is unavailable here; processes a tool "
+                         "starts may outlive a server that is killed\n")
 
     # RUN-ID-DRIFT — register this window EAGERLY, at process start, so a window is in the registry
     # from the moment its server exists (a window that had not yet used mokata was otherwise pruned
@@ -1055,8 +1575,41 @@ def main(argv: Optional[List[str]] = None) -> int:
     # calls instead of starting (and leaking) one per call.
     from ..knowledge.crg_client import enable_session_pool
     enable_session_pool()
-    _run_stdio(_public_module().build_server(), rpc_in, rpc_out)
+    _orderly_exit_on_signals()
+    try:
+        _run_stdio(_public_module().build_server(), rpc_in, rpc_out)
+    finally:
+        _end_everything()
     return 0
+
+
+def _end_everything() -> None:
+    """R-B6, normal exit / EOF / SIGTERM / SIGHUP (both serve paths): every lever pulled, every door
+    tree ended. Never raises."""
+    try:
+        cancel_all()
+    finally:
+        from .. import quiet_spawn
+        quiet_spawn.end_all()
+
+
+def _orderly_exit_on_signals() -> None:
+    """SIGTERM (and SIGHUP on POSIX, unless it is ignored — `nohup`) end the server through its
+    `finally`, so `_end_everything` runs instead of the process just dying."""
+    import signal
+
+    def _exit(_signum: int, _frame: Any) -> None:
+        raise SystemExit(0)
+    for name in ("SIGTERM", "SIGHUP"):
+        sig = getattr(signal, name, None)
+        if sig is None or (name == "SIGHUP" and os.name == "nt"):
+            continue
+        try:
+            if signal.getsignal(sig) == signal.SIG_IGN:
+                continue
+            signal.signal(sig, _exit)
+        except (OSError, ValueError):
+            continue
 
 
 def _run_stdio(server: Any, rpc_in: Optional[int] = None, rpc_out: Optional[int] = None) -> None:
@@ -1075,7 +1628,7 @@ def _run_stdio(server: Any, rpc_in: Optional[int] = None, rpc_out: Optional[int]
         from mcp.server.fastmcp import FastMCP
     except ImportError:                                   # pragma: no cover - checked in main
         FastMCP = None                                    # type: ignore[assignment]
-    if FastMCP is None or not isinstance(server, FastMCP) or rpc_in is None or rpc_out is None:
+    if FastMCP is None or not isinstance(server, FastMCP) or rpc_out is None:
         _unpark(rpc_in, rpc_out)                          # the SDK (or a double) reads fds 0/1
         server.run()
         return
@@ -1083,8 +1636,10 @@ def _run_stdio(server: Any, rpc_in: Optional[int] = None, rpc_out: Optional[int]
     import anyio
     from mcp.server.stdio import stdio_server
 
-    rpc_read = anyio.wrap_file(TextIOWrapper(os.fdopen(rpc_in, "rb"), encoding="utf-8",
-                                             errors="replace"))
+    # 0.0.29 (M1): fd 0 could not be parked → the SDK reads its own stdin, and the protocol
+    # OUTPUT still goes to the parked descriptor, never to fd 1.
+    rpc_read = None if rpc_in is None else anyio.wrap_file(
+        TextIOWrapper(os.fdopen(rpc_in, "rb"), encoding="utf-8", errors="replace"))
     rpc_write = anyio.wrap_file(TextIOWrapper(os.fdopen(rpc_out, "wb"), encoding="utf-8"))
     low = server._mcp_server                              # FastMCP's own lowlevel server (mcp<2)
 

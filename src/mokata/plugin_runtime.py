@@ -31,10 +31,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Mapping, Optional, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 
 from . import __version__
 
@@ -92,22 +93,88 @@ def on_plugin_route(env: Optional[Mapping[str, str]] = None) -> bool:
     return bool(env.get("CLAUDE_PLUGIN_ROOT") or env.get("MOKATA_VIA_PLUGIN"))
 
 
+#: Claude Code BUILT-IN slash commands that share a name with a mokata command template
+#: (0.0.23 B3, `COMMAND-NAMES-COLLIDE-WITH-CLAUDE-CODE-BUILTINS`). A project-scope command is
+#: written BARE (`.claude/commands/<name>.md`) and Claude Code's built-in wins, so `/review` in a
+#: `mokata init`-ed repo silently ran Claude Code's review, not mokata's. These are written as
+#: `mokata-<name>.md` instead. The plugin's namespaced `/mokata:<name>` is unaffected.
+#: `tests/test_b3_the_plugin_stands_alone.py` reds when a template collides and is not listed.
+#: 0.0.29 C1: lives HERE (stdlib-only) so `slash_command` — called from hooks — imports nothing
+#: heavy; `harness_setup` imports it back for the writers.
+CLAUDE_CODE_BUILTIN_COMMANDS = frozenset({
+    "add-dir", "agents", "bashes", "bug", "clear", "code-review", "compact", "config", "context",
+    "cost", "doctor", "exit", "export", "feedback", "help", "hooks", "ide", "init", "login",
+    "logout", "mcp", "memory", "model", "output-style", "permissions", "plugin", "pr-comments",
+    "release-notes", "resume", "review", "rewind", "security-review", "status", "statusline",
+    "terminal-setup", "todos", "upgrade", "usage", "vim",
+})
+
+#: Every shipped command template opens with this description prefix — it is how a file in a
+#: harness's commands dir is recognised as MOKATA's (never a user's own `/review`).
+MOKATA_COMMAND_MARK = "mokata ·"
+
+#: How much of a command file is read to find its frontmatter description (one bounded read).
+_COMMAND_HEAD_BYTES = 2048
+
+
+def _frontmatter_description(md: str) -> str:
+    """Best-effort pull of the `description:` line from a template's frontmatter."""
+    if md.startswith("---"):
+        end = md.find("\n---", 3)
+        block = md[3:end] if end != -1 else md
+        for line in block.splitlines():
+            s = line.strip()
+            if s.lower().startswith("description:"):
+                return s.split(":", 1)[1].strip()
+    return ""
+
+
+def is_mokata_command_file(path: str) -> bool:
+    """Is this command file MOKATA's? Its frontmatter `description:` starts with the mark — read
+    from the description only, so a body that imitates the mark is still foreign
+    (`SLASH-COMMAND-FOREIGN-FILE`). One bounded read (BOM and CRLF tolerated); a file that cannot
+    be read is not ours."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(_COMMAND_HEAD_BYTES).decode("utf-8", errors="replace")
+    except OSError:
+        return False
+    head = head.lstrip("﻿").replace("\r\n", "\n")
+    return _frontmatter_description(head).startswith(MOKATA_COMMAND_MARK)
+
+
+def bare_command_name(name: str) -> str:
+    """The stem the CLI route writes for skill `name`: `mokata-<name>` for a name Claude Code owns
+    (never `/review`, `/init`), else `<name>`."""
+    return f"mokata-{name}" if name in CLAUDE_CODE_BUILTIN_COMMANDS else name
+
+
+def _cwd_root() -> Optional[str]:
+    """The repo the process stands in, resolved the way the rest of mokata resolves it
+    (`repo_identity.find_project_root`); None when the cwd is gone."""
+    try:
+        from .repo_identity import find_project_root
+        return find_project_root(".")
+    except OSError:
+        return None
+
+
 def slash_command(name: str, root: Optional[str] = None,
                   env: Optional[Mapping[str, str]] = None, home: Optional[str] = None) -> str:
     """The slash command a user types for the mokata skill `name`, as it is ACTUALLY INSTALLED:
-    on the plugin route (env) `/mokata:<name>`; else `/<bare>` when `mokata init` wrote that
-    command file in the project (`<root>/.claude/commands/`) or the user home; else the plugin's
-    `/mokata:<name>`. `<bare>` is `mokata-<name>` for a name Claude Code owns (what init writes —
-    never `/review`, `/init`). Every text that tells a human or the IDE terminal to type one asks
-    here, passing the repo root it knows."""
+    on the plugin route (env) `/mokata:<name>` — even beside a bare file; else `/<bare>` when
+    `<bare>.md` in the project (`<root>/.claude/commands/`) or the user home carries mokata's mark
+    (another tool's `explain.md` never makes mokata say `/explain`); else `/mokata:<name>`, the
+    always-valid form when the route is unknown. Every text that tells a human or the IDE terminal
+    to type one asks here, passing the repo root it knows. Cost: at most two stats and one 2 KB
+    read; no walk, nothing imported beyond `harness_paths` (a hook may call it)."""
     namespaced = f"/mokata:{name}"
     if on_plugin_route(env):
         return namespaced
-    from pathlib import Path
     from .harness_paths import scope_base
-    from .harness_setup import CLAUDE_CODE_BUILTIN_COMMANDS
-    bare = f"mokata-{name}" if name in CLAUDE_CODE_BUILTIN_COMMANDS else name
+    bare = bare_command_name(name)
     bases = []
+    root = root or _cwd_root()           # a caller without a root still gets THIS repo's route
     if root:
         bases.append(scope_base("project", root))
     try:
@@ -115,9 +182,54 @@ def slash_command(name: str, root: Optional[str] = None,
     except (RuntimeError, OSError):          # no resolvable home
         pass
     for base in bases:
-        if (Path(base) / ".claude" / "commands" / f"{bare}.md").is_file():
+        path = os.path.join(str(base), ".claude", "commands", f"{bare}.md")
+        if os.path.isfile(path) and is_mokata_command_file(path):
             return f"/{bare}"
     return namespaced
+
+
+#: A command token in mokata's own text. Placeholders (`/mokata:<next>`) and format fields
+#: (`/mokata:{name}`) do not match: they are not names.
+_COMMAND_TOKEN = re.compile(r"/mokata:([a-z][a-z0-9-]*)")
+
+
+def localize_commands(text: str, root: Optional[str] = None,
+                      env: Optional[Mapping[str, str]] = None, home: Optional[str] = None,
+                      installed: Optional[Iterable[str]] = None) -> str:
+    """Render every `/mokata:<name>` in `text` the way THIS route installed it: `slash_command` once
+    per DISTINCT name, nothing else. `installed` is for a WRITER (setup, before the files exist):
+    the names it is installing as bare commands render `/<bare>`, every other token is left as
+    written. The replacement is built from the name, never copied from the surrounding input."""
+    if "/mokata:" not in text:
+        return text
+    have = None if installed is None else frozenset(installed)
+    cache: Dict[str, str] = {}
+
+    def render(m: "re.Match[str]") -> str:
+        name = m.group(1)
+        if name not in cache:
+            if have is not None:
+                cache[name] = f"/{bare_command_name(name)}" if name in have else m.group(0)
+            else:
+                cache[name] = slash_command(name, root, env, home)
+        return cache[name]
+    return _COMMAND_TOKEN.sub(render, text)
+
+
+def plugin_installed(home: Optional[str] = None,
+                     env: Optional[Mapping[str, str]] = None) -> bool:
+    """Is the mokata Claude Code plugin installed here? This process serves the plugin route (env),
+    or a Claude session RECORDED the plugin's root and its manifest declares mokata's MCP server
+    (`mcp_admin.plugin_shadow`). Disclosed limit: a plugin installed before any Claude session ran
+    has no recorded root yet and is not seen (no `installed_plugins.json` reader, ruling C-Q7).
+    Detection failing reads as "not installed": the caller then asks as it always did."""
+    if on_plugin_route(env):
+        return True
+    try:
+        from .mcp_admin import plugin_shadow
+        return plugin_shadow(home) is not None
+    except (ImportError, OSError, ValueError):   # detection failing = ask as before
+        return False
 
 
 def plugin_data_dir(env: Optional[Mapping[str, str]] = None) -> Optional[str]:

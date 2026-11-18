@@ -21,7 +21,9 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
+
+from .plugin_runtime import localize_commands
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,12 @@ class CommandSurface:
     @property
     def mcp(self) -> Tuple[str, ...]:
         return self.mcp_read + self.mcp_write
+
+    def described(self, root: Optional[str] = None) -> str:
+        """The note, with each command named the way THIS route installed it. Rendered here, at the
+        read, never when the matrix is built: the matrix is made once at import, the route is a fact
+        about the repo and the moment."""
+        return localize_commands(self.note, root)
 
     @property
     def in_harness(self) -> bool:

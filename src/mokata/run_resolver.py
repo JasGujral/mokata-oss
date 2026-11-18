@@ -113,6 +113,7 @@ from typing import Optional, Set, Tuple
 
 from .state import StateStore
 from .tdd_state import TDD_STATE_PREFIX, state_dir
+from .plugin_runtime import localize_commands
 
 # The pipeline-run checkpoint (owner: `govern.resume.CHECKPOINT_PREFIX`). A LITERAL here, not an
 # import, and the reason is a latency contract rather than taste: `gate_hook` imports this module at
@@ -683,8 +684,8 @@ def unresolved_reason(res: RunResolution, *, flag: str = "--run") -> str:
         return (f"{n} runs have state in this repo and none of them is identifiably yours, so "
                 f"mokata will not guess which one you mean: {shown}{more}. "
                 f"-> to unblock: name it — `{flag} <run id>` (`mokata sessions` lists them).")
-    return ("no tracked run in this repo. -> to unblock: start one with /mokata:brainstorm, "
-            "or name an existing run explicitly.")
+    return (localize_commands("no tracked run in this repo. -> to unblock: start one with /mokata:brainstorm, "
+            "or name an existing run explicitly.", None))
 
 
 # ======================================================================================

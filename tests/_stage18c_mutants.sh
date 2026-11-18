@@ -90,16 +90,16 @@ mutant "M04 HOLE 6 WEAKENED — the restore accepts ANYTHING (a third party is o
   '    return 0' "$T"
 
 mutant "M05 the apply stops checking the source is what the plan hashed" "$COPY" \
-  'if hashlib.sha256(source.encode("utf-8")).hexdigest() != sys.argv[5]:' \
+  'if hashlib.sha256(raw).hexdigest() != sys.argv[5]:' \
   'if False:' "$T"
 
 mutant "M06 the plan WRITES — the two-step split collapses back to one" "$COPY" \
   'if mode == "plan":
-    print(hashlib.sha256(mutated.encode("utf-8")).hexdigest())
+    print(hashlib.sha256(mutated).hexdigest())
     sys.exit(0)' \
   'if mode == "plan":
-    open(path, "w", encoding="utf-8").write(mutated)
-    print(hashlib.sha256(mutated.encode("utf-8")).hexdigest())
+    open(path, "wb").write(mutated)
+    print(hashlib.sha256(mutated).hexdigest())
     sys.exit(0)' "$T"
 
 # ---- DEFECT 2: a signal ENDS the run ----------------------------------------------------------
@@ -126,8 +126,8 @@ trap' \
 # ---- the guards the fix must NOT buy its green with ------------------------------------------
 
 mutant "M11 the plan/apply staleness check inverted" "$COPY" \
-  'if hashlib.sha256(source.encode("utf-8")).hexdigest() != sys.argv[5]:' \
-  'if hashlib.sha256(source.encode("utf-8")).hexdigest() == sys.argv[5]:' "$T"
+  'if hashlib.sha256(raw).hexdigest() != sys.argv[5]:' \
+  'if hashlib.sha256(raw).hexdigest() == sys.argv[5]:' "$T"
 
 mutant "M12 a refusal stops preserving the pristine copy" "$COPY" \
   '            mv -f "$target.bak" "$keep"' \

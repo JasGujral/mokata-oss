@@ -43,6 +43,7 @@ import tempfile
 import unittest
 
 from _support import iter_worktree_files
+import _hermetic_git  # noqa: E402  (0.0.29 D1: the one hermetic git door)
 
 from mokata.session_worktree import worktree_path_for
 
@@ -51,7 +52,7 @@ def _git(*args, cwd):
     subprocess.run(
         ["git", *args], cwd=cwd, check=True,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull},
+        env=_hermetic_git.git_env(),
     )
 
 

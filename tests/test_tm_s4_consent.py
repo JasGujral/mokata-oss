@@ -23,6 +23,14 @@ from mokata import MANIFEST_FILENAME, MOKATA_DIR, config_cmd, team_audit as TA
 from mokata.config import Surface
 from mokata.govern.ledger import AuditLedger
 
+# 0.0.29 W2-final-2: the repos these tests publish from live under a LOW-ENTROPY base. `init`'s
+# ledger entry names its files by absolute path, and that entry is in the egress payload; on a
+# macOS runner `$TMPDIR` is `/var/folders/<2>/<28 random chars>/T`, which the entropy backstop
+# rightly blocks as a token, so publishing was refused on some runners and not others (mirror
+# runs 43935587378 macOS 3/4, 43954985486 macOS 1/4). POSIX `/tmp` has no such component;
+# Windows' temp dir has none either, so it keeps the default.
+_TMP = "/tmp" if os.name == "posix" and os.path.isdir("/tmp") else None
+
 _SECRET_DSN = "postgres://app_user" + ":" + "tok3n_pw" + "@" + "db.internal:5432/app"
 _ACTOR_VARS = ("MOKATA_ACTOR", "USER", "USERNAME", "LOGNAME")
 _NO = lambda _t: False
@@ -88,7 +96,7 @@ class _FakeAuditPg:
 
 class TestGrantRevoke(unittest.TestCase):
     def test_grant_is_gated_and_ledgered(self):
-        with tempfile.TemporaryDirectory() as d, _Actor():
+        with tempfile.TemporaryDirectory(dir=_TMP) as d, _Actor():
             s = _repo(d)
             ledger = AuditLedger.from_mokata_dir(s.mokata_dir)
             res = TA.grant_standing_consent(d, s, assume_yes=True, ledger=ledger,
@@ -100,14 +108,14 @@ class TestGrantRevoke(unittest.TestCase):
             self.assertTrue(events and events[-1]["decision"] == "granted")
 
     def test_grant_declined_writes_nothing(self):
-        with tempfile.TemporaryDirectory() as d, _Actor():
+        with tempfile.TemporaryDirectory(dir=_TMP) as d, _Actor():
             s = _repo(d)
             res = TA.grant_standing_consent(d, s, confirm=_NO, out=lambda _m: None)
             self.assertFalse(res.granted)
             self.assertFalse(TA.has_standing_consent(Surface.load(d).manifest.data))
 
     def test_revoke_is_gated_and_ledgered(self):
-        with tempfile.TemporaryDirectory() as d, _Actor():
+        with tempfile.TemporaryDirectory(dir=_TMP) as d, _Actor():
             s = _repo(d)
             TA.grant_standing_consent(d, s, assume_yes=True, out=lambda _m: None)
             ledger = AuditLedger.from_mokata_dir(s.mokata_dir)
@@ -126,7 +134,7 @@ def _enable_sharing(d):
 
 class TestShareHonorsConsent(unittest.TestCase):
     def test_consent_publishes_without_a_per_batch_prompt(self):
-        with tempfile.TemporaryDirectory() as d, _Actor():
+        with tempfile.TemporaryDirectory(dir=_TMP) as d, _Actor():
             s = _repo(d)
             _enable_sharing(d)
             led = AuditLedger.from_mokata_dir(s.mokata_dir)
@@ -141,7 +149,7 @@ class TestShareHonorsConsent(unittest.TestCase):
             self.assertGreaterEqual(res.published, 1)
 
     def test_secret_in_batch_is_still_blocked_despite_consent(self):
-        with tempfile.TemporaryDirectory() as d, _Actor():
+        with tempfile.TemporaryDirectory(dir=_TMP) as d, _Actor():
             s = _repo(d)
             _enable_sharing(d)
             led = AuditLedger.from_mokata_dir(s.mokata_dir)
@@ -157,7 +165,7 @@ class TestShareHonorsConsent(unittest.TestCase):
 
 class TestOnboardingCapture(unittest.TestCase):
     def test_capture_grants_with_a_shared_context(self):
-        with tempfile.TemporaryDirectory() as d, _Actor():
+        with tempfile.TemporaryDirectory(dir=_TMP) as d, _Actor():
             s = _repo(d)
             cap = TA.capture_standing_consent(d, s, "MOKATA_PG_DSN",
                                               {"MOKATA_PG_DSN": "postgres://h/db"},
@@ -166,7 +174,7 @@ class TestOnboardingCapture(unittest.TestCase):
             self.assertTrue(TA.has_standing_consent(Surface.load(d).manifest.data))
 
     def test_capture_skips_without_a_shared_context(self):
-        with tempfile.TemporaryDirectory() as d, _Actor():
+        with tempfile.TemporaryDirectory(dir=_TMP) as d, _Actor():
             s = _repo(d)
             cap = TA.capture_standing_consent(d, s, "MOKATA_PG_DSN", {},
                                               assume_yes=True, out=lambda _m: None)

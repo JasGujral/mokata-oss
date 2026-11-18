@@ -1466,38 +1466,83 @@ def _matches_known_shape(candidate: str) -> Optional[str]:
     """The name of the known-secret shape this candidate IS, or None.
 
     Tests the candidate raw and separator-stripped, `fullmatch` in both cases: the candidate
-    must BE the shape, never merely contain or begin with it."""
-    for form in (candidate, _strip_separators(candidate)):
+    must BE the shape, never merely contain or begin with it.
+
+    A THIRD form (0.0.29 H1): the candidate with its TAG pieces (`_SLUG_TAG_RE`) removed, so a
+    key chunked around an injected project tag is still the key. The tag allowance in
+    `_is_slug` must never be a way to hide a floor shape."""
+    forms = [candidate, _strip_separators(candidate)]
+    pieces = _SLUG_SEP_RE.split(candidate)
+    if len(pieces) > 1:
+        untagged = "".join(p for p in pieces if not _SLUG_TAG_RE.fullmatch(p))
+        if untagged and untagged != forms[1]:
+            forms.append(untagged)
+    for form in forms:
         for name, rx in _KNOWN_SHAPES:
             if rx.fullmatch(form):
                 return name
     return None
 
 
-def _is_lowercase_slug(tok: str) -> bool:
-    """A lowercase separated slug — path component, temp-dir name, filename stem, cache key.
+# A project TAG piece: one or two upper-case letters and up to two digits, nothing else
+# (`I`, `B5`, `W5`, `AC10`). Mokata's lane/row/acceptance names carry one between lower-case
+# word pieces (`0028‐I‐mcp‐reliability`; U+2010 stands for the separator in these comments so
+# the module does not trip the guard it describes). 0.0.29 H1.
+_SLUG_TAG_RE = re.compile(r"[A-Z]{1,2}[0-9]{0,2}")
+_SLUG_LOWER_RE = re.compile(r"[a-z0-9]+")
+_SLUG_MAX_TAGS = 2
 
-    This is the 0.0.14 predicate's ONE sound half, kept deliberately. Word structure cannot
-    replace it: real slugs are frequently not word-shaped at all. The case that forced this
-    is macOS's own per-user temp directory, which is unavoidable in any content that mentions
-    a temp path:
+
+def _is_slug(tok: str) -> bool:
+    """A separated slug — path component, temp-dir name, filename stem, cache key, or one of
+    the project's own lane/row names with a short upper-case TAG piece in it.
+
+    THE LOWER-CASE HALF is the 0.0.14 predicate's one sound half, kept deliberately and
+    byte-identical when no piece is upper-case. Word structure cannot replace it: real slugs
+    are frequently not word-shaped at all. The case that forced it is macOS's own per-user
+    temp directory, which is unavoidable in any content that mentions a temp path:
 
         /var/folders/y9/r2xr67z10lb6p5n3t_m1_c740000gn/T/
 
-    Blocking that would be a far worse false positive than the one this stage fixes — it
-    fires for every macOS user. Generated credentials are overwhelmingly mixed-case or hex,
-    so exempting the lowercase-with-separators shape costs little.
+    Blocking that would fire for every macOS user. It does NOT apply when every separated
+    piece is pure hex: hex chunks joined by `_`/`-` are a plausible way to split a key past a
+    contiguous-run matcher. (Canonical UUIDs are exempted BEFORE this, by shape.)
 
-    TIGHTER than 0.0.14 in one respect: it does NOT apply when every separated piece is pure
-    hex. Hex chunks joined by `_`/`-` are a plausible way to split a key past a
-    contiguous-run matcher, and they used to be exempt purely for lacking a capital letter.
-    (Canonical UUIDs are also all-hex pieces — they are exempted BEFORE this, by shape.)"""
-    if any(c.isupper() for c in tok):
-        return False
+    THE TAG HALF (0.0.29 H1, `SECRET-GUARD-ENTROPY-ON-NAMES`). Mokata names lanes, rows and
+    acceptance criteria with a short upper-case tag between lower-case pieces, and the guard
+    blocked its own stems written bare (in prose, a `-k` id). A piece may instead be a TAG
+    (`[A-Z]{1,2}[0-9]{0,2}`), when ALL of these hold:
+      * at most two pieces are tags;
+      * at least one lower-case piece is wordish (`_is_wordish`);
+      * not every NON-tag piece is pure hex.
+    A mixed-case piece, a 3-letter or 5-character tag, a third tag, and a tag-bearing token
+    with no word piece are never exempt; the known-shape floor runs before all of this.
+
+    WHY THE TAG HALF OPENS NOTHING NEW. Every token it exempts, with its tag pieces deleted,
+    is a lower-case slug the 0.0.14 half ALREADY exempts (or a single wordish lower-case
+    piece) — and the tag half is STRICTER, since it also demands a word piece. A generated key's chunks are mixed-case, so it fails on its
+    first mixed piece. MEASURED (`test_h1_names_are_not_secrets.TagInjectedKeys`, 120k seeded
+    keys, lower-alnum chunks with 1-2 injected tags): with NO wordish chunk the tag rule
+    unblocks 0.000%; with one random 6-8-letter wordish chunk it unblocks ~98.9% — and the
+    SAME keys without their tags pass at 100.000% under the 0.0.14 half already, so the
+    exposure is the pre-existing lower-case-chunked one, not a new one. Real-shaped families
+    (AWS, `ghp_`, `xoxb-`, JWT, base64/urlsafe-32, hex40/64) give the SAME verdicts as master
+    with and without injected tags on 30k seeds each
+    (`RealShapesUnchanged`)."""
     pieces = [p for p in _SLUG_SEP_RE.split(tok) if p]
     if len(pieces) < 2:                                  # no separator — not a slug
         return False
-    return not all(_is_pure_hex(p) for p in pieces)      # all-hex chunks are a split key
+    if not any(c.isupper() for c in tok):
+        return not all(_is_pure_hex(p) for p in pieces)  # all-hex chunks are a split key
+    tags = [p for p in pieces if _SLUG_TAG_RE.fullmatch(p)]
+    rest = [p for p in pieces if not _SLUG_TAG_RE.fullmatch(p)]
+    if len(tags) > _SLUG_MAX_TAGS or not rest:
+        return False
+    if not all(_SLUG_LOWER_RE.fullmatch(p) for p in rest):   # a mixed-case piece
+        return False
+    if not any(_is_wordish(p) for p in rest):            # a tag token needs a word piece
+        return False
+    return not all(_is_pure_hex(p) for p in rest)
 
 
 def _is_uuid_shaped(tok: str) -> bool:
@@ -1641,7 +1686,7 @@ def _scan_entropy(text: str) -> List[Finding]:
                 continue
             if _has_word_structure(sub):        # camel/Pascal/SCREAMING/snake/kebab
                 continue
-            if _is_lowercase_slug(sub):         # path component / temp dir / slug
+            if _is_slug(sub):                   # path component / temp dir / slug / tag
                 continue
             if _is_pure_hex(sub):               # git SHA / md5 / sha256 hex digest
                 continue

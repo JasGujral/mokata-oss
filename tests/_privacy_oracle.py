@@ -93,6 +93,26 @@ def grant_others_read(path: str) -> None:
         os.chmod(path, 0o644)
 
 
+def chmod_like(path: str, mode: int) -> None:
+    """Weaken `path` the way POSIX mode `mode` would, on EVERY OS (0.0.29 H-a xplat). POSIX: the
+    mode itself. Windows, where `os.chmod` only toggles the read-only attribute and leaves the ACL
+    alone: an ACE with the same reach — world write -> Everyone modify, group write -> Users modify,
+    group/other read -> Users read. A mode that grants nobody else (0o600) changes nothing there."""
+    if os.name != "nt":
+        os.chmod(path, mode)
+        return
+    icacls = os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "System32", "icacls.exe")
+    if mode & 0o002:
+        grant = "*S-1-1-0:(M)"                     # Everyone
+    elif mode & 0o020:
+        grant = "*S-1-5-32-545:(M)"                # BUILTIN\Users
+    elif mode & 0o044:
+        grant = "*S-1-5-32-545:(R)"
+    else:
+        return
+    subprocess.run([icacls, path, "/grant", grant], capture_output=True, check=True)
+
+
 def give_dir_inheritable_acl(directory: str) -> bool:
     """macOS: `group:everyone allow read,file_inherit,directory_inherit` on `directory` (File
     Sharing / MDM do this); Windows: `BUILTIN\\Users` read, object+container inherit (what a

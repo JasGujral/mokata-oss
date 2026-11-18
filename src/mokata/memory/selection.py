@@ -225,8 +225,9 @@ def _unasked_semantic_embedder() -> Optional[Any]:
         return Model2VecEmbedder()
     except ModelUnavailable as exc:
         if _extra_is_installed():
-            from .embed import model_fetch_cause
-            fix = (model_fetch_cause(str(exc)) + "; then re-run `" + _setup_full()
+            from .embed import ModelNotCached, model_fetch_cause
+            fix = (str(exc) if isinstance(exc, ModelNotCached) else
+                   model_fetch_cause(str(exc)) + "; then re-run `" + _setup_full()
                    + "` (it warms the model once)")
             cause = "the `embeddings` extra is installed but the model could not be loaded"
         else:

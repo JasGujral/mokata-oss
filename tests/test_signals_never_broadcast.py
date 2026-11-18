@@ -207,8 +207,26 @@ class NoOtherDoorExists(unittest.TestCase):
         for path in sorted(SRC.rglob("*.py")):
             if path.name == "quiet_spawn.py":
                 continue
+            if path.name == "_lifeline.py":
+                continue                  # pinned exactly below: its own group / its own pid only
             bad += self._offences(path.read_text(encoding="utf-8"), str(path.relative_to(SRC)))
         self.assertEqual([], bad, "route these through quiet_spawn.signal_group / signal_pid")
+
+    def test_the_lifeline_signals_only_its_own_group_and_its_own_pid(self):
+        """0.0.29 R-B6: the one raw group signal outside the door is the lifeline shim's
+        `os.killpg(0, SIGKILL)` — group 0 is the CALLER's own group (the shim leads it) — and the
+        one raw pid signal re-raises the command's death on the shim itself (`os.getpid()`).
+        Anything else in that file reds."""
+        import ast
+        src = (SRC / "_lifeline.py").read_text(encoding="utf-8")
+        found = []
+        for n in ast.walk(ast.parse(src)):
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) \
+                    and n.func.attr in ("kill", "killpg") and n.args:
+                found.append((n.func.attr, ast.unparse(n.args[0])))
+        self.assertEqual(sorted([("killpg", "0"), ("kill", "os.getpid()")]), sorted(found))
+        self.assertEqual(2, len(self._offences(src, "_lifeline.py")),
+                         "the shim holds exactly those two raw signals")
 
     def test_the_sweep_sees_every_spelling(self):
         """The sweep's own control: each spelling of a raw signal is caught; a probe is not."""

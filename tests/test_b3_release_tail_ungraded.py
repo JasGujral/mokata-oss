@@ -70,6 +70,7 @@ import tempfile
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+import _hermetic_git  # noqa: E402  (0.0.29 D1: the one hermetic git door)
 from _release_retry import case_arms, live_calls_in, push_invocations, tag_step_lines
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -83,9 +84,6 @@ SYNC_SH = os.path.join(ROOT, "scripts", "sync-public.sh")
 CHECK_RELPATH = "scripts/check_tag_sets.py"
 
 _NO_GIT = shutil.which("git") is None
-_GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull,
-            "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
-            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
 
 
 def reading(label, tags, error=""):
@@ -231,7 +229,7 @@ class TestTheExitCodes(unittest.TestCase):
 
     def git(self, *args, cwd=None):
         env = dict(os.environ)
-        env.update(_GIT_ENV)
+        env.update(_hermetic_git.GIT_ENV)
         return subprocess.run(("git",) + args, cwd=cwd or self.tmp, env=env,
                               capture_output=True, text=True, check=True)
 

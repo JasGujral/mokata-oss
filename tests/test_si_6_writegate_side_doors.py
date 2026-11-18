@@ -861,7 +861,7 @@ UNGATED_BY_DESIGN = {
     ("knowledge/crg_build.py", "probe_db"): "0.0.26 O13 (P32 moved it from `probe_index` into `probe_db`, which also probes the side-built rebuild) — NOT a write: a SELECT on code-review-graph's metadata table through a READ-ONLY sqlite URI (`mode=ro`), which cannot create or modify the file. The detector matches `.execute`.",
     ("ide/health.py", "_rebuild_ast"): "0.0.25 — the health panel's FORCE RE-PARSE: deletes mokata's own AST edge cache under gitignored temp_local/knowledge_ast/ and re-parses the source into it. A derived cache of code the user already wrote, rebuilt on a human's click in the paired IDE (token + Origin guarded); no committed file, nothing approved, losing it costs one re-parse.",
     ("ide/health.py", "_rebuild_search"): "0.0.25 — the health panel's FORCE REBUILD of the IDE's local semantic index (the same derived cache `ide/search.py:build_index` writes, under gitignored temp_local/ide/semantic/): deleted and re-embedded on a human's click in the paired IDE. No committed file, nothing approved, losing it costs one re-embed.",
-    ("ide/bus.py", "ensure_bridge"): '0.0.25 ID.S3 — the IDE LIVE-BRIDGE RECORD (stable port + hook token) under gitignored temp_local/ide/, mode 0600. Machine-local run-state the `--ide-bridge` http hooks point at; written inside apply_setup, whose batched `setup` ledger entry names settings.local.json. Content is two generated values, never repo content.',
+    ("ide/bus.py", "write_bridge"): '0.0.25 ID.S3 / 0.0.29 H4 — the IDE LIVE-BRIDGE RECORD (stable port + hook token) under gitignored temp_local/ide/, mode 0600. Machine-local run-state the `--ide-bridge` http hooks point at; written inside apply_setup, whose batched `setup` ledger entry names settings.local.json. Content is two generated values, never repo content.',
     ("ide/handoff.py", "_write"): "0.0.26 P37 (close-confirms-background) — the IDE's job HANDOFF records under gitignored temp_local/ide/jobs/ (or ~/.mokata/ide-repos/<hash>/ide/jobs/ on an un-set-up repo, P29): which kept job (an index build/update, the meaning index, mokata update) the closing IDE handed to a detached worker or cancelled, its progress and its outcome, and the worker's log. Run-state, not the repo: no committed file, nothing approved; bounded (KEEP_RECORDS, pruned). The worker runs only the work its record's KIND maps to (`handoff.WORK`). This site writes one record atomically (temp + os.replace).",
     ("ide/handoff.py", "_prune"): "0.0.26 P37 (close-confirms-background) — the IDE's job HANDOFF records under gitignored temp_local/ide/jobs/ (or ~/.mokata/ide-repos/<hash>/ide/jobs/ on an un-set-up repo, P29): which kept job (an index build/update, the meaning index, mokata update) the closing IDE handed to a detached worker or cancelled, its progress and its outcome, and the worker's log. Run-state, not the repo: no committed file, nothing approved; bounded (KEEP_RECORDS, pruned). The worker runs only the work its record's KIND maps to (`handoff.WORK`). This site removes the records (and logs) past KEEP_RECORDS — never a live worker's.",
     ("ide/handoff.py", "_spawn"): "0.0.26 P37 (close-confirms-background) — the IDE's job HANDOFF records under gitignored temp_local/ide/jobs/ (or ~/.mokata/ide-repos/<hash>/ide/jobs/ on an un-set-up repo, P29): which kept job (an index build/update, the meaning index, mokata update) the closing IDE handed to a detached worker or cancelled, its progress and its outcome, and the worker's log. Run-state, not the repo: no committed file, nothing approved; bounded (KEEP_RECORDS, pruned). The worker runs only the work its record's KIND maps to (`handoff.WORK`). This site opens the worker's own log beside its record (append).",
@@ -909,11 +909,10 @@ UNGATED_BY_DESIGN = {
     ("winacl.py", "_unlink"): "0.0.28 C — removes a file this module JUST created when it could "
         "not be verified private (nothing left behind), or the volume probe's own two scratch files "
         "(`_probe`, round 2: decided by behaviour); never a pre-existing entry",
-    ("cli_commands/diagnostics.py", "privacy_lines"): "0.0.28 C — `mokata doctor --fix`: the "
-        "human typed the flag. Re-creates mokata's OWN private-set records (server/bridge/trust "
-        "run-state, the mokata-written settings.local.json) born private with the EXACT bytes they "
-        "held — a permission repair, no content change; a file owned by another user is refused, "
-        "never adopted",
+    ("cli_commands/diagnostics.py", "_unlink"): "0.0.29 H4 — `mokata doctor --fix` (the human's "
+        "yes or `--yes`, ledgered by `_fix_ledger`): removes mokata's OWN weak IDE server record "
+        "once its IDE stopped, or when no IDE of this repo answers on its port; never a file "
+        "another user owns (the plan refuses it)",
     ("atomicfile.py", "_replace"): "0.0.23 cut — the primitive's own rename, retried on Windows "
         "while another process holds the target; called only by `atomic_write_text`, no target "
         "of its own",
@@ -1168,6 +1167,10 @@ UNGATED_BY_DESIGN = {
         "refusal (cache MISS) at the next degraded cut, which is the safe direction.",
     ("branch_protection.py", "ProtectionCache.forget"): "0.0.22 A1 — drops that same cache entry "
         "when a successful read says the branch has NO protection; same file, same reasoning.",
+    ("pycache.py", "prune"): "0.0.29 F (HOOK-PYCACHE-COLD-AND-STALE) — deletes CPython bytecode for "
+        "sources that no longer exist, only inside a resolved `<user cache>/mokata/pycache` root "
+        "(never a repo, never through a link; a no-op on Windows). A derived cache the interpreter "
+        "rebuilds on demand: not governed content and nothing a human approves.",
     ("visibility.py", "capture_session_snapshot"): "session baseline snapshot under temp_local/",
     ("plans.py", "write_plan_file"): "plan drafts under temp_local/ (the PLAN is gated, not the "
                                      "draft file)",
@@ -1490,6 +1493,15 @@ LEDGERED = {
         "plan SHOWED each row and the human confirmed (apply_setup's consent, or the plugin route's "
         "own read_yes_no); each destination passes `_gate_config_destination` first; the batched "
         "`setup` ledger entry names the files. Atomic, append-only, idempotent.",
+    ("worktree_setup.py", "strip_rows"): "0.0.29 C1 (UNWIRE-HARNESS-LEAVES-RESIDUE) — the inverse of "
+        "`_append_lines`: removes ONLY mokata's marked block from `.worktreeinclude` / `.gitignore` "
+        "(a user's unmarked line is never touched). Reached only from `apply_unsetup`, after "
+        "`render_unsetup_plan` LISTED these removals and the human confirmed; each destination "
+        "passes `_gate_config_destination` first; the `unsetup` ledger entry names the files.",
+    ("harness_setup.py", "apply_unsetup"): "0.0.29 C1 — `os.rmdir` of `.claude/commands/` and "
+        "`.claude/` ONLY when empty after unsetup's own removals (never rmtree: a user file keeps "
+        "the directory). Listed in the unsetup plan the human confirmed; recorded in the "
+        "`unsetup` ledger entry.",
     ("harness_setup.py", "_write_command_file"): "KB.S1 — materializes a command template; "
         "apply_setup records the batched `setup` entry naming the commands. Byte-identical write.",
     ("agent_skills.py", "write_skill_files"): "KB.S1 — writes SKILL.md; apply_setup records the "
@@ -1560,12 +1572,16 @@ DECLARED_CALLERS = {
     # which is what `CALLER-LIST-UNPINNED` (doc 84) exists to end.
     # 0.0.22 D2 — all three RE-DERIVED (read at the new lines, not bumped): HP.S2 added six lines
     # to `build_session_bundle` above them, so 695/1004/1005 moved to 701/1010/1011.
+    # 0.0.29 C2 — +1 for the `localize_commands` import: 706/1015/1016 -> 707/1016/1017 (read at the
+    # new lines, not adjusted until green).
+    # 0.0.29 G round 2 — all three RE-DERIVED (read at the new lines): `plan_session_push
+    # --save-first` now refuses a save that did not land (five lines), so 701/1010/1011 -> 706/1015/1016.
     ("session_transport.py", "_FileTransport.write_bundle"): (
-        ("session_bundle.py", 701), ("session_bundle.py", 1010)),
+        ("session_bundle.py", 707), ("session_bundle.py", 1016)),
     ("session_transport.py", "PostgresTransport.write_bundle"): (
-        ("session_bundle.py", 701), ("session_bundle.py", 1010)),
-    ("session_transport.py", "_FileTransport.delete_bundle"): (("session_bundle.py", 1011),),
-    ("session_transport.py", "PostgresTransport.delete_bundle"): (("session_bundle.py", 1011),),
+        ("session_bundle.py", 707), ("session_bundle.py", 1016)),
+    ("session_transport.py", "_FileTransport.delete_bundle"): (("session_bundle.py", 1017),),
+    ("session_transport.py", "PostgresTransport.delete_bundle"): (("session_bundle.py", 1017),),
     # ⚠ BOTH NUMBERS RE-DERIVED AT 0.0.18 LANE D SLICE 4, NOT ADJUSTED UNTIL THEY PASSED. This
     # slice edited the prose above both call sites (`tools_share.py`'s docstring had spent three
     # releases calling itself the deletion set; `collab.py` gained a removed-bundle announcer), so
@@ -1655,6 +1671,10 @@ CALLER_PINS = {
     # own temp file when the write fails (the count-based prunes reach it through a `with` receiver,
     # which rule (e) does not bind). Derived by `_writegraph.derive_callers`.
     ("explain/safedir.py", "SafeDir.unlink"): (("explain/safedir.py", "SafeDir.write"),),
+    # 0.0.29 F — the bytecode prune's one resolvable caller is the SessionStart detached refresher's
+    # wrapper. The entry's reason is about WHERE it deletes (inside a resolved mokata/pycache root),
+    # not who calls it. Derived by `_writegraph.derive_callers`.
+    ("pycache.py", "prune"): (("briefing_cache.py", "prune_bytecode"),),
     # 0.0.27 G3-EVIDENCE round 3 — the one RESOLVABLE caller of `SafeDir.write` is the run record's
     # GATED commit closure (the explainer store's own calls go through an `open_chain` return,
     # which rule (e) does not type). A new caller reds here and re-opens the entry's reason.
@@ -1759,7 +1779,9 @@ CALLER_PINS = {
     # 0.0.27 P24 — the workspace-trust record (LEDGERED): written only by `trust.decide`.
     ("ide/trust.py", "_write"): (("ide/trust.py", "decide"),),
     ("ide/firstrun.py", "_move_record"): (("ide/firstrun.py", "_init_job"),),
-    ("ide/bus.py", "ensure_bridge"): (("harness_setup.py", "apply_setup"),),
+    ("ide/bus.py", "write_bridge"): (("cli_commands/diagnostics.py", "apply_fix"),
+                                     ("ide/bus.py", "ensure_bridge"),),
+    ("cli_commands/diagnostics.py", "_unlink"): (("cli_commands/diagnostics.py", "apply_fix"),),
     # 0.0.26 P33 — the session index row (derived the same way).
     ("session_index.py", "_write_file"): (("session_index.py", "_update"),),
     ("ide/snapshots.py", "_append"): (("ide/snapshots.py", "capture"),),
@@ -1795,9 +1817,6 @@ CALLER_PINS = {
     ("atomicfile.py", "_replace"): (
         ("atomicfile.py", "atomic_write_text"),
     ),
-    ("cli_commands/diagnostics.py", "privacy_lines"): (
-        ("cli_commands/diagnostics.py", "cmd_doctor"),
-    ),
     ("winacl.py", "_staged_create"): (
         ("winacl.py", "create_private_file"),
     ),
@@ -1815,14 +1834,13 @@ CALLER_PINS = {
         ("briefing_cache.py", "derived"),
         ("briefing_cache.py", "store"),
         ("briefing_cache.py", "store_resume"),
-        ("cli_commands/diagnostics.py", "privacy_lines"),
         ("committed_specs.py", "write_committed"),
         ("config_cmd.py", "config_set._commit"),
         ("flush_liveness.py", "store_state"),
         ("flush_liveness.py", "update_state"),
         ("govern/calibration.py", "save_cursor"),
         ("govern/secret_ignore.py", "_gated_write._commit"),
-        ("ide/bus.py", "ensure_bridge"),
+        ("ide/bus.py", "write_bridge"),
         ("ide/server.py", "_write_record"),
         ("ide/trust.py", "_write"),
         ("init.py", "InitPlan.write_files"),
@@ -1842,6 +1860,7 @@ CALLER_PINS = {
         ("vault.py", "commit_push"),
         ("visibility.py", "capture_session_snapshot"),
         ("worktree_setup.py", "_append_lines"),
+        ("worktree_setup.py", "strip_rows"),
     ),
     ("governance_view.py", "write_governance_dashboard"): (
         ("cli_commands/runviews.py", "cmd_govern"),
@@ -1875,10 +1894,22 @@ CALLER_PINS = {
         ("harness_setup.py", "_merge_mcp"),
         ("harness_setup.py", "_merge_statusline"),
         ("harness_setup.py", "_write_or_remove_json"),
+        # 0.0.29 H-a round 2 (M3): `rebake_token` reads the file once and writes once itself (it used
+        # to go through `_merge_ide_bridge`/`_set_http_gates`); its only caller is `doctor --fix`'s
+        # `apply_fix`, after the plan was shown and approved — the same consent as before.
+        ("harness_setup.py", "rebake_token"),
         ("worktree_setup.py", "apply_rows"),
     ),
     ("worktree_setup.py", "_append_lines"): (
         ("worktree_setup.py", "apply_rows"),
+    ),
+    # 0.0.29 C1 — unwire's two removal sites, each reached from ONE consented flow.
+    ("worktree_setup.py", "strip_rows"): (
+        ("harness_setup.py", "apply_unsetup"),
+        ("harness_setup.py", "plan_unsetup"),
+    ),
+    ("harness_setup.py", "apply_unsetup"): (
+        ("harness_setup.py", "unsetup_harness"),
     ),
     ("govern/cache.py", "_record_observation"): (
         ("govern/cache.py", "observe_prefix"),
@@ -2830,7 +2861,21 @@ class TestZeroBypass(unittest.TestCase):
         # `_key_lines` + `build_item` and `ide/usages.py` `pem_lines` + `pem_state_before`) or its
         # run classifier `UnmarkedRun` (`feed`/`close`, from `_scan_key_material`). They hold
         # lines and decide state; none writes, so `productive` below is unchanged.
-        self.assertEqual(graph.receiver_calls, 240,
+        # 240 -> 241 AT 0.0.29 lane A (D14 H-A1), re-derived from `_write_closure()`'s receiver-edge
+        # list filtered to `ide/lsp.py` / `ide/features/lsp.py` (not summed): exactly 1 new edge,
+        # `routes.calls_handler.work -> Host.recheck_trust` in the new `ServerSilent` branch (the
+        # trust re-read every fallback makes first; it writes no file), so `productive` is unchanged.
+        # 241 -> 243 AT 0.0.29 lane B (merged onto lane A) (CANCEL-DOES-NOT-STOP-WORK), re-derived from
+        # `_write_closure()`'s receiver-edge list diffed against base a2e3761, disjoint from lane A's edge: +1
+        # `ci_check.cancel_on_sigint.watch` -> `Lever.pull` (the Ctrl-C watcher pulls its local
+        # lever) and +1 `mcp/server._offloop.handler` -> `_Ticket.cancel` (a cancelled request
+        # cancels its local ticket). Both targets flip in-memory flags and write nothing, so
+        # `productive` is unchanged: +2 resolutions, no site.
+        # 243 -> 244 AT 0.0.29 C1 verify round (L3, JSON style kept), re-derived from
+        # `build_call_graph`'s receiver-edge list diffed against 068b8a2 (not summed): exactly 1 new
+        # edge, `harness_setup._json_style -> _JsonStyle.render` (a `json.dumps` compared with the
+        # file's own text; it writes nothing), so `productive` is unchanged.
+        self.assertEqual(graph.receiver_calls, 244,
                          "rule (e)'s resolution count moved; re-derive its yield before trusting "
                          "any number in the audit report that depends on it")
         productive = sorted({caller for caller, _ln, target in graph.receiver_edges

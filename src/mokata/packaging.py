@@ -274,22 +274,6 @@ class PackageProvenance:
         ])
 
 
-def _within(child: str, parent: str) -> bool:
-    """Whether `child` is `parent` or lives under it. BOTH MUST ALREADY BE REALPATHS.
-
-    ⚠ IT USED TO RESOLVE THEM ITSELF, AND THAT SECOND RESOLUTION MADE THE FIRST UNGRADABLE
-    (doc 85 §7f, found by mutation at 0.0.18 stage 7). `answering_package` resolves both paths for
-    its own reasons — the rendered line must show a reader the path that actually answered — so
-    the calls here were a duplicate defence: mutating either one alone left the other covering,
-    and the symlink mutant came back GREEN. Deleted rather than split, because the second bought
-    nothing: there is exactly one caller and it resolves first.
-
-    The prefix test keeps the separator on purpose. `/…/mokata-oss` starts with `/…/mokata`, and
-    those are the two checkouts this whole stage exists to keep apart.
-    """
-    return child == parent or child.startswith(parent.rstrip(os.sep) + os.sep)
-
-
 def answering_package(root: str, package_file: Optional[str], version: str,
                       field_count: Optional[int] = None) -> PackageProvenance:
     """Where the mokata that is about to answer came from, relative to `root`.
@@ -304,7 +288,10 @@ def answering_package(root: str, package_file: Optional[str], version: str,
     if not package_file:
         return PackageProvenance(ANSWERED_UNRESOLVABLE, resolved_root, None, version, field_count)
     package_dir = os.path.realpath(os.path.dirname(package_file))
-    state = ANSWERED_IN_ROOT if _within(package_dir, resolved_root) else ANSWERED_OUT_OF_ROOT
+    # ALLOW side (a label): inside on DISK (0.0.29 H3). `/…/mokata-oss` is not inside `/…/mokata` —
+    # identity, not a prefix, keeps the two checkouts this module exists to tell apart apart.
+    from .fs_identity import require_inside
+    state = ANSWERED_IN_ROOT if require_inside(package_dir, resolved_root) else ANSWERED_OUT_OF_ROOT
     return PackageProvenance(state, resolved_root, package_dir, version, field_count)
 
 

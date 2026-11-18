@@ -23,6 +23,7 @@ from .consent import (_consent, _evidence_store, _gated_write, _policy, _propose
 from .registry import _mokata_dir, _surface
 from .tool_annotations import Field, NotRequired, TypedDict
 from .validation import ValidationError, validate_comma_list
+from ..plugin_runtime import localize_commands
 
 _PATH = "Repo root the tool operates on (default: the server's working directory)."
 _PROPOSAL = ("Id of a proposal a human approved with `mokata approve <id>`; leave empty on the "
@@ -625,8 +626,8 @@ def spec_emit(
         if verdict.replaces:
             out["superseded"] = verdict.archive
             out["replaces_version"] = verdict.from_version
-        out["next"] = ("the spec is on record — implementation is unblocked once a failing test "
-                       "is too (/mokata:test).")
+        out["next"] = (localize_commands("the spec is on record — implementation is unblocked once a failing test "
+                       "is too (/mokata:test).", surface.root))
         if spec.scope is not None:
             out["scope"] = ("enforced: a write outside the authorized surface, or spelling a "
                             "deferred marker, is now blocked until the spec is amended.")
@@ -764,10 +765,10 @@ def spec_amend(
             "impact": _impact_summary(outcome.impact),
             **({"lens_basis": plan.lens_basis} if plan.lens_basis else {}),
             "red_owed": list(outcome.red_owed),
-            "next": (f"spec v{outcome.version} is on record (v{outcome.version - 1} superseded, "
+            "next": (localize_commands(f"spec v{outcome.version} is on record (v{outcome.version - 1} superseded, "
                      f"the diff ledgered). Implementation of the NEW criteria is blocked until "
                      f"{', '.join(outcome.red_owed) or 'their tests'} "
-                     f"{'is' if len(outcome.red_owed) == 1 else 'are'} RED (/mokata:test).")}
+                     f"{'is' if len(outcome.red_owed) == 1 else 'are'} RED (/mokata:test).", surface.root))}
 
 
 def _impact_summary(impact: Any) -> Optional[Dict[str, Any]]:
@@ -856,7 +857,8 @@ def spec_check(
                        files=validate_comma_list(files, "files"), text=text)
     surface = _surface(path)
     specs = load_spec_corpus(surface.state)
-    decisions = load_decisions(MemoryStore.from_surface(surface))
+    # decisions are read by key: no model is loaded or fetched (0.0.29 C1 verify M2)
+    decisions = load_decisions(MemoryStore.from_surface(surface, knowledge=False, load_model=False))
     layer = KnowledgeLayer.from_surface(surface)
     report = check_change(change, specs, decisions, layer=layer)
     if not report.checked:

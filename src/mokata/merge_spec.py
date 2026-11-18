@@ -13,9 +13,13 @@ after as git says it is, and records the verdict per leg with what it was valid 
 the plan never runs a leg. `completeness` is not part of it: P3 already asks "does every criterion
 have a passing test, in THIS full run", with stronger evidence (one door per concern).
 
-The decision corpus (memory) has no cheap fingerprint, so the record is held to the review's
-freshness bound instead (`settings.review.verdict_max_age_hours`, 24 h by default): a decision
-recorded since is caught by re-running the leg within that bound.
+0.0.29 lane G (`SPEC-LEG-DECISIONS-UNFINGERPRINTED`): the decision corpus is fingerprinted BY
+CONTENT — `decisions_fp(worktree)`, one hash per active decision over its whole `to_dict()`, read
+from the worktree's own store (the one the leg reads) BEFORE the leg runs, and again at judge time
+from the same path. A decision recorded, edited or retired since makes the record stale at any age;
+there is no age bound on the spec legs (`review.verdict_max_age_hours` governs review only). On a
+shared (team) store any teammate's decision write stales every open record, and the read is a
+network read at merge time only.
 
 A cancelled leg records nothing: the trailing checkpoint of `run_ci_check` and the one before the
 write here both raise `Cancelled` through. Copyright 2026 MoStack. Licensed under the Apache
@@ -76,6 +80,29 @@ def corpus_fp(main: str) -> str:
     return h.hexdigest()
 
 
+def decisions_fp(worktree: str) -> Dict[str, str]:
+    """`{decision id: sha256(json(item.to_dict()))[:16]}` over the ACTIVE decisions in `worktree`'s
+    memory store — the same store `ci_check`'s spec-awareness leg reads (`MemoryStore.from_surface`
+    of the worktree's surface), read with `peek_active` (no read-counter bump) and with no
+    knowledge layer or embedding model (a read, not a recall). The WHOLE `to_dict`, so a change to
+    any field moves it. Raises when the store cannot be read: the caller says the validity is
+    UNKNOWN, which never passes."""
+    from .config import Surface
+    from .memory import DECISION, MemoryStore
+    store = MemoryStore.from_surface(Surface.load(worktree), knowledge=False, load_model=False)
+    out: Dict[str, str] = {}
+    for item in store.peek_active(mtype=DECISION):
+        blob = json.dumps(item.to_dict(), sort_keys=True, default=str)
+        out[str(item.id)] = hashlib.sha256(blob.encode("utf-8", "surrogateescape")).hexdigest()[:16]
+    return out
+
+
+def decisions_moved(then: Dict[str, str], now: Dict[str, str]) -> int:
+    """How many decisions were recorded, changed or retired between two fingerprints."""
+    return (len(set(now) - set(then)) + len(set(then) - set(now))
+            + sum(1 for k in set(then) & set(now) if then[k] != now[k]))
+
+
 def _leg_row(leg: Any) -> Dict[str, Any]:
     return {"name": leg.name, "status": leg.status, "degraded": bool(leg.degraded),
             "summary": str(leg.summary or ""), "unblock": leg.unblock or "",
@@ -88,6 +115,7 @@ def run_spec_leg(root: str, target: str) -> Dict[str, Any]:
     recorded) or `Cancelled` (nothing recorded)."""
     from .ci_check import run_ci_check
     from .git_safe import Git, GitSafeError
+    from .ide.review_context import ide_actor
     from .merge_gate import _changes, _runs_bound, find_target, tree_stamp
     from .repo_identity import canonical_repo_root
     from .state import StateStore
@@ -116,6 +144,13 @@ def run_spec_leg(root: str, target: str) -> Dict[str, Any]:
         raise SpecLegError(str(exc)) from exc
     paths = [p for _o, _n, _s, p in changes]
     corpus = corpus_fp(main)
+    try:
+        # BEFORE the leg reads them: a decision written while the leg runs is then in neither, and
+        # the judge's re-read sees it as moved (stale), never as checked.
+        decisions = decisions_fp(wt)
+    except Exception as exc:  # noqa: BLE001 — named, and nothing is recorded
+        raise SpecLegError(f"the decision store could not be read ({type(exc).__name__}) — "
+                           "nothing was checked (`mokata doctor`)") from None
     checkpoint()
     report(note=f"spec legs ({', '.join(LEGS)}) over {len(paths)} changed file(s) in {wt}")
     result = run_ci_check(wt, paths, legs=LEGS)
@@ -127,9 +162,12 @@ def run_spec_leg(root: str, target: str) -> Dict[str, Any]:
     rec = {"worktree": wt, "head": after.get("head"), "head_before": before.get("head"),
            "base": before.get("base"), "base_after": after.get("base"),
            "clean_before": before.get("clean"), "clean_after": after.get("clean"),
-           "files_sha": files_digest(changes), "corpus_fp": corpus,
-           "legs": [_leg_row(leg) for leg in result.legs], "at": time.time()}
-    StateStore(state_dir(main)).write(key(runs[0]), rec)
+           "files_sha": files_digest(changes), "corpus_fp": corpus, "decisions": decisions,
+           "legs": [_leg_row(leg) for leg in result.legs], "at": time.time(),
+           "source": "runner", "actor": ide_actor()}
+    from .knowledge.cancel import commit
+    with commit("the spec legs"):            # 0.0.29 R-B1: a Ctrl-C here waits for the record
+        StateStore(state_dir(main)).write(key(runs[0]), rec)
     return {**rec, "run": runs[0], "recorded": True}
 
 
@@ -155,5 +193,6 @@ def run_suite_and_leg(root: str, target: str) -> Dict[str, Any]:
     return {**res, "spec_leg": leg}
 
 
-__all__ = ["LEGS", "PREFIX", "SpecLegError", "corpus_fp", "files_digest", "key", "run_spec_leg",
+__all__ = ["LEGS", "PREFIX", "SpecLegError", "corpus_fp", "decisions_fp", "decisions_moved",
+           "files_digest", "key", "run_spec_leg",
            "run_suite_and_leg"]

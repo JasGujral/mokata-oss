@@ -29,6 +29,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from .selector import ExecutionChoice, resolve_execution_choice
 from .tasks import Task
+from ..plugin_runtime import localize_commands
 
 # Extensions that mark a dotted token as a FILE (vs a qualified symbol like `User.save`).
 _FILE_EXTS = (
@@ -280,8 +281,8 @@ def decompose(spec: Any, layer: Any = None) -> DecompositionPlan:
     the code graph to expand each symbol's neighbourhood when one is wired, else the lexical
     floor. Degrade-clean: no spec/ACs → an empty plan with a friendly warning."""
     if spec is None or not getattr(spec, "criteria", None):
-        return DecompositionPlan(warnings=["no emitted spec with acceptance criteria to "
-                                           "decompose — run /mokata:spec first."])
+        return DecompositionPlan(warnings=[localize_commands("no emitted spec with acceptance criteria to "
+                                           "decompose — run /mokata:spec first.", None)])
 
     subtasks = [Subtask.from_ac(ac) for ac in spec.criteria]
     all_symbols = sorted({s for st in subtasks for s in st.symbols})

@@ -79,6 +79,7 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 from __future__ import annotations
 
+import ntpath
 import os
 import re
 import shlex
@@ -86,12 +87,16 @@ import tempfile
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
 
+from .fs_identity import refuse_if_inside, require_inside
 from .repo_paths import split_path
 
 # The gate's name in refusals. NOT in `gate_hook.GATES` — see the module docstring.
 GATE_SELF_PROTECT = "self-protect"
 
 # The three rules, as stable ids a test (and a reader of stderr) can assert on.
+#: Windows path rules apply (a seam: tests drive the Windows branches on any OS).
+_NT = os.name == "nt"
+
 RULE_INSTALLED = "installed-package-tree"
 RULE_MOKATA_INSTALL = "mokata-own-install"
 RULE_OUT_OF_ROOT = "outside-workspace-root"
@@ -166,6 +171,20 @@ def resolve_target(path: str, base_dir: Optional[str] = None) -> Optional[str]:
         return None
     try:
         expanded = os.path.expanduser(path)
+        if _drive_relative(expanded) and base_dir is not None:
+            # 0.0.29 H-b xplat (verifier Medium): with a base (the hook lane) `C:evil.txt` is NOT a name
+            # under it — the OS opens it against drive C:'s OWN current directory, which this process
+            # cannot see. Unresolvable; `check_target` refuses it before it gets here (fail closed).
+            return None
+        if _drive_relative(expanded) and not is_path_like(expanded):
+            # 0.0.29 H-b xplat: `m:k` (a drive letter, no separator) is a LABEL — a store key — and is
+            # judged like every other label, as a name under the base, exactly as POSIX reads it. Read as
+            # the drive-relative path `M:k` it named a volume that does not exist, and rule (b) refused a
+            # memory write as a write into mokata's own package (`ms_s3_ledger_chain`).
+            # The anchor is resolved ALONE and the label appended as text: `ntpath.realpath` re-joins a
+            # missing tail with `join`, and `join(anchor, "m:k")` is `m:k` again (a drive resets it).
+            anchor = os.path.realpath(os.path.abspath(base_dir or os.getcwd()))
+            return anchor.rstrip("\\/") + "\\" + expanded
         if base_dir and not os.path.isabs(expanded):
             expanded = os.path.join(base_dir, expanded)
         return os.path.realpath(os.path.abspath(expanded))
@@ -173,15 +192,13 @@ def resolve_target(path: str, base_dir: Optional[str] = None) -> Optional[str]:
         return None
 
 
-def _norm(path: str) -> str:
-    """Case-folded on the platforms whose filesystems are (Windows); identity on POSIX."""
-    return os.path.normcase(path)
-
-
-def _within(child: str, parent: str) -> bool:
-    """True when `child` IS `parent` or lives under it. Both must already be resolved."""
-    c, p = _norm(child), _norm(parent)
-    return c == p or c.startswith(p.rstrip(os.sep) + os.sep)
+def _drive_relative(path: str) -> bool:
+    """Windows: `C:name` — a drive letter and NO root (`C:\\x` and `\\\\server\\share` are rooted). Such a
+    path is opened against that DRIVE's own current directory, not the process's or the caller's."""
+    if not _NT or not path:
+        return False
+    drive, rest = ntpath.splitdrive(path)
+    return bool(drive) and not rest.startswith(("\\", "/"))
 
 
 def is_path_like(target: str) -> bool:
@@ -215,7 +232,7 @@ def in_installed_tree(resolved: str) -> bool:
 
     THE predicate `version.detect_install_method` used to carry inline (version.py:63-64), now
     single-sourced here. Component-wise, so it also answers True for the tree's own directory."""
-    return any(_norm(part) in _INSTALL_DIR_NAMES for part in _components(resolved))
+    return any(os.path.normcase(part) in _INSTALL_DIR_NAMES for part in _components(resolved))
 
 
 def mokata_package_root(package_root: Optional[str] = None) -> Optional[str]:
@@ -346,6 +363,15 @@ def check_target(path: str, workspace_root: Optional[str] = None,
     allowance on rule (c) can never reach a path that is also installed code."""
     if not path:
         return ProtectOutcome(True, "no target path")
+    if base_dir and _drive_relative(os.path.expanduser(path)):
+        # The hook lane knows the tool's cwd, but a drive-relative name ignores it (verifier Medium):
+        # where it lands is that drive's own cwd, unknowable here — refused, never "not judged".
+        return ProtectOutcome(
+            False,
+            "the target is a DRIVE-RELATIVE path (a drive letter with no root, like `C:name`). Windows "
+            "opens it against that drive's own current directory, not the workspace, so where it would "
+            "land cannot be judged. Name the file with a full path or a plain relative path",
+            rule=RULE_OUT_OF_ROOT, target=path)
     resolved = resolve_target(path, base_dir=base_dir)
     if resolved is None:
         # Degrade-clean (`_same_repo`'s shape): a path mokata cannot resolve is a path it cannot
@@ -369,7 +395,9 @@ def check_target(path: str, workspace_root: Optional[str] = None,
     # that directory is inside the workspace root: that is a dev checkout of mokata itself
     # (`<repo>/src/mokata`), where editing mokata's source IS the work (the spec's explicit carve).
     pkg = mokata_package_root(package_root)
-    if pkg and _within(resolved, pkg) and not (root and _within(pkg, root)):
+    # 0.0.29 H3: rule (b) is a REFUSE question (inside on disk OR by any fold-equal spelling); the
+    # dev-checkout carve-out is an ALLOW question (identity only, never the fold).
+    if pkg and refuse_if_inside(resolved, pkg) and not (root and require_inside(pkg, root)):
         return ProtectOutcome(
             False,
             "the target is inside mokata's own INSTALLED package directory — mokata does not "
@@ -380,8 +408,8 @@ def check_target(path: str, workspace_root: Optional[str] = None,
     # (c) containment. Skipped when no root is resolvable — fail-open for THIS rule only, and only
     # for that case, per the module docstring — and skipped for a target that names no location at
     # all (see `is_path_like`).
-    if root is not None and (base_dir or is_path_like(path)) and not _within(resolved, root):
-        if any(_within(resolved, t) for t in _temp_roots()):
+    if root is not None and (base_dir or is_path_like(path)) and not require_inside(resolved, root):
+        if any(require_inside(resolved, t) for t in _temp_roots()):
             return ProtectOutcome(True, "outside the workspace root but inside the system temp "
                                         "root — the named scratch allowance")
         if _is_harness_memory(resolved):
@@ -513,7 +541,7 @@ def _basename_command(token: str) -> str:
     version (`python3.11` -> `python3`)."""
     parts = split_path(token)
     base = parts[-1] if parts else ""
-    base = base[:-4] if _norm(base).endswith(".exe") else base
+    base = base[:-4] if os.path.normcase(base).endswith(".exe") else base
     m = _VERSIONED_PY.match(base)
     return m.group(1) if m else base
 

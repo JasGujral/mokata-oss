@@ -37,7 +37,7 @@ FIRST_SENTENCE_MAX = 160
 #: RATCHET pinned to the exact measured value, so it can only go down: any growth reds, and only a
 #: shrink moves it. Round 3 (verifier L1): the earlier pin (106,450) counted four fields and missed
 #: `outputSchema`, about 9 KB of the reply. Master was 143 KB; the 40 KB design target is NOT met.
-TOOLS_LIST_CEILING = 115_453
+TOOLS_LIST_CEILING = 115_436
 
 #: Write tools that genuinely take no argument a call cannot do without (a share/clean/reset of the
 #: whole repo); every other write tool has at least one `required` property.

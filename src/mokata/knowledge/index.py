@@ -17,7 +17,15 @@ from ..repo_walk import prune_source_dirs
 from ..languages import LANGUAGES, language_for
 from ..repo_paths import name_of, names_of
 
-DEFAULT_EXTENSIONS = (".py",)
+DEFAULT_EXTENSIONS = LANGUAGES["python"].extensions        # .py and .pyi (0.0.29 E), any case
+
+#: 0.0.29 E (`INDEX-DISCLOSE-LOWS`): the JavaScript table entry parses TypeScript too, but a person
+#: is told the language their files are in — skipped TypeScript is counted as `typescript`.
+_TS_EXT = (".ts", ".tsx")
+
+
+def _label(fn: str) -> str:
+    return "typescript" if os.path.splitext(fn)[1].lower() in _TS_EXT else language_for(fn).name
 
 
 def file_fingerprint(abspath: str) -> Tuple[str, float, int]:
@@ -90,15 +98,15 @@ class KnowledgeIndex:
         self.skipped_checkouts = []
         self.unsupported = {}
         unsupported: Dict[str, int] = {}
+        exts = {e.lower() for e in extensions}
         for dirpath, dirnames, filenames in os.walk(root):
             prune_source_dirs(dirpath, dirnames, skipped=skipped)
             for fn in filenames:
-                if fn.endswith(tuple(extensions)):
+                if os.path.splitext(fn)[1].lower() in exts:
                     yield os.path.join(dirpath, fn)
-                else:
-                    lang = language_for(fn)
-                    if lang.name in LANGUAGES:
-                        unsupported[lang.name] = unsupported.get(lang.name, 0) + 1
+                elif language_for(fn).name in LANGUAGES:
+                    label = _label(fn)
+                    unsupported[label] = unsupported.get(label, 0) + 1
         # NAMES, not paths: `cmd_index` prints them and `test_nested_checkout_walkers`
         # compares them against `["vendor/lib"]`. Round 2 moved `_current` and `build` below
         # to POSIX and left this line native, so on Windows the record read `vendor\\lib`
@@ -116,7 +124,8 @@ class KnowledgeIndex:
         # The languages the skipped-count can see: every table language the index does not cover.
         # Named in the line so "0 skipped" can never read as "nothing else is in the repo".
         covered = {language_for("x" + e).name for e in DEFAULT_EXTENSIONS}
-        counted = [n for n in LANGUAGES if n not in covered]
+        counted = sorted({_label("x" + e) for n, lang in LANGUAGES.items() if n not in covered
+                          for e in lang.extensions})
         return {"indexed": indexed, "counted": counted, "unsupported": dict(self.unsupported),
                 "unsupported_total": sum(self.unsupported.values())}
 

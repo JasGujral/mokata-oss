@@ -413,8 +413,11 @@ class AnOlderAnswerIsNeverPaintedOverANewer(H.IdeFlow):
         p.route("**/api/hints*", hold)
         try:
             from mokata.test_runs import record_test_run
-            record_test_run(self.repo, RUN, passed=True, command="pytest", tests=[TEST])   # fact 2
+            # n0 BEFORE fact 2 (0.0.29 W2-final-2): the green run's live push may send re-ask 1
+            # before the next line runs, and then a count read after it already includes it
+            # (mirror run 43954985486, Firefox: 2 not >= 3)
             n0 = p.evaluate("MK.activityPanel.hintRequests()")
+            record_test_run(self.repo, RUN, passed=True, command="pytest", tests=[TEST])   # fact 2
             p.evaluate("window.dispatchEvent(new Event('focus'))")         # re-ask 1 (or the push's)
             self.until_py(lambda: old, "re-ask 1 held with its answer")
             n1 = p.evaluate("MK.activityPanel.hintRequests()")

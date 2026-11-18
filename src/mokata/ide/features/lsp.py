@@ -19,9 +19,10 @@
                                       calls the function at (line, col) — or the function
                                       ENCLOSING `line` when no col is sent — or what it calls.
                                       Untrusted / unsupported / indexing / a server without the
-                                      capability → callers from the call graph, labelled; callees
-                                      empty with the reason (G-Q4). Any other parameter is a 400:
-                                      a CallHierarchyItem never crosses the wire, either way.
+                                      capability → callers AND callees from the call graph,
+                                      labelled, with the reason (0.0.29 A: callees of the function
+                                      asked about, never of a namesake). Any other parameter is a
+                                      400: a CallHierarchyItem never crosses the wire, either way.
 
 A GET never starts a process (doc 109 §6: px0's `/api/lsp/warm` GET spawned rust-analyzer). The
 edge (doc 109 §14): every answer carries `edge` — references split into tests vs code, the symbol's
@@ -51,7 +52,7 @@ KINDS = ("definition", "hover", "symbols", "diagnostics")
 #: The code book's key for this decision. P38 keys its codes by proposal id, and proposals load
 #: from the repo's state dir — so the key holds a character no proposal id can (verification L2).
 TRUST_KEY = "lsp:workspace-trust"
-_WORD = re.compile(r"[A-Za-z_$][\w$]*")
+_WORD = re.compile(r"(?:[^\W\d]|\$)[\w$]*")     # a Unicode identifier (`été` is one word)
 GRAPH_KIND = {"definition": "defs"}
 #: What a call question may carry. Anything else — an `item`, its `data`, a method name — is a 400
 #: before anything runs (the one control for "the page never sends an item", rule M-B).
@@ -67,6 +68,27 @@ def word_at(line: str, col1: int) -> str:
         if m.start() <= i <= m.end():
             return m.group(0)
     return ""
+
+
+_STRING = re.compile(r"""("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)""")
+_COMMENT = re.compile(r"(#|//).*$")
+
+
+def _name_col(line: Optional[str], name: str, call: bool = True) -> Optional[int]:
+    """0.0.29 A — the 1-based CHARACTER column of `name` on `line`: as a call `name(` (`call`), or
+    as a bare word — only when it occurs EXACTLY ONCE once string literals and a trailing comment
+    are blanked, and the identifier there is `name` itself. Else None: a guessed column could make
+    a row expand onto a different function."""
+    if not line or not name:
+        return None
+    code = _STRING.sub(lambda m: " " * len(m.group(0)), line)
+    code = _COMMENT.sub(lambda m: " " * len(m.group(0)), code)
+    tail = r"\s*\(" if call else r"(?![\w$])"
+    hits = [m.start() for m in re.finditer(r"(?<![\w$])" + re.escape(name) + tail, code)]
+    if len(hits) != 1:
+        return None
+    col = hits[0] + 1
+    return col if word_at(line, col) == name else None
 
 
 def ac_ties(root: str, rel: str,
@@ -111,11 +133,28 @@ def ac_ties(root: str, rel: str,
     return out
 
 
-def graph_edge(root: str, symbol: str) -> Dict[str, Any]:
-    """Callers and blast radius (default budget) of `symbol` from the graph layer, with basis."""
+def index_not_ready(gi: Dict[str, Any]) -> str:
+    """What an answer says when the code graph's index is not there to answer from."""
+    if gi["state"] == "building":
+        return "graph facts: the code graph is indexing — ask again when it is done"
+    why = f"failed: {gi['error']}" if gi["state"] == "failed" else "cancelled"
+    return f"the code graph's index did not finish ({why}) — ask again to rebuild it"[:300]
+
+
+def graph_edge(root: str, symbol: str, wait: bool = True) -> Dict[str, Any]:
+    """Callers and blast radius (default budget) of `symbol` from the graph layer, with basis.
+
+    0.0.29 A: never a build of the graph's index of its own. `wait=False` (a language server
+    answered: its answer is not held behind the graph) — a cold index answers `state: indexing`
+    with the shared build's job id; `wait=True` (a graph answer) waits on that one build."""
     from .. import nav
     out: Dict[str, Any] = {"symbol": symbol}
     if not symbol:
+        return out
+    gi = nav.graph_index(root, wait)
+    if not gi["ready"]:
+        out.update({"state": "indexing" if gi["state"] == "building" else gi["state"],
+                    "job": gi["job"], "note": index_not_ready(gi)})
         return out
     try:
         layer = nav._layer(root)
@@ -300,7 +339,10 @@ def routes(reg: Any, ctx: Any) -> None:
                                         if why.get("state") == "untrusted" else "")},
                                "edge": {"ac": ac_ties(root, rel)}}
         if kind in GRAPH_KIND:
-            if sym:
+            gi = nav.graph_index(root, True) if sym else {"ready": True}
+            if not gi["ready"]:
+                out["results"], out["note"] = [], index_not_ready(gi)
+            elif sym:
                 try:
                     res = nav.run(root, GRAPH_KIND[kind], sym).to_dict()
                 except MokataError as exc:            # the floor itself is unavailable: say so
@@ -366,7 +408,7 @@ def routes(reg: Any, ctx: Any) -> None:
                            "analysing it publishes more; re-ask" if srv.indexing() else "")
         checkpoint()
         if kind in ("definition", "hover"):
-            out["edge"].update(graph_edge(root, sym))
+            out["edge"].update(graph_edge(root, sym, wait=False))
             out["edge"]["tests"] = sum(1 for r in out.get("results", []) if r.get("test"))
             out["edge"]["code"] = sum(1 for r in out.get("results", []) if not r.get("test"))
         if kind == "diagnostics" and out["results"]:
@@ -447,20 +489,29 @@ def routes(reg: Any, ctx: Any) -> None:
     def _target(rel: str, text: str, line: int, col: Optional[int]) -> Dict[str, Any]:
         """Where the question is asked: (line, col) exactly when a col is sent (a tree row's own
         position); otherwise the definition ENCLOSING `line` (the Find Usages resolver), at its
-        name. `{line, col, cur, symbol}` or `{}` when nothing encloses the line."""
+        name. `{line, col, cur, symbol}` or `{}` when nothing encloses the line; a resolved
+        definition also carries its span (`def: {path, line, end}`) — the graph's callees of THAT
+        definition only (0.0.29 A)."""
         from .. import usages as U
         lines = U.viewer_lines(text)
+        span = None
         if col is None:
             d, _ol = U.definition_at(state.source._code_root(), rel, line, text)
             if d is None:
                 return {}
             line, col = d.line, d.col
+            span = {"path": rel, "line": d.line, "end": d.end}
         cur = lines[line - 1] if 0 < line <= len(lines) else ""
-        return {"line": line, "col": col, "cur": cur, "symbol": word_at(cur, col)}
+        out = {"line": line, "col": col, "cur": cur, "symbol": word_at(cur, col)}
+        if span is not None:
+            out["def"] = span
+        return out
 
-    def _call_rows_graph(code_root: str, refs: List[Any]) -> List[Dict[str, Any]]:
+    def _call_rows_graph(code_root: str, refs: List[Any], raw: bool = False) -> List[Dict[str, Any]]:
         """Graph callers as rows (the call LINE; no col — expanding one asks about the function
-        enclosing that line). Snippets read through the bounded reader, inside the repo only."""
+        enclosing that line). Snippets read through the bounded reader, inside the repo only.
+        `raw`: each row also carries its unstripped line (`raw`, None when not read) for the
+        caller to find a column on — popped before the row is answered."""
         from .. import nav
         lines = L.CallLines()
         places = []
@@ -479,6 +530,8 @@ def routes(reg: Any, ctx: Any) -> None:
                         "line": int(r.line), "col": None, "col_exact": False,
                         "snippet": text.strip()[:300] if text else "", "calls": None,
                         "test": (not outside) and nav._is_test(r.path)})
+            if raw:
+                out[-1]["raw"] = text
         return out
 
     def _checkpoint() -> None:
@@ -487,8 +540,9 @@ def routes(reg: Any, ctx: Any) -> None:
 
     def calls_graph(direction: str, rel: str, line: int, col: Optional[int],
                     tgt: Dict[str, Any], lang: Optional[str], why: Dict[str, Any]) -> Dict[str, Any]:
-        """No language server answer: callers from the call graph (labelled `graph`); callees are
-        EMPTY with the reason (G-Q4) — `asked: false` says nobody was asked."""
+        """No language server answer: callers AND callees from the call graph (labelled `graph`,
+        `asked: false` — no server was asked), with the reason the server did not answer. The
+        graph answers from its ONE shared index build (`nav.graph_index`), never one of its own."""
         from .. import nav
         from ...knowledge.cancel import report
         sym = tgt.get("symbol", "")
@@ -500,18 +554,16 @@ def routes(reg: Any, ctx: Any) -> None:
             "truncated": False, "skipped": 0, "complete": False, "items_named": 0,
             "items_asked": 0, "cap": L.CALLS_MAX, "basis": None, "backend": "", "note": "",
             "edge": {"ac": ac_ties(root, rel)}}
-        if direction == "out":
-            out["source"] = "none"
-            out["note"] = (f"callees need the language server ({why.get('state')}) — the call graph "
-                           "answers callers only")
-            if why.get("state") == "no-call-hierarchy":
-                out["note"] = (f"{why.get('server')} offers no call hierarchy — callees need it; "
-                               "the call graph answers callers only")
-            return out
         if not sym:
             out["note"] = "no function at that position"
             out["callable"] = False
             return out
+        gi = nav.graph_index(root, True)
+        if not gi["ready"]:
+            out["note"] = index_not_ready(gi)
+            return out
+        if direction == "out":
+            return _graph_callees(out, tgt)
         report(note=f"asking the call graph for the callers of {sym}")
         try:
             res = nav.run(root, "callers", sym)
@@ -531,6 +583,117 @@ def routes(reg: Any, ctx: Any) -> None:
         out["total"], out["truncated"] = len(refs), len(rows) < len(refs)
         out["edge"].update(graph_edge(root, sym))
         return out
+
+    def _graph_callees(out: Dict[str, Any], tgt: Dict[str, Any]) -> Dict[str, Any]:
+        """0.0.29 A `LSP-CALLS-GRAPH-CALLEES` — what the function asked about calls, from the call
+        graph. The graph keys calls by the caller's BARE NAME (`A.run` and `B.run` are one key), so
+        the answer is ONE `callees` query and ONE `defs` query for the name; each definition then
+        keeps only the call lines inside its own span, minus those inside a nested definition of
+        the same name. A resolved definition (no col sent) is the one group; a name (an expanded
+        callee row) is one group per definition, at most CALLS_ITEMS_MAX, the rest counted."""
+        from .. import nav
+        from ...knowledge.cancel import report
+        sym = out["symbol"]
+        code_root = state.source._code_root()
+        report(note=f"asking the call graph for what {sym} calls")
+        try:
+            res = nav.run(root, "callees", sym)
+            defs = list(nav.run(root, "defs", sym).references)
+            out["basis"], out["backend"], out["note"] = res.basis, res.backend, res.note or ""
+            refs = list(res.references)
+        except MokataError as exc:            # the floor itself is unavailable: say so
+            out["note"] = f"graph unavailable: {exc}"[:300]
+            return out
+        spans = _Spans(code_root)
+        if tgt.get("def") is not None:
+            groups = [dict(tgt["def"], col=tgt.get("col"), cur=tgt.get("cur", ""))]
+            named = 1
+        else:
+            places = sorted({(str(d.path), int(d.line)) for d in defs})
+            named = len(places)
+            groups = [spans.of(p, ln, sym) for p, ln in places[:L.CALLS_ITEMS_MAX]]
+        out["items_named"], out["items_asked"] = named, len(groups)
+        if not groups:
+            out["callable"] = False
+            out["note"] = (f"the call graph holds no definition of `{sym}` in this repository"
+                           + (f" ({out['note']})" if out["note"] else ""))[:300]
+            return out
+        by_path: Dict[str, List[Any]] = {}
+        for r in refs:
+            by_path.setdefault(str(r.path), []).append(r)
+        same: Dict[str, set] = {}
+        for d in defs:
+            same.setdefault(str(d.path), set()).add(int(d.line))
+        unknown = False
+        for g in groups:
+            lo, hi = g["line"], g.get("end")
+            unknown = unknown or hi is None
+            nested = [spans.of(g["path"], ln, sym) for ln in sorted(same.get(g["path"], ()))
+                      if ln > lo and (hi is None or ln <= hi)]
+            inner = [(n["line"], n["end"]) for n in nested if n.get("end") is not None]
+            g["calls"] = [r for r in by_path.get(g["path"], [])
+                          if lo <= int(r.line) and (hi is None or int(r.line) <= hi)
+                          and not any(a <= int(r.line) <= b for a, b in inner)]
+        if unknown:
+            out["note"] = ("span unknown — may include same-named functions in this file"
+                           + (f"; {out['note']}" if out["note"] else ""))[:300]
+        out["groups"] = [_callee_group(code_root, g, sym) for g in groups]
+        out["total"] = sum(g["total"] for g in out["groups"])
+        out["truncated"] = any(g["truncated"] for g in out["groups"])
+        out["callable"] = True
+        out["complete"] = (not out["truncated"]) and named == len(groups)
+        out["edge"].update(graph_edge(root, sym))
+        return out
+
+    class _Spans:
+        """`{path, line, end, col, cur}` of the definition named `sym` at (path, line) — its span
+        from the outline (`usages.definition_at`); a file's text is read once per answer."""
+
+        def __init__(self, code_root: str) -> None:
+            self.code_root = code_root
+            self.texts: Dict[str, Optional[str]] = {}
+
+        def of(self, path: str, line: int, sym: str) -> Dict[str, Any]:
+            from .. import usages as U
+            if path not in self.texts:
+                self.texts[path] = U.file_text(self.code_root, path)
+            text = self.texts[path]
+            d = U.definition_at(self.code_root, path, line, text)[0] if text is not None else None
+            lines = U.viewer_lines(text) if text is not None else []
+            cur = lines[line - 1] if 0 < line <= len(lines) else ""
+            if d is not None and d.line == line and d.name.rsplit(".", 1)[-1] == sym:
+                return {"path": path, "line": line, "end": d.end, "col": d.col, "cur": cur}
+            return {"path": path, "line": line, "end": None,
+                    "col": _name_col(cur, sym, call=False), "cur": cur}
+
+    def _callee_group(code_root: str, g: Dict[str, Any], sym: str) -> Dict[str, Any]:
+        """One definition's callees as rows: distinct callees in first-call-line order, `calls` =
+        how many call LINES name it, the first call line's snippet; `col` only when the callee's
+        name is found exactly once as a call on that line — else `expandable: false`."""
+        from .. import nav
+        first: Dict[str, Any] = {}
+        count: Dict[str, int] = {}
+        for r in sorted(g["calls"], key=lambda r: int(r.line)):
+            name = str(r.symbol or "")
+            count[name] = count.get(name, 0) + 1
+            first.setdefault(name, r)
+        kept = list(first)[:L.CALLS_MAX]
+        rows = _call_rows_graph(code_root, [first[n] for n in kept], raw=True)
+        for name, row in zip(kept, rows):
+            row["calls"] = count[name]
+            text = row.pop("raw", None)
+            col = None if row["outside"] else _name_col(text, name)
+            if col is not None:
+                row["col"], row["col_exact"] = col, True
+            else:
+                row["expandable"] = False
+        rows.sort(key=lambda x: (int(x["line"]), x["col"] or 0))
+        item = {"name": sym, "kind": "function", "detail": "", "path": g["path"],
+                "shown": g["path"], "outside": False, "line": g["line"], "col": g.get("col"),
+                "col_exact": g.get("col") is not None,
+                "snippet": (g.get("cur") or "").strip()[:300], "test": nav._is_test(g["path"])}
+        return {"item": item, "rows": rows, "total": len(first),
+                "truncated": len(rows) < len(first), "skipped": 0}
 
     def calls_lsp(direction: str, srv: L.Server, rel: str, abspath: str, line: int,
                   col: Optional[int], tgt: Dict[str, Any], lang: str, how: Dict[str, Any],
@@ -571,7 +734,7 @@ def routes(reg: Any, ctx: Any) -> None:
             out["note"] = "the language server names no function at that position"
         sym = groups[0]["item"]["name"] if groups else tgt.get("symbol", "")
         out["symbol"] = sym
-        out["edge"].update(graph_edge(root, sym))
+        out["edge"].update(graph_edge(root, sym, wait=False))
         return out
 
     def calls_handler(request: Any):
@@ -600,7 +763,7 @@ def routes(reg: Any, ctx: Any) -> None:
             if not host.recheck_trust():
                 return calls_graph(direction, rel, line, col, tgt, lang,
                                    {"state": "untrusted", "note": "this workspace is not trusted"
-                                    " — the call graph answers callers"})
+                                    " — the call graph answers"})
             if lang is None:
                 return calls_graph(direction, rel, line, col, tgt, lang, {
                     "state": "unsupported", "note": "no language server is mapped to this file "
@@ -614,11 +777,11 @@ def routes(reg: Any, ctx: Any) -> None:
                 return calls_graph(direction, rel, line, col, tgt, lang, {
                     "state": "indexing", "server": srv.name, "progress": busy,
                     "job": getattr(job, "id", None),
-                    "note": f"{srv.name} is still indexing — the graph shows callers meanwhile"})
+                    "note": f"{srv.name} is still indexing — the call graph answers meanwhile"})
             if not L.call_hierarchy_supported(srv):
                 return calls_graph(direction, rel, line, col, tgt, lang, {
                     "state": "no-call-hierarchy", "server": srv.name,
-                    "note": f"{srv.name} offers no call hierarchy — the call graph answers callers"})
+                    "note": f"{srv.name} offers no call hierarchy — the call graph answers"})
             try:
                 return calls_lsp(direction, srv, rel, abspath, line, col, tgt, lang, why, text)
             except L.ServerGone as exc:
@@ -627,6 +790,14 @@ def routes(reg: Any, ctx: Any) -> None:
                 return calls_graph(direction, rel, line, col, tgt, lang, {
                     "state": "crashed", "server": srv.name,
                     "note": f"{exc} — it restarts at the next ask"[:300]})
+            except L.ServerSilent as exc:
+                # 0.0.29 DECISIONS #14: named, never a silent wait; the server keeps running (it may be busy).
+                if not host.recheck_trust():
+                    return calls_graph(direction, rel, line, col, tgt, lang, {"state": "untrusted"})
+                return calls_graph(direction, rel, line, col, tgt, lang, {
+                    "state": "no-answer", "server": srv.name, "method": exc.method,
+                    "silence_s": exc.silence,
+                    "note": f"{exc} — the call graph answers"[:300]})
             except L.ServerError as exc:
                 # The code only: a server's own message never reaches the page (rule F5).
                 m = _CODE.search(str(exc))

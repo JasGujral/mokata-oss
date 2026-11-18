@@ -276,6 +276,52 @@ class TheCardShowsTheCurrentStateAfterCancel(H.IdeFlow):
             release_codes(self, {"error": "Gone", "note": "decided elsewhere"})
 
 
+class FocusThePersonMovedIsTheirs(H.IdeFlow):
+    """0.0.29 E (`PINS-UI-SMALL-LOWS`): the card catches up after a void code by moving focus to
+    its first action ONLY when focus was in the card (`backToIdle`'s `had`); a person who moved
+    to the page header meanwhile keeps it there. And a live reload that re-attaches a card being
+    typed into keeps the code's caret and selection, not only its text."""
+    FIXTURE = "shop"
+
+    def setUp(self):
+        super().setUp()
+        _wired_setup(self)
+
+    def test_1_a_void_code_never_pulls_focus_back_from_the_page_header(self):
+        p = self.page
+        pid, card = propose(self, 11)
+        card.get_by_role("button", name="Approve", exact=True).click()
+        card.locator("input.ap-code").wait_for()
+        card.locator("input.ap-code").fill("ABCD-EFGH")
+        type(self).decide_answer = {"error": "BadCode", "note": "that code has expired — ask for a new one"}
+        try:
+            with p.expect_response("**/api/approvals/decide"):
+                card.locator("input.ap-code").evaluate("""(i) => {   // Enter sends; focus moves
+                    i.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', bubbles: true}));
+                    document.querySelector('#qo-open').focus(); }""")  # BEFORE the answer comes
+            self.until("!document.querySelector(\"#approvals-bar .ap-card[data-pid='%s'] input.ap-code\")" % pid,
+                       "the card to leave its code row")
+            p.evaluate("MK.reloadApprovals()")                       # resolves after the repaint
+            self.assertEqual("qo-open", p.evaluate("document.activeElement.id"),
+                             "focus the person moved out of the card stays where they put it")
+        finally:
+            type(self).decide_answer = None
+
+    def test_2_a_reload_keeps_the_caret_and_selection_of_the_code_being_typed(self):
+        p = self.page
+        _pid, card = propose(self, 12)
+        card.get_by_role("button", name="Approve", exact=True).click()
+        inp = card.locator("input.ap-code")
+        inp.wait_for()
+        inp.fill("ABCD-EFGH")
+        inp.evaluate("(i) => { i.focus(); i.setSelectionRange(2, 6, 'backward'); }")
+        p.evaluate("MK.reloadApprovals()")                           # re-attaches the busy card
+        got = p.evaluate("""() => { const i = document.activeElement;
+            return [i && i.classList.contains('ap-code'), i.value, i.selectionStart, i.selectionEnd,
+                    i.selectionDirection]; }""")
+        self.assertEqual([True, "ABCD-EFGH", 2, 6, "backward"], got)
+
+
 class TheLastCardGoingHandsFocusToTheScreenTab(H.IdeFlow):
     """Its own repo: ONE write waits and nothing else, so when it is rejected in a terminal the
     whole bar goes. Focus that was in its card lands on the selected screen tab.

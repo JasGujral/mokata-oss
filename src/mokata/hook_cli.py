@@ -689,7 +689,7 @@ def _own_record_refusal(cwd: str, targets: List[str], command: str = "", bash: A
             return (f"BLOCKED [{GATE_OWN_RECORD}] {hit} — that is mokata's run record, the "
                     f"evidence the gates decide from. mokata writes it; a tool call may not change "
                     f"or remove it. Use the mokata command for what you meant (e.g. `mokata gate "
-                    f"override`, `mokata uninstall`).")
+                    f"override`, `mokata reset`).")
         return ""
     except Exception:  # noqa: BLE001
         return ""
@@ -1483,7 +1483,7 @@ def session_start_main(argv: Optional[List[str]] = None) -> int:
                   "store and audit ledger into a second, empty copy.")
             return 0
         # Proactive, one-time offer. Disappears for good once .mokata/ exists.
-        _emit(build_setup_offer().text + (f"\n{plugin_line}" if plugin_line else ""))
+        _emit(build_setup_offer(root=cwd).text + (f"\n{plugin_line}" if plugin_line else ""))
         return 0
 
     # IDE-RESUME-LOSES-RUN (0.0.26 O10) — a resumed (or forked) conversation stays in its run: a
@@ -1510,7 +1510,7 @@ def session_start_main(argv: Optional[List[str]] = None) -> int:
     try:
         surface = Surface.load(root)
     except ConfigError:
-        _emit(build_setup_offer().text)
+        _emit(build_setup_offer(root=cwd).text)
         return 0
     except Exception as exc:  # never let a config problem break a session
         _emit(f"mokata: bootstrap skipped ({exc}).")
@@ -1685,10 +1685,14 @@ def user_prompt_submit_main(argv: Optional[List[str]] = None) -> int:
         _record_prompt_intent(root, prompt, session_id)
         # P33 SESSION-INDEX — the first prompt labels the session's row; later ones only move its
         # heartbeat (an mtime — no bytes change, so an injection turn stays byte-identical).
-        _index_prompt(root, prompt=prompt, session_id=session_id)
+        # 0.0.29 F — ONE process-table snapshot for this prompt (as SessionStart takes), shared by
+        # the index row and the ancestry map: read in-process on every OS, never a spawned `ps`.
+        from .session_ancestry import system_lookup
+        procs = system_lookup()
+        _index_prompt(root, prompt=prompt, session_id=session_id, lookup=procs)
         # SESSION-BIND-BY-ANCESTOR (0.0.23 F1) — refresh this process's session for the MCP side
         # on every prompt (newest write wins), so a `/resume` switch is followed by the next turn.
-        _record_session_ancestry(root, session_id)
+        _record_session_ancestry(root, session_id, lookup=procs)
         # E2 (0.0.22) — `/mokata:review-window`: THIS hook is the one place that knows which session asked, so
         # it opens the review window, or re-focuses the open one on this session, and says where.
         ide_line = _ide_for_prompt(root, prompt, session_id)
@@ -1918,10 +1922,11 @@ def _index_session_start(root: str, session_id: Optional[str], source: Optional[
         pass
 
 
-def _index_prompt(root: str, session_id: Optional[str], prompt: str) -> None:
+def _index_prompt(root: str, session_id: Optional[str], prompt: str, lookup: Any = None) -> None:
+    """`lookup`: the hook's one process-table snapshot (a row opened at a prompt names its Claude)."""
     try:
         from .session_index import on_prompt
-        on_prompt(root, session_id, prompt)
+        on_prompt(root, session_id, prompt, lookup=lookup)
     except Exception:  # noqa: BLE001 — an unlabelled row is still a row; the turn is never eaten
         pass
 
@@ -2046,6 +2051,16 @@ def _mokata_segment(cwd: str, session_name: Optional[str],
         return ""
 
 
+def statusline_refused_text(raw: str = "") -> str:
+    """What the statusLine shows in place of a wrapped line the Windows cmd guard refused (D16)."""
+    from .plugin_runtime import slash_command
+    try:
+        cwd = _cwd_and_session_name(raw)[0] if raw else None
+    except Exception:                                      # noqa: BLE001 - best-effort root
+        cwd = None
+    return f"mokata: statusLine refused — run {slash_command('doctor', cwd or None)}"
+
+
 def _run_wrapped(command: str, raw: str) -> str:
     """Run the statusLine command that was already in this settings.json (merge-safe
     composition), feeding it the SAME payload, and return its first stdout line. Best-effort +
@@ -2056,6 +2071,7 @@ def _run_wrapped(command: str, raw: str) -> str:
     B602 justification below."""
     if not command:
         return ""
+    from .quiet_spawn import CmdLineRefused
     try:
         from .quiet_spawn import run_jobbed
         # Justification for the B602 suppression (F10, rewritten — the previous one asserted
@@ -2091,6 +2107,11 @@ def _run_wrapped(command: str, raw: str) -> str:
                                     timeout=_WRAP_TIMEOUT_SECS)
         first = (out or "").splitlines()
         return first[0].strip() if first else ""
+    except CmdLineRefused:
+        # Ruling D16 (round-4 verifier M1): the Windows cmd guard refused the user's own line —
+        # never a silent blank. A short visible marker in its place; `mokata doctor` names the
+        # line, the reason and the fix.
+        return statusline_refused_text(raw)
     except Exception:
         return ""
 

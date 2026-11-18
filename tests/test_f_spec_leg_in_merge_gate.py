@@ -170,7 +170,9 @@ class Stale(_Leg):
             "another worktree": dict(good, worktree=self.main),
             "change digest differs": dict(good, files_sha="0" * 64),
             "spec corpus changed": dict(good, corpus_fp="0" * 64),
-            "older than the freshness bound": dict(good, at=time.time() - 25 * 3600),
+            # 0.0.29 lane G: no age bound — the decisions the leg read, by content, instead
+            "a decision moved": dict(good, decisions=dict(good.get("decisions") or {}, x="0" * 16)),
+            "no decisions map": {k: v for k, v in good.items() if k != "decisions"},
         }
         for name, rec in cases.items():
             with self.subTest(name):
@@ -255,9 +257,18 @@ class ApprovalBinds(_Leg):
 class Degraded(_Leg):
 
     def test_a_leg_that_read_no_decisions_blocks(self):
+        from mokata.memory import MemoryStore
         from mokata.memory.store import MemoryError as MemErr
         wt = self.quiet()
-        with mock.patch("mokata.memory.MemoryStore.from_surface", side_effect=MemErr("locked")):
+        real = MemoryStore.from_surface.__func__
+
+        def leg_read_fails(cls, surface, *a, **kw):
+            # 0.0.29 lane G: the decisions FINGERPRINT (`knowledge=False`) reads the store first;
+            # only the leg's own read (`ci_check`) is refused here, so the leg itself degrades.
+            if kw.get("knowledge") is False:
+                return real(cls, surface, *a, **kw)
+            raise MemErr("locked")
+        with mock.patch("mokata.memory.MemoryStore.from_surface", classmethod(leg_read_fails)):
             self.evidence(wt)
         leg = {x["name"]: x for x in self.rec()["legs"]}["spec-awareness"]
         self.assertTrue(leg["degraded"], leg)
@@ -265,6 +276,18 @@ class Degraded(_Leg):
         self.assertFalse(plan.ok)
         self.assertIn(MG.SPEC_DEGRADED, {b["code"] for b in plan.blocked})
         self.assertEqual(MG.SPEC_DEGRADED, plan.state)
+
+    def test_a_store_unreadable_before_the_leg_records_nothing_and_blocks(self):
+        """0.0.29 lane G — the decision store cannot be fingerprinted: the leg refuses with the
+        cause's TYPE, records nothing, and the merge blocks (no record is never a pass)."""
+        from mokata.memory.store import MemoryError as MemErr
+        wt = self.quiet()
+        with mock.patch("mokata.memory.MemoryStore.from_surface", side_effect=MemErr("locked")):
+            with self.assertRaises(MSL.SpecLegError) as cm:
+                MSL.run_spec_leg(self.main, wt)
+        self.assertIn("the decision store could not be read (MemoryError)", str(cm.exception))
+        self.assertNotIn("locked", str(cm.exception))
+        self.assertFalse(MG.plan_merge(self.main, wt).ok)
 
     def test_a_blocking_leg_blocks_naming_the_leg_and_its_unblock(self):
         wt = self.session()
@@ -549,7 +572,10 @@ class CliSigint(_Leg):
         wt = self.session(files=files)
         rc, out = self._interrupt(["worktree", "test", wt, "--path", self.main])
         self.assertEqual(2, rc, out)
-        self.assertIn("cancelled — nothing recorded", out)
+        # 0.0.29 N2 (cell #22): the suite run WAS recorded before the legs began — the outcome
+        # says so, and names what was not recorded, instead of "nothing recorded".
+        self.assertIn("cancelled — recorded: the suite run; not recorded: the spec legs", out)
+        self.assertNotIn("nothing recorded", out)
         self.assertFalse(_state(self.main).exists(MSL.key("R1")), out)
 
     def test_ctrl_c_during_ci_check_exits_2(self):

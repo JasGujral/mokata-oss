@@ -424,8 +424,9 @@ class TheR_O12_PromptHookMeetsItsBudgetOnA1MLineRepo(unittest.TestCase):
     """HOOK-BUDGET's method (`test_hb_hook_budget`): a fresh hook process per prompt through
     the plugin's launcher (`_support.plugin_route_hook`: Claude Code's `PYTHONDONTWRITEBYTECODE=1`
     set, as in production — 0.0.28 W5), two warm-ups, the bare-interpreter floor interleaved and divided out (`perf.interpreter_factor`),
-    `perf.relax_factor()` for shared CI runners, and up to three batches (a real regression misses
-    all three). Asserted on p50 against the `context` kind's ruled 150 ms (U14)."""
+    no CI relax and `perf.MARGIN` of the bound (0.0.29 F), and up to three batches (a real regression misses
+    all three). Asserted on p50 against this OS's measured prompt-hook ceiling: on darwin the
+    `context` kind's ruled 150 ms (U14); off darwin the per-OS column (`perf.hook_budget_ms`)."""
 
     N = 11
     BATCHES = 3
@@ -481,21 +482,32 @@ class TheR_O12_PromptHookMeetsItsBudgetOnA1MLineRepo(unittest.TestCase):
         return statistics.median(xs), statistics.median(floor), outs
 
     def test_R_O12_the_prompt_hook_answers_inside_150ms(self):
-        budget = perf.HOOK_BUDGET_TARGETS_MS[perf.HOOK_KINDS["user-prompt-submit"]]
-        self.assertEqual(150.0, budget)
-        relax = perf.relax_factor()
+        target = perf.HOOK_BUDGET_TARGETS_MS[perf.HOOK_KINDS["user-prompt-submit"]]
+        self.assertEqual(150.0, target)
+        # 0.0.29 F — at `perf.MARGIN` of THIS OS's measured ceiling for the prompt hook in a repo
+        # (`perf.hook_budget_ms`, re-derived per OS at the wave-2 bookend), and no CI relax
+        # (`perf.margin_relax()` is 1). On darwin that ceiling IS the 150 ms target (asserted
+        # here); off darwin it is the measured column, never below darwin x OFF_DARWIN_BUFFER — the
+        # linux runner measured this hook at 104-138 ms p50 normalised (mirror CI 43869782006 and
+        # 43884250337) against a 135 cell: graded by the darwin target it red on runner speed alone.
+        budget, is_target = perf.hook_budget_ms("user-prompt-submit", "repo")
+        if sys.platform == "darwin":
+            self.assertEqual((target, True), (budget, is_target))
+        relax = perf.margin_relax()
+        allowed = budget * perf.MARGIN * relax
         seen = []
         for _ in range(self.BATCHES):
             p50, floor, outs = self._batch()
             self.assertTrue(all("fix the parser bug carefully" in o for o in outs),
                             "every timed prompt must deliver its pack — a fast empty hook proves nothing")
             seen.append((p50 / perf.interpreter_factor(floor), p50, floor))
-            if seen[-1][0] <= budget * relax:
+            if seen[-1][0] <= allowed:
                 break
         best = min(seen)
         sys.stderr.write(f"\n[O12] user-prompt-submit @ 1M lines: p50 {best[0]:.1f} normalised "
-                         f"({best[1]:.1f} raw, floor {best[2]:.1f}), budget {budget * relax:g}\n")
-        self.assertLessEqual(best[0], budget * relax, seen)
+                         f"({best[1]:.1f} raw, floor {best[2]:.1f}), allowed {allowed:g} "
+                         f"({perf.MARGIN:g} x {budget:g})\n")
+        self.assertLessEqual(best[0], allowed, seen)
 
 
 if __name__ == "__main__":

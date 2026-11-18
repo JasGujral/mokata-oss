@@ -353,8 +353,12 @@ def _move_record(root: str) -> None:
     from .server import _write_record
     from .statedir import user_repo_dir
     from ..winacl import read_private
+    from ..errors import RecordRefused
     old = os.path.join(user_repo_dir(root), "ide", "server.json")
-    raw = read_private(old)                  # 0.0.28 C: ours and private, one handle, never a FIFO wait
+    try:
+        raw = read_private(old)              # 0.0.28 C: ours and private, one handle, never a FIFO wait
+    except RecordRefused:                    # 0.0.29 H4: a refused old record is not moved — silently
+        return
     if raw is None:
         return
     try:

@@ -1,9 +1,9 @@
 """0.0.24 patch — the mokata parts of OSS #82 / #83 (Windows, 0.0.22), pinned on every OS.
 
-* #82 item 1 — `baseline` over MCP could never finish a suite slower than 120 s. The budget is now
-  `settings.mcp.test_timeout_seconds` (clamped to the 600 s terminal bound), and the timeout hint
-  names the setting. `spec_check`'s 60 s timeout was the 0.0.22 per-symbol corpus walk, fixed in
-  0.0.23 (B1b); it keeps the interactive budget.
+* #82 item 1 — `baseline` over MCP could never finish a suite slower than 120 s. 0.0.24's
+  `settings.mcp.test_timeout_seconds` budget was deleted in 0.0.29 lane G (#82-1b): no wall clock
+  ends a suite; its pins live in `test_g_mcp_long_suite`. `spec_check`'s 60 s timeout was the 0.0.22
+  per-symbol corpus walk, fixed in 0.0.23 (B1b).
 * #82 item 3 — `mokata gate override` in an agent's shell (CLAUDECODE=1) refuses up front and names
   `--yes`, instead of asking a question nobody can answer (Windows shells report a TTY there).
 * #82 item 4 — `spec_emit` with `proposal_id` ALONE redeems the approved proposal; the content hash
@@ -28,10 +28,8 @@ import _support  # noqa: F401  (puts src/ on the path)
 from _plan import (call_planned, commit_planned, emit_planned,  # noqa: F401,E402  (R2)
                    planned, sealed, with_tasks)
 
-from mokata import baseline as B
 from mokata.config import Surface
 from mokata.init import init_repo
-from mokata.mcp import server as MS
 from mokata.prompt import ASKED, ConsentDecision
 
 
@@ -39,65 +37,6 @@ def _repo():
     d = tempfile.TemporaryDirectory()
     init_repo(root=d.name, profile="minimal", assume_yes=True, out=lambda *_a: None)
     return d
-
-
-def _set(root, value):
-    path = os.path.join(root, ".mokata", "manifest.json")
-    with open(path, encoding="utf-8") as fh:
-        data = json.load(fh)
-    data.setdefault("settings", {})["mcp"] = {"test_timeout_seconds": value}
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(data, fh)
-
-
-class TheBaselineBudgetIsTheRepos(unittest.TestCase):
-
-    def setUp(self):
-        self.d = _repo()
-        self.addCleanup(self.d.cleanup)
-        self.root = self.d.name
-
-    def test_the_default_is_unchanged(self):
-        self.assertEqual(MS._mcp_timeout_for("baseline", self.root), B.BASELINE_MCP_TIMEOUT_SECONDS)
-
-    def test_the_setting_raises_it_as_config_set_stores_it(self):
-        _set(self.root, 300)
-        self.assertEqual(MS._mcp_timeout_for("baseline", self.root), 300.0)
-        self.assertEqual(B.mcp_test_timeout(Surface.load(self.root).manifest), 300.0)
-
-    def test_it_never_exceeds_the_terminal_bound(self):
-        _set(self.root, 99999)
-        self.assertEqual(MS._mcp_timeout_for("baseline", self.root),
-                         float(B.BASELINE_TIMEOUT_SECONDS))
-
-    def test_a_bad_value_is_the_default_never_an_error(self):
-        for bad in ("soon", -5, 0, True, None):
-            _set(self.root, bad)
-            self.assertEqual(MS._mcp_timeout_for("baseline", self.root),
-                             float(B.BASELINE_MCP_TIMEOUT_SECONDS), bad)
-
-    def test_other_tools_keep_the_interactive_budget(self):
-        _set(self.root, 300)
-        self.assertEqual(MS._mcp_timeout_for("spec_check", self.root),
-                         MS.MCP_SURFACE_TIMEOUT_SECONDS)
-
-    def test_the_timeout_hint_names_the_setting_for_baseline_only(self):
-        self.assertIn("settings.mcp.test_timeout_seconds",
-                      MS._still_running("baseline", 120, 121, "c")["hint"])
-        self.assertNotIn("test_timeout_seconds",
-                         MS._still_running("spec_check", 60, 61, "c")["hint"])
-
-    def test_the_mcp_baseline_tool_hands_the_subprocess_the_same_budget(self):
-        _set(self.root, 300)
-        from mokata.mcp import tools_read
-        seen = {}
-
-        def fake(cmd, cwd, timeout, **_kw):
-            seen["timeout"] = timeout
-            return B.BaselineResult(state=B.GREEN, command=cmd or "x", returncode=0, detail="")
-        with mock.patch.object(B, "baseline_status", side_effect=fake):
-            tools_read.baseline(self.root, cmd="true")
-        self.assertEqual(seen["timeout"], 300.0)
 
 
 class TheOverrideRefusesUpFrontInAnAgentShell(unittest.TestCase):
@@ -122,8 +61,19 @@ class TheOverrideRefusesUpFrontInAnAgentShell(unittest.TestCase):
         ask.assert_not_called()
         self.assertIn("--yes", out)
 
-    def test_outside_an_agent_shell_the_question_is_still_asked(self):
+    def test_the_app_terminal_panel_is_asked_not_told_to_use_yes(self):
+        # 0.0.29 H-a (Jas, 2026-11-16 "Drop"): the Claude app's Terminal panel sets its own variable
+        # for the HUMAN's shell, without CLAUDECODE — the question is asked there, no `--yes` demanded.
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+        env["CLAUDE_CODE_" + "ENTRYPOINT"] = "cli"
+        with mock.patch.dict(os.environ, env, clear=True):
+            rc, ask, out = self._run({}, yes=False)
+        ask.assert_called_once()
+        self.assertNotIn("agent's shell", out)
+
+    def test_outside_an_agent_shell_the_question_is_still_asked(self):
+        from mokata.prompt import AGENT_SHELL_SIGNALS      # 0.0.29 H-a round 3: one definition
+        env = {k: v for k, v in os.environ.items() if k not in AGENT_SHELL_SIGNALS}
         with mock.patch.dict(os.environ, env, clear=True):
             rc, ask, _out = self._run({}, yes=False)
         ask.assert_called_once()
@@ -212,7 +162,10 @@ class SpecEmitRedeemsWithTheIdAlone(unittest.TestCase):
 class ADegradedSaveNamesItsCause(unittest.TestCase):
     """#82 item 5 / #83 — the MCP client sees the error TYPE and code, never only "see the warning"."""
 
-    def test_a_permission_error_is_named_with_its_code_and_the_upgrade_hint(self):
+    def test_a_permission_error_is_named_with_its_code_and_the_disk_remedy(self):
+        # 0.0.29 lane G (#83): a save that raised before any write is `ok:false` and says NOTHING
+        # was saved; an OSError gets the disk remedy (re-call, then doctor). The 0.0.24 "upgrade"
+        # sentence is deleted (the Windows retry it pointed at shipped in 0.0.23).
         from mokata.mcp import tools_read
         d = _repo()
         self.addCleanup(d.cleanup)
@@ -220,9 +173,12 @@ class ADegradedSaveNamesItsCause(unittest.TestCase):
         with mock.patch("mokata.session_flow.save_session", side_effect=boom), \
                 mock.patch("mokata.session_flow.note_persist_failure"):
             out = tools_read.session_save(d.name, brainstorm={"topic": "x"})
-        self.assertTrue(out["degraded"])
+        self.assertIs(False, out["ok"])
+        self.assertEqual("degraded", out["status"])
         self.assertTrue(out["error"].startswith("PermissionError ["), out["error"])
-        self.assertIn("upgrade", out["message"])
+        self.assertIn("nothing was saved", out["message"])
+        self.assertIn("mokata doctor", out["message"])
+        self.assertNotIn("upgrade", out["message"])
         self.assertNotIn("secret", json.dumps(out), "the exception's text must never be echoed")
 
 

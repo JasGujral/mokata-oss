@@ -180,42 +180,30 @@ class TestPrehookNonBlocking(_Base):
 
 
 # ======================================================================================
-# R7 — baseline: capped far below 600s on the MCP surface; the terminal bound is unchanged
+# R7 — baseline: the reply budget is the one every tool has; the suite has no wall clock
+# (0.0.29 lane G, #82-1b — the old two-bound split is deleted; long-suite cells in test_g_mcp_long_suite)
 # ======================================================================================
 
 class TestBaselinePosterChild(_Base):
 
-    def test_mcp_r_d0_baseline_mcp_capped(self):
-        # the two-bound split: MCP-surface cap << terminal cap
-        self.assertLess(B.BASELINE_MCP_TIMEOUT_SECONDS, B.BASELINE_TIMEOUT_SECONDS)
-        self.assertLessEqual(B.BASELINE_MCP_TIMEOUT_SECONDS, 120)
-        self.assertGreaterEqual(B.BASELINE_MCP_TIMEOUT_SECONDS, 60)
+    def test_mcp_r_d0_baseline_reply_budget_is_the_surfaces(self):
+        self.assertEqual(MS._mcp_timeout_for("baseline"), MS.MCP_SURFACE_TIMEOUT_SECONDS)
 
-        # the _serve wall-clock budget for `baseline` uses the capped constant, not 600s
-        self.assertEqual(MS._mcp_timeout_for("baseline"), B.BASELINE_MCP_TIMEOUT_SECONDS)
-        self.assertNotEqual(MS._mcp_timeout_for("baseline"), B.BASELINE_TIMEOUT_SECONDS)
-
-        # the MCP baseline TOOL bounds its subprocess at the MCP cap (never 600s)
+        # the MCP baseline TOOL hands the run NO clock: `baseline_status` has no `timeout` at all
         captured = {}
 
-        def fake_status(command, cwd=None, timeout=B.BASELINE_TIMEOUT_SECONDS, **_kw):
-            captured["timeout"] = timeout
+        def fake_status(command, cwd=None, **kw):
+            captured.update(kw)
             return B.BaselineResult(state=B.UNKNOWN, detail="stub")
 
         import tempfile
         with tempfile.TemporaryDirectory() as d:
             with mock.patch("mokata.baseline.baseline_status", fake_status):
                 out = TR.baseline(path=d)
-        self.assertEqual(captured["timeout"], B.BASELINE_MCP_TIMEOUT_SECONDS)
-        self.assertNotEqual(captured["timeout"], B.BASELINE_TIMEOUT_SECONDS)
+        self.assertNotIn("timeout", captured)
+        self.assertEqual(captured["silence"], float(B.BASELINE_SILENCE_SECONDS))
         self.assertIn("ok", out)     # shape preserved, no new status key (MCP-R.D1b: `report` opt-in)
-
-        # the TERMINAL bound is UNCHANGED: baseline_status still defaults to the 600s cap, which the
-        # CLI/`mokata baseline` path (diagnostics.py, no override) therefore still gets.
-        self.assertEqual(B.BASELINE_TIMEOUT_SECONDS, 600)
-        self.assertEqual(
-            inspect.signature(B.baseline_status).parameters["timeout"].default,
-            B.BASELINE_TIMEOUT_SECONDS)
+        self.assertNotIn("timeout", inspect.signature(B.baseline_status).parameters)
 
 
 # ======================================================================================

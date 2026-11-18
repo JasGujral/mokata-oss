@@ -292,9 +292,14 @@ class TreeFileOutline(unittest.TestCase):
 
 
 class Impact(unittest.TestCase):
+    # ignore_cleanup_errors (0.0.29 W2-final-2): on a Windows runner the fixture's run-state
+    # directory was momentarily non-empty at rmdir (WinError 145, mirror run 43946281004 windows
+    # present 3/4) — the tear-down of the fixture, not the answer under test. The same guard as
+    # test_p24/test_p38's IDE fixtures.
+
 
     def test_a_tested_symbol_is_covered_and_an_untested_one_is_flagged(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
             _fixture(d)
             im = nav.impact(d, "src/app/core.py", "2-4,8-8")
             by = {s["name"]: s for s in im["symbols"]}
@@ -306,7 +311,7 @@ class Impact(unittest.TestCase):
 
     def test_only_a_structural_answer_may_claim_untested(self):
         from mokata.knowledge.query import QueryResult
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
             _fixture(d)
             lexical = QueryResult(kind="blast_radius", target="total", references=[],
                                   backend="grep", basis="lexical")
@@ -322,7 +327,7 @@ class Impact(unittest.TestCase):
             self.assertEqual("unknown", im["status"])
 
     def test_a_test_file_is_a_test_and_lines_outside_any_def_name_nothing(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
             _fixture(d)
             self.assertEqual("test", nav.impact(d, "tests/test_core.py", "1-5")["status"])
             self.assertEqual("no-symbols", nav.impact(d, "src/app/core.py", "")["status"])

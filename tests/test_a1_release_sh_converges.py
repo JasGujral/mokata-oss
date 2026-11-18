@@ -45,6 +45,7 @@ import tempfile
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+import _hermetic_git  # noqa: E402  (0.0.29 D1: the one hermetic git door)
 
 import _release_retry as RR
 
@@ -54,9 +55,6 @@ SYNC_SH = os.path.join(ROOT, "scripts", "sync-public.sh")
 
 _MISSING = [t for t in ("bash", "rsync", "git") if shutil.which(t) is None]
 
-_GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull,
-            "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
-            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
 
 VER = "9.9.9"
 BRANCH = f"release/{VER}"
@@ -181,7 +179,7 @@ class _Git:
 
     def git(self, *args, cwd, check=True):
         return subprocess.run(["git", *args], cwd=cwd, check=check, capture_output=True,
-                              text=True, env={**os.environ, **_GIT_ENV},
+                              text=True, env=_hermetic_git.git_env(),
                               stdin=subprocess.DEVNULL)
 
     def sha(self, ref, cwd):
@@ -390,7 +388,7 @@ class _ReleaseHarness(_Git):
                                _support.as_posix(self.mirror)),
             cwd=self.dev, capture_output=True, text=True, stdin=subprocess.DEVNULL,
             start_new_session=True,
-            env={**os.environ, **_GIT_ENV, "MOKATA_MIRROR_DEFAULT_BRANCH": "main",
+            env={**_hermetic_git.git_env(), "MOKATA_MIRROR_DEFAULT_BRANCH": "main",
                  "PATH": self.bin + os.pathsep + os.environ.get("PATH", "")})
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.git("checkout", "-q", "main", cwd=self.mirror)
@@ -410,7 +408,7 @@ class _ReleaseHarness(_Git):
         for f in (self.trace, self.gh_log, self.answers + ".n"):
             if os.path.exists(f):
                 os.remove(f)
-        env = {**os.environ, **_GIT_ENV,
+        env = {**_hermetic_git.git_env(),
                "PATH": self.bin + os.pathsep + os.environ.get("PATH", ""),
                "PYTHON": sys.executable, "GH_TOKEN": TOKEN_CANARY,
                "A1_TRACE": self.trace, "A1_ANSWERS": self.answers, "A1_GH_STATE": self.state,
@@ -651,6 +649,91 @@ class ThereIsNoWayToTalkPastThePreflight(unittest.TestCase):
             self.assertEqual(1, len(hits), f"{call!r} is not an unconditional top-level call")
 
 
+
+@unittest.skipUnless(os.path.exists(RELEASE_SH), "release.sh is dev-only, excluded from the public mirror")
+@unittest.skipUnless(shutil.which("bash") and os.name != "nt", "needs a POSIX bash")
+class TheInterpreterIsDerivedAndNamed(unittest.TestCase):
+    """0.0.29 D2 `RELEASE-SH-INTERPRETER-NOT-DERIVED`: explicit `PYTHON=` wins, else the repo's
+    `.venv`, else `python3`; one line names the choice; a PyYAML-less interpreter is refused with
+    the fix. And (`TESTS-INHERIT-HOST-GIT-CONFIG`) the host `GIT_*` NAMES are said, never values.
+    FIRING CONTROLS: swap the `.venv` and `$PYTHON` arms; drop the PyYAML refusal."""
+
+    def setUp(self):
+        self.text = _read(RELEASE_SH)
+        self.tmp = tempfile.mkdtemp(prefix="a1-interp-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.funcs = os.path.join(self.tmp, "f.sh")
+        with io.open(self.funcs, "w", encoding="utf-8") as fh:
+            fh.write(_pure(("derive_python", "check_interpreter", "host_git_names"), self.text))
+
+    def _bash(self, expr, env=None):
+        return subprocess.run(_support.bash_argv("-c", f"source '{_support.as_posix(self.funcs)}'; {expr}"),
+                              env=env,
+                              stdin=subprocess.DEVNULL, capture_output=True, text=True)
+
+    def _repo(self, with_venv):
+        root = os.path.join(self.tmp, "repo-%s" % with_venv)
+        os.makedirs(os.path.join(root, ".venv", "bin"))
+        if with_venv:
+            os.symlink(sys.executable, os.path.join(root, ".venv", "bin", "python"))
+        return root
+
+    def test_an_explicit_PYTHON_wins_over_the_repo_venv(self):
+        out = _call(self.funcs, f"derive_python '{self._repo(True)}' /opt/py3.12")
+        self.assertEqual(out, "/opt/py3.12\tfrom $PYTHON")
+
+    def test_the_repo_venv_is_chosen_when_it_exists(self):
+        root = _support.as_posix(self._repo(True))     # bash joins with `/`: hand it a `/` root
+        self.assertEqual(_call(self.funcs, f"derive_python '{root}' ''"),
+                         _support.as_posix(os.path.join(root, ".venv", "bin", "python"))
+                         + "\trepo .venv")
+
+    def test_python3_on_PATH_is_the_last_resort(self):
+        self.assertEqual(_call(self.funcs, f"derive_python '{self._repo(False)}' ''"),
+                         "python3\tPATH python3")
+
+    def test_the_choice_is_printed_with_version_and_pyyaml(self):
+        p = self._bash(f"check_interpreter '{sys.executable}' 'repo .venv'")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        want = "release.sh: interpreter %s (repo .venv), Python %d.%d.%d, PyYAML yes" % (
+            (sys.executable,) + tuple(sys.version_info[:3]))
+        self.assertEqual(p.stdout.strip(), want)
+
+    def test_an_interpreter_without_pyyaml_is_refused_with_the_fix(self):
+        shadow = os.path.join(self.tmp, "no-yaml")
+        os.makedirs(shadow)
+        with io.open(os.path.join(shadow, "yaml.py"), "w", encoding="utf-8") as fh:
+            fh.write("raise ImportError('no PyYAML here')\n")
+        fake = os.path.join(self.tmp, "python-no-yaml")
+        with io.open(fake, "w", encoding="utf-8") as fh:
+            fh.write(f"#!/bin/sh\nPYTHONPATH='{shadow}' exec '{sys.executable}' \"$@\"\n")
+        os.chmod(fake, 0o755)
+        p = self._bash(f"check_interpreter '{fake}' 'PATH python3'")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("PyYAML no", p.stdout)
+        self.assertIn("cannot import PyYAML", p.stderr)
+        self.assertIn(".venv/bin/pip install -r requirements/ci.txt", p.stderr)
+
+    def test_host_git_names_are_said_never_their_values(self):
+        marker = "-".join(("a1", "value", "never", "said"))
+        # Only the planted names: a parent (the b1 dev run, the door) may export its own GIT_*.
+        env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}
+        env.update(GIT_CONFIG_PARAMETERS=f"'x.y={marker}'", git_lower=marker)
+        p = self._bash("host_git_names", env=env)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(p.stdout.strip(), "GIT_CONFIG_PARAMETERS git_lower")
+        self.assertNotIn(marker, p.stdout + p.stderr)
+
+    def test_release_sh_derives_before_its_first_use_and_adds_no_second_door(self):
+        code = "\n".join(ln for _n, ln in RR.code_lines(self.text))
+        self.assertNotIn('PYTHON="${PYTHON:-python3}"', code)
+        derive = code.index('read -r PYTHON PYTHON_WHY <<< "$(derive_python "$REPO_ROOT" "${PYTHON:-}")"')
+        check = code.index('check_interpreter "$PYTHON" "$PYTHON_WHY" || exit 1')
+        first_use = code.index('"$PYTHON" -m venv')
+        self.assertLess(derive, check)
+        self.assertLess(check, first_use)
+        self.assertNotIn("env -u GIT", code, "a second git door in release.sh")
+
 # ==================================================== 3 · the sync fast-forwards, behind a "yes"
 def _pty_run(argv, cwd, env, answer):
     """Run `argv` with a CONTROLLING TERMINAL that has `answer` typed into it, the way an operator
@@ -715,7 +798,7 @@ class _SyncHarness(_Git):
         state = self.tmp()
         if run is not None:
             self.write(os.path.join(state, "run"), run)
-        return {**os.environ, **_GIT_ENV, "MOKATA_MIRROR_DEFAULT_BRANCH": "main",
+        return {**_hermetic_git.git_env(), "MOKATA_MIRROR_DEFAULT_BRANCH": "main",
                 "PATH": fake + os.pathsep + os.environ.get("PATH", ""),
                 "A1_GH_STATE": state, "A1_GH_LOG": os.path.join(state, "log"),
                 "GH_TOKEN": TOKEN_CANARY}

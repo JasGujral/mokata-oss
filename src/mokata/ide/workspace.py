@@ -181,6 +181,8 @@ def normalize(doc: Any) -> Tuple[Dict[str, Any], int]:
     carried = d.get("theme_unknown")            # a workspace already normalised once (route -> save)
     if isinstance(t, str) and t and t not in THEMES:
         out["theme_unknown"] = t[:40]
+    elif t is not None and not isinstance(t, str):     # 0.0.29 E: a number, a list — named too
+        out["theme_unknown"] = str(t)[:40]
     elif isinstance(carried, str) and carried and out["theme"] == "system":
         out["theme_unknown"] = carried[:40]
     else:

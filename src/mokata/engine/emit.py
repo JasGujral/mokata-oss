@@ -699,7 +699,8 @@ def run_quality_gate(surface: Any, spec: Spec, tests: List[TestRef], *, store: A
     decisions: list = []
     try:
         from ..memory import MemoryStore
-        decisions = load_decisions(MemoryStore.from_surface(surface))
+        decisions = load_decisions(  # read by key: no model loaded or fetched (0.0.29 C1 M2)
+            MemoryStore.from_surface(surface, knowledge=False, load_model=False))
     except Exception:  # noqa: BLE001
         decisions = []
     return quality_gate(spec, tests, store=store, run_id=run_id, handoff=handoff, corpus=corpus,

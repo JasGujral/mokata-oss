@@ -1201,7 +1201,9 @@ def _conventions(root: str, facts: _Facts, paths: Set[str], names: Set[str],
     from ..config import Surface
     from ..memory import MemoryStore
     try:
-        items = MemoryStore.from_surface(Surface.load(root)).peek_active()
+        # a read: no model is loaded or fetched to list the conventions (0.0.29 C1 verify M2)
+        items = MemoryStore.from_surface(Surface.load(root), knowledge=False,
+                                         load_model=False).peek_active()
     except (MokataError, OSError, ValueError) as exc:
         notes.append(f"memory: unreadable ({exc})")
         return

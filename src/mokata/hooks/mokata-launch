@@ -41,6 +41,10 @@ _src_dir=$(CDPATH= cd -- "$_here/../.." 2>/dev/null && pwd) || _src_dir=""
 
 . "$_here/mokata-plugin-env.sh"
 _mk_read_version
+# BYTECODE (0.0.29 F, W5-MCP-LAUNCHER-BYTECODE CLI half) — the CLI's Python follows the hook
+# launchers' one cache rule: Claude Code's inherited PYTHONDONTWRITEBYTECODE cost every CLI call a
+# full compile (`python -m mokata --version` 261 ms vs 74 cached).
+_mk_bytecode_cache
 
 # Every fix line mokata prints names the plugin's pinned command, not a `mokata` CLI the user
 # does not have (`plugin_runtime.on_plugin_route`).

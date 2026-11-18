@@ -1125,8 +1125,11 @@ class FreshnessController:
     def ensure_fresh(self, layer: Any) -> FreshnessOutcome:
         """The read-time reconcile every query front-runs. Rebuilds a KNOWN-stale index BEFORE
         the answer; NEVER raises (freshness must not break a query)."""
+        from .cancel import Cancelled
         try:
             return self._reconcile(layer)
+        except Cancelled:
+            raise                    # 0.0.29 N8: a cancel is not a failed reconcile — it unwinds
         except Exception as exc:  # noqa: BLE001
             # D5 — LOUD, not silent: a broken freshness reconcile means the answer may not reflect
             # the latest edits, and that must never be a secret. The query STILL proceeds (freshness

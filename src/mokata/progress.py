@@ -25,6 +25,7 @@ STAGE_BADGE_STAGES = ("brainstorm", "spec", "develop", "review", "ship")
 
 from .govern.resume import CHECKPOINT_PREFIX, PipelineCheckpoint  # noqa: E402
 from .pipeline import PHASE_GATES  # noqa: E402
+from .plugin_runtime import localize_commands
 
 DONE, CURRENT, PENDING = "done", "current", "pending"
 _GLYPHS = {DONE: "✓", CURRENT: "▶", PENDING: "○"}        # ✓ ▶ ○
@@ -200,11 +201,12 @@ def _finished_then_message(store: Any) -> str:
     arbitrary run in the sentence that says "last run"."""
     runs = list_runs_by_recency(store)
     if not runs:
-        return NO_RUN_MESSAGE
+        return localize_commands(NO_RUN_MESSAGE, _root_of(store))
     rid = runs[-1]                                        # the most recent on record
     when = PipelineCheckpoint(store, rid).completed_at
     when_txt = f" {when}" if when else ""
-    return (f"mokata · last run '{rid}' completed{when_txt} — no active run. " + NO_RUN_MESSAGE)
+    return (f"mokata · last run '{rid}' completed{when_txt} — no active run. "
+            + localize_commands(NO_RUN_MESSAGE, _root_of(store)))
 
 
 # --------------------------------------------------------------- the model
@@ -248,11 +250,12 @@ def build_progress(store: Any, run_id: Optional[str] = None,
         # gate hook enforces on).
         if run_id is not None:
             return RunProgress(active=False, total=total, pending=total, run_id=run_id,
-                               message=f"mokata · no run '{run_id}' on record. " + NO_RUN_MESSAGE)
+                               message=f"mokata · no run '{run_id}' on record. "
+                                       + localize_commands(NO_RUN_MESSAGE, _root_of(store)))
         return RunProgress(active=False, total=total, pending=total, run_id=rid,
                            message=(f"mokata · run '{rid}' has state in this repo but no tracked "
                                     f"pipeline checkpoint, so there are no phases to show. "
-                                    + NO_RUN_MESSAGE))
+                                    + localize_commands(NO_RUN_MESSAGE, _root_of(store))))
 
     cp = PipelineCheckpoint(store, rid)
     passed = [p for p in cp.passed if p in phases]
@@ -963,7 +966,7 @@ def render_lanes(rl: RunLanes, ascii_only: bool = False) -> str:
     """The multi-lane terminal block. No run → the friendly message (degrade-clean). A single
     lane reads like the old single-line banner; N lanes show N concurrent lanes."""
     if not rl.active:
-        return rl.message or NO_RUN_MESSAGE
+        return rl.message or localize_commands(NO_RUN_MESSAGE)
     glyphs = _LANE_ASCII if ascii_only else _LANE_GLYPHS
     lines = [rl.header]
     if rl.mode in _PARALLEL_MODES:

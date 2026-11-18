@@ -363,7 +363,8 @@ def stamp_target(root: str, rel: str) -> str:
 
     `rel` is the path as TYPED (`raw_path_of`). It must open a regular file (`os.stat`, links
     followed); the real path is then found inside the repo's real root by file identity. A typed `..`
-    must name the same file the lexical spelling names, else `UNRESOLVED`."""
+    must name the same file the lexical spelling names, else `UNRESOLVED`. A real file in the repo's
+    private stores (`.git/`, `.mokata/`, by any folded spelling) is `OUTSIDE` (0.0.29 H3)."""
     if not rel:
         return UNRESOLVED
     base = os.path.realpath(root)
@@ -386,6 +387,12 @@ def stamp_target(root: str, rel: str) -> str:
     below, tail, _deepest = got
     if tail or not below:
         return UNRESOLVED
+    from mokata_emit import is_private_name
+    try:
+        if is_private_name(below[0]):
+            return OUTSIDE                    # a link into `.git/`/`.mokata/` is not the repo's code (H3)
+    except (ValueError, TypeError):
+        return OUTSIDE                        # a name that cannot be folded: fail closed
     return "/".join(below)
 
 

@@ -425,6 +425,7 @@ REFUSED = {
     ("briefing_cache.py", "derived"): "writes — 0.0.26 O12b: caching the memory-derived briefing lines under temp_local/briefing/ is its purpose, so it cannot be bound as write-free",
     ("briefing_cache.py", "store_resume"): "writes — 0.0.28 F: storing the per-session next-step answer under temp_local/briefing/ is its purpose, so it cannot be bound as write-free",
     ("briefing_cache.py", "_acquire"): "writes — 0.0.26 O12b: the briefing refresher's lock file is its purpose, so it cannot be bound as write-free",
+    ("pycache.py", "prune"): "writes — 0.0.29 F: deleting stale bytecode inside the user's mokata/pycache root is its purpose, so it cannot be bound as write-free",
     ("briefing_cache.py", "_release"): "writes — 0.0.26 O12b: removing the briefing refresher's own lock file is its purpose, so it cannot be bound as write-free",
     ("knowledge/structure_cache.py", "store"): "writes — 0.0.26 O12: the briefing's cached structure line under temp_local/briefing/ is its whole purpose, so it cannot be bound as write-free",
     ("knowledge/structure_cache.py", "_acquire"): "writes — 0.0.26 O12: the structure refresher's lock file under temp_local/briefing/ is its purpose, so it cannot be bound as write-free",
@@ -473,8 +474,8 @@ REFUSED = {
         "writes — 0.0.23 C2 / 0.0.26 O13: the IDE's local semantic index under temp_local/ide/semantic/ is its whole purpose, so it cannot be bound as write-free",
     ("harness_cert.py", "record_result"):
         "writes — 0.0.23 D12: the owner's `record` action writes the certification matrix doc by purpose (atomic tmp + replace), so it cannot be bound as write-free",
-    ("ide/bus.py", "ensure_bridge"):
-        "writes — 0.0.25 ID.S3: it creates the IDE live-bridge record (port + hook token) under temp_local/ide/ by purpose, so it cannot be bound as write-free",
+    ("ide/bus.py", "write_bridge"):
+        "writes — 0.0.25 ID.S3 / 0.0.29 H4: it creates the IDE live-bridge record (port + hook token) under temp_local/ide/ by purpose, so it cannot be bound as write-free",
     ("ide/server.py", "_remove_record"):
         "writes — 0.0.22 E2's review window: it is a writer by purpose (the snapshot store / the server record under temp_local/), so it cannot be bound as write-free",
     ("ide/statedir.py", "note_repo"):
@@ -620,8 +621,8 @@ REFUSED = {
                                      "primitive's own mechanism",
     ("winacl.py", "_unlink"): "writes — 0.0.28 C: removes the file this module just failed to make "
                               "private (nothing left behind)",
-    ("cli_commands/diagnostics.py", "privacy_lines"): "writes — 0.0.28 C: `doctor --fix` re-creates "
-                                                      "a WEAK private-set record born private, same bytes",
+    ("cli_commands/diagnostics.py", "_unlink"): "writes — 0.0.29 H4: `doctor --fix` removes mokata's "
+                                                "own weak IDE server record by purpose",
     ("cli_commands/knowledge.py", "cmd_ci_check"): "writes — the CI PR-comment body at --comment-file",
     ("governance_view.py", "write_governance_dashboard"): "writes — derived HTML under temp_local/",
     ("extras_install.py", "record_extra_decline"): "writes — the user's standing decline in ~/.mokata",

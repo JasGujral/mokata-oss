@@ -1,0 +1,470 @@
+{
+ "about": "Normalised p95 ms per wired hook per fixture PER OS: the worst graded value (test_hb_hook_budget [HB-MEASURE] rows, `p95_norm` \u2014 the number the gate compares) over every source listed in `sources`. perf.HOOK_BUDGET_CEILINGS_MS is derived from these per OS (test_f_hook_ceilings): darwin = 1.5x up to 5 ms, capped at the kind's target unless an owned gap; linux / win32 = 1.5x up to 5 ms, never below the darwin ceiling x perf.OFF_DARWIN_BUFFER (2.0). Re-derived at the 0.0.29 wave-2 bookend (ruled by Jas 2026-11-16) once the mirror CI ran: darwin = Jas's Mac (lane F build + verify + W2 suite runs, under sibling-lane load) and the mirror's macos-latest runner; linux = ubuntu-latest, both jsonschema legs; win32 = windows-latest, both jsonschema legs. `raw_p95_of_the_graded_batch` is the un-normalised p95 of that same batch, for reading only \u2014 the gate never uses it.",
+ "measured": {
+  "dirty-track@bound": {
+   "darwin": 33.0,
+   "linux": 22.8,
+   "win32": 56.1
+  },
+  "dirty-track@outside": {
+   "darwin": 30.2,
+   "linux": 22.9,
+   "win32": 61.1
+  },
+  "dirty-track@repo": {
+   "darwin": 28.6,
+   "linux": 23.1,
+   "win32": 57.4
+  },
+  "gate-guard@bound": {
+   "darwin": 74.8,
+   "linux": 85.0,
+   "win32": 87.3
+  },
+  "gate-guard@outside": {
+   "darwin": 65.7,
+   "linux": 79.4,
+   "win32": 80.0
+  },
+  "gate-guard@repo": {
+   "darwin": 62.9,
+   "linux": 84.9,
+   "win32": 86.5
+  },
+  "pre-compact@bound": {
+   "darwin": 33.8,
+   "linux": 22.7,
+   "win32": 68.6
+  },
+  "pre-compact@outside": {
+   "darwin": 29.0,
+   "linux": 21.1,
+   "win32": 49.8
+  },
+  "pre-compact@repo": {
+   "darwin": 30.7,
+   "linux": 22.3,
+   "win32": 63.3
+  },
+  "run-bind@bound": {
+   "darwin": 40.6,
+   "linux": 50.3,
+   "win32": 74.7
+  },
+  "run-bind@outside": {
+   "darwin": 29.3,
+   "linux": 21.1,
+   "win32": 56.4
+  },
+  "run-bind@repo": {
+   "darwin": 41.4,
+   "linux": 50.2,
+   "win32": 74.5
+  },
+  "secret-guard@bound": {
+   "darwin": 51.8,
+   "linux": 65.2,
+   "win32": 87.1
+  },
+  "secret-guard@outside": {
+   "darwin": 54.8,
+   "linux": 65.9,
+   "win32": 78.3
+  },
+  "secret-guard@repo": {
+   "darwin": 61.8,
+   "linux": 65.5,
+   "win32": 74.4
+  },
+  "session-end@bound": {
+   "darwin": 30.6,
+   "linux": 22.2,
+   "win32": 60.1
+  },
+  "session-end@outside": {
+   "darwin": 29.7,
+   "linux": 21.4,
+   "win32": 48.7
+  },
+  "session-end@repo": {
+   "darwin": 32.4,
+   "linux": 22.4,
+   "win32": 59.7
+  },
+  "session-start@bound": {
+   "darwin": 93.6,
+   "linux": 119.6,
+   "win32": 145.7
+  },
+  "session-start@bound-8mib-hit": {
+   "darwin": 192.7,
+   "linux": 354.6,
+   "win32": 242.5
+  },
+  "session-start@bound-8mib-miss": {
+   "darwin": 241.1,
+   "linux": 484.7,
+   "win32": 335.5
+  },
+  "session-start@outside": {
+   "darwin": 54.3,
+   "linux": 68.7,
+   "win32": 88.9
+  },
+  "session-start@repo": {
+   "darwin": 84.0,
+   "linux": 111.8,
+   "win32": 131.3
+  },
+  "session-start@repo-8mib-hit": {
+   "darwin": 82.7,
+   "linux": 109.7,
+   "win32": 158.1
+  },
+  "session-start@repo-8mib-miss": {
+   "darwin": 141.0,
+   "linux": 202.7,
+   "win32": 249.7
+  },
+  "statusline@bound": {
+   "darwin": 79.1,
+   "linux": 116.2,
+   "win32": 101.2
+  },
+  "statusline@outside": {
+   "darwin": 45.2,
+   "linux": 49.9,
+   "win32": 64.1
+  },
+  "statusline@repo": {
+   "darwin": 75.0,
+   "linux": 107.5,
+   "win32": 95.8
+  },
+  "stop-gate@bound": {
+   "darwin": 54.2,
+   "linux": 58.8,
+   "win32": 68.7
+  },
+  "stop-gate@outside": {
+   "darwin": 30.0,
+   "linux": 28.2,
+   "win32": 56.8
+  },
+  "stop-gate@repo": {
+   "darwin": 46.3,
+   "linux": 58.8,
+   "win32": 70.2
+  },
+  "stop@bound": {
+   "darwin": 29.6,
+   "linux": 22.2,
+   "win32": 61.2
+  },
+  "stop@outside": {
+   "darwin": 27.5,
+   "linux": 21.1,
+   "win32": 49.9
+  },
+  "stop@repo": {
+   "darwin": 28.5,
+   "linux": 22.2,
+   "win32": 56.2
+  },
+  "subagent-start@bound": {
+   "darwin": 44.8,
+   "linux": 61.2,
+   "win32": 83.0
+  },
+  "subagent-start@outside": {
+   "darwin": 33.7,
+   "linux": 28.0,
+   "win32": 53.9
+  },
+  "subagent-start@repo": {
+   "darwin": 50.7,
+   "linux": 60.5,
+   "win32": 70.4
+  },
+  "subagent-stop@bound": {
+   "darwin": 48.0,
+   "linux": 59.7,
+   "win32": 69.2
+  },
+  "subagent-stop@outside": {
+   "darwin": 30.4,
+   "linux": 28.1,
+   "win32": 54.1
+  },
+  "subagent-stop@repo": {
+   "darwin": 46.2,
+   "linux": 60.4,
+   "win32": 67.8
+  },
+  "user-prompt-submit@bound": {
+   "darwin": 133.5,
+   "linux": 185.0,
+   "win32": 143.4
+  },
+  "user-prompt-submit@outside": {
+   "darwin": 45.0,
+   "linux": 56.2,
+   "win32": 75.7
+  },
+  "user-prompt-submit@repo": {
+   "darwin": 127.1,
+   "linux": 184.9,
+   "win32": 138.6
+  }
+ },
+ "os_measured": [
+  "darwin",
+  "linux",
+  "win32"
+ ],
+ "os_not_measured": [],
+ "raw_p95_of_the_graded_batch": {
+  "dirty-track@bound": {
+   "darwin": 50.7,
+   "linux": 22.8,
+   "win32": 87.5
+  },
+  "dirty-track@outside": {
+   "darwin": 45.8,
+   "linux": 22.9,
+   "win32": 93.7
+  },
+  "dirty-track@repo": {
+   "darwin": 46.6,
+   "linux": 23.1,
+   "win32": 88.6
+  },
+  "gate-guard@bound": {
+   "darwin": 113.8,
+   "linux": 85.0,
+   "win32": 135.7
+  },
+  "gate-guard@outside": {
+   "darwin": 105.4,
+   "linux": 79.4,
+   "win32": 147.9
+  },
+  "gate-guard@repo": {
+   "darwin": 83.6,
+   "linux": 84.9,
+   "win32": 149.1
+  },
+  "pre-compact@bound": {
+   "darwin": 51.6,
+   "linux": 22.7,
+   "win32": 120.6
+  },
+  "pre-compact@outside": {
+   "darwin": 56.5,
+   "linux": 21.1,
+   "win32": 73.9
+  },
+  "pre-compact@repo": {
+   "darwin": 41.8,
+   "linux": 22.3,
+   "win32": 97.5
+  },
+  "run-bind@bound": {
+   "darwin": 57.3,
+   "linux": 50.3,
+   "win32": 112.8
+  },
+  "run-bind@outside": {
+   "darwin": 49.3,
+   "linux": 21.1,
+   "win32": 85.9
+  },
+  "run-bind@repo": {
+   "darwin": 56.0,
+   "linux": 50.2,
+   "win32": 111.4
+  },
+  "secret-guard@bound": {
+   "darwin": 78.2,
+   "linux": 65.2,
+   "win32": 136.8
+  },
+  "secret-guard@outside": {
+   "darwin": 102.2,
+   "linux": 65.9,
+   "win32": 125.2
+  },
+  "secret-guard@repo": {
+   "darwin": 99.4,
+   "linux": 65.5,
+   "win32": 112.2
+  },
+  "session-end@bound": {
+   "darwin": 50.6,
+   "linux": 22.2,
+   "win32": 111.9
+  },
+  "session-end@outside": {
+   "darwin": 52.2,
+   "linux": 21.4,
+   "win32": 72.9
+  },
+  "session-end@repo": {
+   "darwin": 43.9,
+   "linux": 22.4,
+   "win32": 95.1
+  },
+  "session-start@bound": {
+   "darwin": 138.8,
+   "linux": 119.6,
+   "win32": 277.6
+  },
+  "session-start@bound-8mib-hit": {
+   "darwin": 192.7,
+   "linux": 354.6,
+   "win32": 455.5
+  },
+  "session-start@bound-8mib-miss": {
+   "darwin": 337.8,
+   "linux": 484.7,
+   "win32": 616.1
+  },
+  "session-start@outside": {
+   "darwin": 79.2,
+   "linux": 68.7,
+   "win32": 138.0
+  },
+  "session-start@repo": {
+   "darwin": 116.8,
+   "linux": 111.8,
+   "win32": 205.1
+  },
+  "session-start@repo-8mib-hit": {
+   "darwin": 125.2,
+   "linux": 109.7,
+   "win32": 284.9
+  },
+  "session-start@repo-8mib-miss": {
+   "darwin": 257.4,
+   "linux": 202.7,
+   "win32": 452.7
+  },
+  "statusline@bound": {
+   "darwin": 144.4,
+   "linux": 116.2,
+   "win32": 183.2
+  },
+  "statusline@outside": {
+   "darwin": 64.1,
+   "linux": 49.9,
+   "win32": 114.1
+  },
+  "statusline@repo": {
+   "darwin": 109.2,
+   "linux": 107.5,
+   "win32": 146.2
+  },
+  "stop-gate@bound": {
+   "darwin": 90.4,
+   "linux": 58.8,
+   "win32": 106.0
+  },
+  "stop-gate@outside": {
+   "darwin": 50.7,
+   "linux": 28.2,
+   "win32": 107.9
+  },
+  "stop-gate@repo": {
+   "darwin": 65.0,
+   "linux": 58.8,
+   "win32": 121.1
+  },
+  "stop@bound": {
+   "darwin": 44.4,
+   "linux": 22.2,
+   "win32": 100.1
+  },
+  "stop@outside": {
+   "darwin": 27.5,
+   "linux": 21.1,
+   "win32": 93.2
+  },
+  "stop@repo": {
+   "darwin": 42.3,
+   "linux": 22.2,
+   "win32": 89.3
+  },
+  "subagent-start@bound": {
+   "darwin": 64.8,
+   "linux": 61.2,
+   "win32": 146.0
+  },
+  "subagent-start@outside": {
+   "darwin": 47.2,
+   "linux": 28.0,
+   "win32": 81.3
+  },
+  "subagent-start@repo": {
+   "darwin": 88.9,
+   "linux": 60.5,
+   "win32": 110.0
+  },
+  "subagent-stop@bound": {
+   "darwin": 72.4,
+   "linux": 59.7,
+   "win32": 103.3
+  },
+  "subagent-stop@outside": {
+   "darwin": 47.7,
+   "linux": 28.1,
+   "win32": 103.3
+  },
+  "subagent-stop@repo": {
+   "darwin": 68.8,
+   "linux": 60.4,
+   "win32": 103.0
+  },
+  "user-prompt-submit@bound": {
+   "darwin": 207.6,
+   "linux": 185.0,
+   "win32": 256.3
+  },
+  "user-prompt-submit@outside": {
+   "darwin": 63.7,
+   "linux": 56.2,
+   "win32": 134.5
+  },
+  "user-prompt-submit@repo": {
+   "darwin": 188.5,
+   "linux": 184.9,
+   "win32": 213.1
+  }
+ },
+ "runs": {
+  "local_darwin": "lane F build/verify logs and the W2 full-suite run, 0.0.29 evidence (F/build, F-verify-r2, W2)",
+  "mirror_ci": "JasGujral/mokata-oss Actions run 43869782006 (probe/matrix/0029-w2-gf, dev 472d6ba), test_hb_hook_budget on shard 4/4 of every py3.12 leg"
+ },
+ "sources": {
+  "darwin": [
+   "hb-measure-ci-43869782006.log :: macos-latest \u00b7 py3.12 \u00b7 jsonschema=present \u00b7 shard 4/4",
+   "hb-measure-darwin.log",
+   "hb-run1.log",
+   "hb-run2.log",
+   "hb-run3.log",
+   "green-run.log",
+   "green-run-r2.log",
+   "green-run-r3.log",
+   "green-run-mac-limits.log",
+   "hb-r2.log",
+   "W2-suite-unit.log"
+  ],
+  "linux": [
+   "hb-measure-ci-43869782006.log :: ubuntu-latest \u00b7 py3.12 \u00b7 jsonschema=present \u00b7 shard 4/4",
+   "hb-measure-ci-43869782006.log :: ubuntu-latest \u00b7 py3.12 \u00b7 jsonschema=absent \u00b7 shard 4/4"
+  ],
+  "win32": [
+   "hb-measure-ci-43869782006.log :: windows-latest \u00b7 py3.12 \u00b7 jsonschema=absent \u00b7 shard 4/4",
+   "hb-measure-ci-43869782006.log :: windows-latest \u00b7 py3.12 \u00b7 jsonschema=present \u00b7 shard 4/4"
+  ]
+ }
+}

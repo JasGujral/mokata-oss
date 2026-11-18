@@ -73,6 +73,9 @@ THE_WORKFLOWS = (
     # 0.0.26 L6 — SA.S1: the third-party `mcp-scan` of the plugin's MCP server. Manual only (it needs
     # the network and sends tool descriptions to the scanner's vendor), exact-version input.
     "mcp-scan.yml",
+    # 0.0.29 A — LSP-CALLS-UNRUN-CELLS (ruling A-Q2): real pyright, a generated big repo, and real
+    # pnpm / yarn global stores, weekly on three OSes, never blocking.
+    "real-lsp.yml",
 )
 
 GOOD_SHA = "3d3c42e5aac5ba805825da76410c181273ba90b1"

@@ -90,7 +90,7 @@ from ..test_ids import (OUTSIDE, TARGET_STATES, UNRESOLVED, fs_folds_case, norma
                         py_test_defs, raw_path_of, same_target, stamp_of, stamp_target,
                         test_key_of, test_label_of, test_name_of, test_param_of, test_path_of,
                         test_qualifier_of)
-from ..repo_paths import as_name, name_of
+from ..repo_paths import as_name
 
 TRACE_VERSION = 1
 #: rows (ACs + code with no AC) per page — a page, not a cap; `next` continues.
@@ -991,16 +991,16 @@ class _Locator:
         test can be proven by: its text is not the repo's)."""
         if not rel or rel.startswith("/") or ".." in rel.split("/"):
             return rel
+        from ..fs_identity import disk_rel
         base = os.path.realpath(self.layer_root)
-        real = os.path.realpath(os.path.join(base, *rel.split("/")))
-        if os.path.normcase(real) == os.path.normcase(os.path.join(base, *rel.split("/"))):
-            return rel
         try:
-            inside = os.path.commonpath([os.path.normcase(real), os.path.normcase(base)]) == \
-                os.path.normcase(base) and os.path.normcase(real) != os.path.normcase(base)
-        except ValueError:                       # another drive (Windows): not inside
-            inside = False
-        return self._case(name_of(real, base)) if inside else rel
+            got = disk_rel(base, os.path.join(base, *rel.split("/")))   # ALLOW side: identity (H3)
+        except (OSError, ValueError):
+            got = None
+        if got is None or got[1] or not got[0]:
+            return rel                           # outside, dangling, or the root itself
+        name = "/".join(got[0])
+        return rel if name == rel else self._case(name)
 
     def _case(self, rel: str) -> str:
         """The spelling the tree HOLDS on a case-folding filesystem — the tracked (or, live,

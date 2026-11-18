@@ -34,6 +34,14 @@ from mokata import team_audit as TA
 from mokata.config import Surface
 from mokata.govern.ledger import AuditLedger
 
+# 0.0.29 W2-final-2: the repos these tests publish from live under a LOW-ENTROPY base. `init`'s
+# ledger entry names its files by absolute path, and that entry is in the egress payload; on a
+# macOS runner `$TMPDIR` is `/var/folders/<2>/<28 random chars>/T`, which the entropy backstop
+# rightly blocks as a token, so publishing was refused on some runners and not others (mirror
+# runs 43935587378 macOS 3/4, 43954985486 macOS 1/4). POSIX `/tmp` has no such component;
+# Windows' temp dir has none either, so it keeps the default.
+_TMP = "/tmp" if os.name == "posix" and os.path.isdir("/tmp") else None
+
 # A secret assembled from fragments so no literal secret lives in this file (mokata's own
 # secret-guard would otherwise block writing it — exactly the thing under test).
 _SECRET = "AKIA" + "IOSFODNN7" + "EXAMPLE" + "QWER"
@@ -155,7 +163,7 @@ class _FakeAuditPg:
 # ================================================================= LOCAL is the default
 class TestDefaultsLocal(unittest.TestCase):
     def test_fresh_repo_shares_nothing(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(dir=_TMP) as d:
             surface = _repo(d)
             self.assertFalse(TA.shared_enabled(surface.manifest.data))
             with _EnvActor("alice"):
@@ -164,7 +172,7 @@ class TestDefaultsLocal(unittest.TestCase):
             self.assertIn("OFF", view.message)
 
     def test_local_ledger_is_unaffected_by_the_feature(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(dir=_TMP) as d:
             surface = _repo(d)
             led = _seed_ledger(surface, ["phase", "write_gate"])
             # the ordinary local read still works, untouched
@@ -174,7 +182,7 @@ class TestDefaultsLocal(unittest.TestCase):
 # ================================================================= opt-in + writes only when connected
 class TestOptInAndConnected(unittest.TestCase):
     def test_share_is_a_noop_until_opted_in(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(dir=_TMP) as d:
             root, surface = _repo_named(d)
             _seed_ledger(surface, ["phase"])
             pg = _FakeAuditPg()
@@ -185,7 +193,7 @@ class TestOptInAndConnected(unittest.TestCase):
             self.assertEqual(pg.rows, [])          # nothing written anywhere
 
     def test_opt_in_then_publish_writes_to_the_team_backend(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(dir=_TMP) as d:
             root, surface = _repo_named(d)
             _seed_ledger(surface, ["phase", "write_gate", "deviation"])
             surface = _enable_sharing(root)
@@ -198,7 +206,7 @@ class TestOptInAndConnected(unittest.TestCase):
             self.assertTrue(all(r["namespace"] == "acme-app" for r in pg.rows))
 
     def test_republish_is_idempotent_in_sync(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(dir=_TMP) as d:
             root, surface = _repo_named(d)
             _seed_ledger(surface, ["phase"])
             surface = _enable_sharing(root)
@@ -216,7 +224,7 @@ class TestOptInAndConnected(unittest.TestCase):
 # ================================================================= append-only + per-actor + namespaced
 class TestConflictFree(unittest.TestCase):
     def test_two_concurrent_actors_both_survive_no_clobber(self):
-        with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
+        with tempfile.TemporaryDirectory(dir=_TMP) as d1, tempfile.TemporaryDirectory(dir=_TMP) as d2:
             # same repo NAME (namespace) on two machines/clones, one shared team DB
             root_a, surf_a = _repo_named(d1)
             root_b, surf_b = _repo_named(d2)
@@ -244,7 +252,7 @@ class TestConflictFree(unittest.TestCase):
 # ================================================================= human-gated + secret-scanned
 class TestGatedAndScanned(unittest.TestCase):
     def test_a_decline_publishes_nothing(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(dir=_TMP) as d:
             root, surface = _repo_named(d)
             _seed_ledger(surface, ["phase", "write_gate"])
             surface = _enable_sharing(root)
@@ -256,7 +264,7 @@ class TestGatedAndScanned(unittest.TestCase):
             self.assertEqual(pg.rows, [])            # gate held the line
 
     def test_a_secret_in_an_entry_is_hard_blocked_on_publish(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(dir=_TMP) as d:
             root, surface = _repo_named(d)
             led = AuditLedger.from_mokata_dir(surface.mokata_dir)
             led.record("phase", phase="develop", reason="ok")
@@ -273,7 +281,7 @@ class TestGatedAndScanned(unittest.TestCase):
 # ================================================================= DSN secret never persisted
 class TestDsnNeverStored(unittest.TestCase):
     def test_manifest_stores_the_env_var_name_not_the_secret(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(dir=_TMP) as d:
             root, surface = _repo_named(d)
             _enable_sharing(root, dsn_env="MY_TEAM_DSN")
             with open(os.path.join(root, ".mokata", "manifest.json"), encoding="utf-8") as fh:
@@ -283,7 +291,7 @@ class TestDsnNeverStored(unittest.TestCase):
             self.assertNotIn(_SECRET_DSN, text)
 
     def test_publish_never_writes_the_dsn_anywhere(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(dir=_TMP) as d:
             root, surface = _repo_named(d)
             _seed_ledger(surface, ["phase"])
             surface = _enable_sharing(root, dsn_env="MY_TEAM_DSN")
@@ -302,7 +310,7 @@ class TestDsnNeverStored(unittest.TestCase):
 # ================================================================= degrade-clean (no driver/DSN)
 class TestDegradeClean(unittest.TestCase):
     def test_no_dsn_stays_local_no_crash(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(dir=_TMP) as d:
             root, surface = _repo_named(d)
             _seed_ledger(surface, ["phase"])
             surface = _enable_sharing(root)
@@ -319,7 +327,7 @@ class TestDegradeClean(unittest.TestCase):
             self.assertIn("DSN", str(ctx.exception))
 
     def test_team_view_degrades_clean_when_backend_absent(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(dir=_TMP) as d:
             root, surface = _repo_named(d)
             surface = _enable_sharing(root)
             with _EnvActor("alice"):
@@ -349,7 +357,7 @@ class TestNoTelemetry(unittest.TestCase):
 # ================================================================= who-did-what read spans the log
 class TestWhoDidWhatSpans(unittest.TestCase):
     def test_read_spans_all_actors_with_attribution(self):
-        with tempfile.TemporaryDirectory() as d1, tempfile.TemporaryDirectory() as d2:
+        with tempfile.TemporaryDirectory(dir=_TMP) as d1, tempfile.TemporaryDirectory(dir=_TMP) as d2:
             root_a, surf_a = _repo_named(d1)
             root_b, surf_b = _repo_named(d2)
             _seed_ledger(surf_a, ["phase", "write_gate"])
@@ -390,7 +398,7 @@ class TestCliSurface(unittest.TestCase):
         return rc, out.getvalue(), err.getvalue()
 
     def test_audit_team_off_is_a_clean_message(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(dir=_TMP) as d:
             _repo_named(d)
             root = os.path.join(d, "acme-app")
             with _EnvActor("alice"):
@@ -399,7 +407,7 @@ class TestCliSurface(unittest.TestCase):
             self.assertIn("OFF", out)
 
     def test_audit_share_without_opt_in_is_clean(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(dir=_TMP) as d:
             _repo_named(d)
             root = os.path.join(d, "acme-app")
             with _EnvActor("alice"):
@@ -408,7 +416,7 @@ class TestCliSurface(unittest.TestCase):
             self.assertIn("local", (out + err).lower())
 
     def test_audit_share_enabled_no_dsn_degrades_clean_cli(self):
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(dir=_TMP) as d:
             root, surface = _repo_named(d)
             _seed_ledger(surface, ["phase"])
             _enable_sharing(root)
@@ -426,7 +434,7 @@ class TestMcpSurface(unittest.TestCase):
 
     def test_audit_share_disabled_reports_local_first(self):
         from mokata import mcp_server as M
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(dir=_TMP) as d:
             _repo_named(d)
             root = os.path.join(d, "acme-app")
             res = M.audit_share(path=root)
@@ -435,7 +443,7 @@ class TestMcpSurface(unittest.TestCase):
 
     def test_audit_read_team_flag_degrades_clean(self):
         from mokata import mcp_server as M
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(dir=_TMP) as d:
             _repo_named(d)
             root = os.path.join(d, "acme-app")
             res = M.audit(path=root, team=True)
@@ -445,7 +453,7 @@ class TestMcpSurface(unittest.TestCase):
 
     def test_audit_read_local_still_works(self):
         from mokata import mcp_server as M
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(dir=_TMP) as d:
             root, surface = _repo_named(d)
             _seed_ledger(surface, ["phase"])
             res = M.audit(path=root)

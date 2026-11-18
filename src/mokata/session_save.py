@@ -50,31 +50,93 @@ from .govern.resume import CHECKPOINT_PREFIX, PipelineCheckpoint
 from .session import current_run_id, current_session_id, short_id
 
 
+def failure_summary(error: BaseException) -> str:
+    """`<Type> [errno N]` / `[winerror N]` — type and code only, NEVER the exception's text (it can
+    carry a path or session content). Secret-safe by construction."""
+    out = type(error).__name__
+    for attr in ("winerror", "errno"):
+        code = getattr(error, attr, None)
+        if isinstance(code, int):
+            return f"{out} [{attr} {code}]"
+    return out
+
+
+#: 0.0.29 lane G (#83) — the read-back of what is on disk, when it is the part that failed.
+READ_BACK = "read_back"
+
+
+def loss_message(res: "SaveResult", again: str) -> str:
+    """What a save that did not fully land says: what is NOT on record, its consequence, and the
+    remedy that fits the CAUSE (type + errno only, never the exception's text). `again` is the
+    caller's own retry road (the MCP tool's re-call, the CLI's re-run). Shared by every reader of
+    a `SaveResult` (round 2, M-2), so the CLI cannot say less than the MCP tool."""
+    from .brainstorm import BrainstormGateError
+    parts = []
+    for key, exc in res.failed.items():
+        what = ("the approach approval" if key == APPROACH_STATE_KEY else
+                "what is on disk (it could not be read back)" if key == READ_BACK else f"`{key}`")
+        if isinstance(exc, BrainstormGateError):
+            parts.append(f"{what} was refused as sent: the session is not an approved session with a "
+                         "chosen approach — fix the session (an approved, chosen approach) and save "
+                         "again; a re-call with the same session fails the same way")
+        elif isinstance(exc, OSError):
+            parts.append(f"{what} is NOT fully on record ({failure_summary(exc)}). {again}; if it "
+                         "fails again, `mokata doctor` names the state directory's problem")
+        else:
+            parts.append(f"{what} is NOT on record ({failure_summary(exc)}) — this is a mokata "
+                         "defect, not your disk; report it")
+    if res.approval_persisted is False:
+        parts.append("the approach approval is NOT on record, so the approach-approval gate blocks "
+                     "implementation until it lands")
+    elif res.approval_persisted is True:
+        keys = [f"`{k}`" for k in res.failed]
+        parts.append("the approval IS on record; only " + ", ".join(keys)
+                     + (" is" if len(keys) == 1 else " are")
+                     + " not — no re-call is needed for the approval")
+    return "; ".join(parts) + "."
+
+
 @dataclass
 class SaveResult:
     """What a save persisted — keys + COUNTS only, never state content (secret-safe by
     construction). `wrote` is the subset of keys THIS call actually persisted (a no-input
     `save_session` re-affirms the on-disk state and writes nothing). `empty` is honest: a
-    session with no resumable state at all yields an empty (not failed) result."""
+    session with no resumable state at all yields an empty (not failed) result.
+
+    0.0.29 lane G (#83): `failed` holds every write that did NOT land (key -> the exception), so a
+    lost approval is said where it was asked; `approval_persisted` is True/False when the session
+    carried an approval, None when it did not."""
 
     session_id: str                                 # short id — a label, never a secret
     run_id: str
     saved: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     wrote: List[str] = field(default_factory=list)
+    failed: Dict[str, BaseException] = field(default_factory=dict)
+    approval_persisted: Optional[bool] = None
 
     @property
-    def empty(self) -> bool:
+    def empty(self) -> Optional[bool]:
+        """True only when what is on disk was READ and holds nothing; None (unknown) when the
+        read-back failed — so no reader can take a failure for "nothing to save" (round 2, M-2)."""
+        if READ_BACK in self.failed:
+            return None
         return not self.saved
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
-            "ok": True,                             # empty is honest, never an error
+        out: Dict[str, Any] = {
+            "ok": not self.failed,                  # empty is honest, never an error; a loss is
             "session_id": self.session_id,
             "run_id": self.run_id,
             "saved": self.saved,
             "wrote": self.wrote,
-            "empty": self.empty,
+            "empty": self.empty,                    # None: the read-back failed, so unknown
         }
+        if self.failed:
+            out["status"] = "degraded"
+            out["failed"] = {k: failure_summary(e) for k, e in self.failed.items()}
+        if self.approval_persisted is not None:
+            out["approval_persisted"] = self.approval_persisted
+        return out
 
 
 def _describe(store: Any, run_id: str) -> Dict[str, Dict[str, Any]]:
@@ -132,27 +194,53 @@ def save_session(surface: Any, brainstorm: Optional[Dict[str, Any]] = None,
     store = surface.state
     rid = run_id or current_run_id()
     wrote: List[str] = []
+    failed: Dict[str, BaseException] = {}
+    approval: Optional[bool] = None
+    # Parsed BEFORE any write: a `brainstorm` that is not a session raises here and nothing is saved.
+    session = BrainstormSession.from_dict(brainstorm) if brainstorm is not None else None
 
-    if brainstorm is not None:
-        session = BrainstormSession.from_dict(brainstorm)
-        # Orphan #1 — the in-progress session (resumable progress; not an approval).
-        save_brainstorm_progress(session, store)
-        wrote.append(BRAINSTORM_PROGRESS_KEY)
-        # Orphan #2 — the approved approach, ONLY when the session carries an approval. No
-        # `plans_dir`: the save's footprint stays entirely under temp_local (a plan FILE is a
-        # separate, gated concern — never a side effect of an ungated local save).
-        if session.approved and session.chosen is not None:
+    # 0.0.29 lane G (#83) — APPROACH FIRST, then progress, then the checkpoint, each attempted on its
+    # own: a write that fails is RECORDED (and said by the caller), never allowed to abort the rest.
+    # The approval is the write whose loss blocks the user (the approach-approval gate), so it goes
+    # first and a later failure cannot take it down with it.
+    if session is not None and session.approved:
+        # Orphan #2 — the approved approach, whenever the session SAYS it is approved: `handoff()`
+        # (inside `persist_approach`) is the HARD-GATE and refuses an approval with no chosen
+        # approach — that refusal is a lost approval too, and is said as one, never skipped in
+        # silence. No `plans_dir`: the save's footprint stays under temp_local.
+        try:
             persist_approach(session, store)
             wrote.append(APPROACH_STATE_KEY)
+            approval = True
+        except Exception as exc:  # noqa: BLE001 — recorded in `failed`, said by every caller
+            failed[APPROACH_STATE_KEY] = exc
+            approval = False
+
+    if session is not None:
+        # Orphan #1 — the in-progress session (resumable progress; not an approval).
+        try:
+            save_brainstorm_progress(session, store)
+            wrote.append(BRAINSTORM_PROGRESS_KEY)
+        except Exception as exc:  # noqa: BLE001 — recorded in `failed`, said by every caller
+            failed[BRAINSTORM_PROGRESS_KEY] = exc
 
     if passed:
         # Orphan #3 — the per-gate checkpoint. `mark_passed` is idempotent (a repeated phase is
         # a no-op), so a re-save never double-records.
-        cp = PipelineCheckpoint(store, rid)
-        for phase in passed:
-            cp.mark_passed(phase)
-        wrote.append(CHECKPOINT_PREFIX + rid)
+        key = CHECKPOINT_PREFIX + rid
+        try:
+            cp = PipelineCheckpoint(store, rid)
+            for phase in passed:
+                cp.mark_passed(phase)
+            wrote.append(key)
+        except Exception as exc:  # noqa: BLE001 — recorded in `failed`, said by every caller
+            failed[key] = exc
 
-    saved = _describe(store, rid)
+    try:
+        saved = _describe(store, rid)
+    except Exception as exc:  # noqa: BLE001 — what is on disk is then UNKNOWN, and said so
+        saved = {}
+        failed[READ_BACK] = exc
     return SaveResult(session_id=short_id(current_session_id()), run_id=rid,
-                      saved=saved, wrote=wrote)
+                      saved=saved, wrote=wrote, failed=failed, approval_persisted=approval)
+

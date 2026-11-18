@@ -36,6 +36,7 @@ import tempfile
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+import _hermetic_git  # noqa: E402  (0.0.29 D1: the one hermetic git door)
 from _code_lines import code_lines
 
 from mokata.repo_walk import CHECKOUT_MARKER
@@ -89,9 +90,6 @@ def marker_drift(script_text, marker):
 
 _MISSING = [t for t in ("bash", "rsync", "git") if shutil.which(t) is None]
 
-_GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull,
-            "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
-            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
 
 
 class _RealScriptHarness:
@@ -133,7 +131,7 @@ class _RealScriptHarness:
         return subprocess.run(["git", *args], cwd=cwd, check=check,
                               capture_output=True, text=True,
                               stdin=subprocess.DEVNULL,
-                              env={**os.environ, **_GIT_ENV})
+                              env=_hermetic_git.git_env())
 
     def _src(self, nested=()):
         """A synthetic source tree carrying the REAL script. `SRC` is `dirname($0)/..`, so
@@ -172,7 +170,7 @@ class _RealScriptHarness:
             _support.bash_argv(_support.as_posix(os.path.join(src, "scripts", "sync-public.sh")),
                                _support.as_posix(dest)),
             stdin=subprocess.DEVNULL,
-            capture_output=True, text=True, env={**os.environ, **_GIT_ENV})
+            capture_output=True, text=True, env=_hermetic_git.git_env())
         self.assertEqual(proc.returncode, expect_rc,
                          f"sync-public.sh rc={proc.returncode}\n"
                          f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}")
@@ -431,7 +429,7 @@ class TheDeleterDoesNotForceAndProvesWhereItIsPointing(
                                                  _support.as_posix(dest)),
                               capture_output=True, text=True,
                               stdin=subprocess.DEVNULL,
-                              env={**os.environ, **_GIT_ENV})
+                              env=_hermetic_git.git_env())
         self.assertNotEqual(0, proc.returncode,
                             "a path whose parent resolves outside the public checkout must be "
                             f"REFUSED; the resolver returned 0 and echoed:\n{proc.stdout}")
@@ -466,7 +464,7 @@ class TheDeleterDoesNotForceAndProvesWhereItIsPointing(
                                                  _support.as_posix(dest)),
                               capture_output=True, text=True,
                               stdin=subprocess.DEVNULL,
-                              env={**os.environ, **_GIT_ENV})
+                              env=_hermetic_git.git_env())
         self.assertNotEqual(0, proc.returncode,
                             "the resolver must REFUSE the mirror's own git directory; it "
                             f"returned 0 and printed:\n{proc.stdout}")
@@ -487,7 +485,7 @@ class TheDeleterDoesNotForceAndProvesWhereItIsPointing(
                                                      _support.as_posix(dest)),
                                   capture_output=True, text=True,
                                   stdin=subprocess.DEVNULL,
-                                  env={**os.environ, **_GIT_ENV})
+                                  env=_hermetic_git.git_env())
             self.assertNotEqual(0, proc.returncode,
                                 f"_resolve_under_root({arg!r}) must refuse; it returned 0 and "
                                 f"printed:\n{proc.stdout}")
@@ -505,7 +503,7 @@ class TheDeleterDoesNotForceAndProvesWhereItIsPointing(
                                                  _support.as_posix(dest)),
                               capture_output=True, text=True,
                               stdin=subprocess.DEVNULL,
-                              env={**os.environ, **_GIT_ENV})
+                              env=_hermetic_git.git_env())
         self.assertEqual(0, proc.returncode,
                          f"an ordinary path inside the checkout must resolve:\n{proc.stdout}\n"
                          f"{proc.stderr}")
@@ -660,7 +658,7 @@ class TestARelativeInvocationIsTheSameRun(_RealScriptHarness, unittest.TestCase)
         return subprocess.run(
             _support.bash_argv(argv0, _support.as_posix(dest)), cwd=cwd,
             stdin=subprocess.DEVNULL, capture_output=True, text=True,
-            env={**os.environ, **_GIT_ENV})
+            env=_hermetic_git.git_env())
 
     def test_relative_and_absolute_invocations_decide_the_same(self):
         src = self._src()

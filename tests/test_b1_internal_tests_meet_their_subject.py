@@ -89,6 +89,7 @@ import tempfile
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+import _hermetic_git  # noqa: E402  (0.0.29 D1: the one hermetic git door)
 
 import _internal_subject as isub
 import _mirror_bookkeeping as mb
@@ -118,9 +119,6 @@ ROW_UNGUARDED_MODULE = "tests/test_stage9_removal_release.py"
 
 _TOOLS = [t for t in ("bash", "rsync", "git") if shutil.which(t) is None]
 
-_GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull,
-            "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
-            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
 
 #: Environment names whose VALUES may never reach a child process or a failure message.
 _SENSITIVE = re.compile(r"DSN|PASSWORD|PASSWD|SECRET|TOKEN|_KEY|APIKEY|CREDENTIAL|MOKATA_",
@@ -133,7 +131,7 @@ _ENV_ALLOW = ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "SYSTEMROOT", "COMSPEC
 
 def _child_env():
     env = {name: os.environ[name] for name in _ENV_ALLOW if name in os.environ}
-    env.update(_GIT_ENV)
+    env.update(_hermetic_git.GIT_ENV)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     return env
 
@@ -854,6 +852,7 @@ class TestTheBoundaryIsUnchangedByThisStage(unittest.TestCase):
         "docs/build", "docs/launch", "docs/marketing", "docs/talks", "editors/vscode/node_modules",
         "editors/vscode/out", "push-to-github.command", "scripts/check-tracker-tables.py",
         "scripts/release.sh", "scripts/sync-public.sh", "scripts/verify-mirror.sh", "site",
+        "/.worktreeinclude",                                   # 0.0.29 D9 (lane C)
     })
 
     #: `INTERNAL_PATHS=( … )`, at `b9b203b`, plus `scripts/verify-mirror.sh` at 0.0.21 stage 02.
@@ -864,6 +863,7 @@ class TestTheBoundaryIsUnchangedByThisStage(unittest.TestCase):
         "editors/vscode/node_modules", "editors/vscode/out", "push-to-github.command",
         "release-backup-*", "scripts/check-tracker-tables.py", "scripts/release.sh",
         "scripts/sync-public.sh", "scripts/verify-mirror.sh", "site",
+        ".worktreeinclude",                                    # 0.0.29 D9 (lane C)
     })
 
     def setUp(self):

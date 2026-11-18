@@ -123,9 +123,11 @@ def run_full_suite(root: str, target: str, *, environ: Optional[Dict[str, str]] 
             "base": after.get("base")}
     passed = rc == 0
     greens = _mapped_existing(wt, main, runs[0]) if passed else []
-    record_test_run(wt, runs[0], passed=passed, command=cmd["text"],
-                    results={t: True for t in greens} or None, source="runner",
-                    actor=ide_actor(), exit_code=rc, tree=tree, at=time.time())
+    from .knowledge.cancel import commit
+    with commit("the suite run"):            # 0.0.29 R-B1: a Ctrl-C here waits for the record
+        record_test_run(wt, runs[0], passed=passed, command=cmd["text"],
+                        results={t: True for t in greens} or None, source="runner",
+                        actor=ide_actor(), exit_code=rc, tree=tree, at=time.time())
     return {"passed": passed, "exit_code": rc, "command": cmd["text"], "tree": tree,
             "run": runs[0], "greened": greens, "output": out["tail"].decode("utf-8", "replace"),
             "output_bytes": out["bytes"], "recorded": True}

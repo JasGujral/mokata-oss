@@ -28,24 +28,8 @@ THE APPROVAL IS BOUND TO THE WHOLE CALL — the full `tool_input` (every byte of
 whole command), never the bounded scan the run-state gates read — so "approve A, then write B" is
 arithmetically impossible: B's call has another hash, another proposal id, and no approval.
 
-THE HONEST BOUNDS (P22). This is the native-tool lane and the Bash lane's VISIBLE writes:
-  * a LITERAL `cd`/`pushd` is followed (`bash_lane.analyze`), so `cd .git/hooks && echo x >
-    pre-commit` is judged at `.git/hooks/pre-commit`. A COMPUTED one (`cd "$D"`, `cd -`, `popd`)
-    is not: the write after it lands somewhere mokata cannot place, and only the run-state lane
-    (in a pipeline session) refuses that as unreadable;
-  * a Bash command mokata cannot parse (variables, `eval`, heredoc-fed interpreters, `find -exec`,
-    `xargs` — `selfprotect`'s filed blind spots) is not seen here either;
-  * `git config` is read through one level of `sh -c`; a `git config` after a `cd` into another
-    repository is judged against THIS checkout's config (over-gating, never under);
-  * porcelain that writes config as a side effect (`git remote add`, `git push -u`, `git branch -u`)
-    is not gated — it sets fixed keys, not arbitrary ones;
-  * `.gitattributes`, `.git/info/attributes` and `.gitmodules` are not gated: they only SELECT a
-    filter/diff/merge driver, and a driver's program is defined in config, which is;
-  * on a filesystem without file ids (inode 0: FAT/exFAT, some SMB) the identity rule is off and
-    only the name rule holds — a hard link to `.git/config` there is not seen;
-  * the approval itself is SI.3's: whoever can run `mokata approve <id> --yes` in a shell (an agent
-    with Bash, too) can approve. This gate makes the hook write VISIBLE and human-shaped; it does
-    not make an agent with a shell unable to approve its own proposal.
+THE HONEST BOUNDS (P22) are `HONEST_BOUNDS` below — one tuple, rendered at the end of this docstring and
+quoted verbatim by `docs/security.md` ("Git hooks and git config"), so the doc cannot drift from it.
 
 mokata itself never writes in a hooks directory or a git config file (its own git calls pass
 `core.hooksPath` on the command line — `git_safe`), so this gate refuses nothing mokata does.
@@ -67,6 +51,62 @@ GIT_CONTROL_TOOL = "git-control"
 
 HOOK = "hook"
 CONFIG = "config"
+#: 0.0.29 C1 (`GIT-CONFIG-GLOBAL-WRONG-FILE`) — `git config --global|--system core.hooksPath` writes
+#: the user's (or the machine's) git config, never this repository's, and decides which hooks EVERY
+#: repository runs. Its own kind, so the refusal names the right file and the right reason.
+GLOBAL_HOOKSPATH = "global hooksPath"
+
+#: What this gate does NOT see (P22), one sentence each. The module docstring renders from this
+#: tuple and `docs/security.md` quotes it verbatim (`TheGitControlDocIsDerived` reds on a drift).
+HONEST_BOUNDS: Tuple[str, ...] = (
+    "A literal `cd`/`pushd` is followed, so a write after `cd .git/hooks` is judged inside the "
+    "hooks directory; a computed one (`cd \"$D\"`, `cd -`, `popd`) is not, and only the run-state "
+    "lane (in a pipeline session) refuses the write after it as unreadable.",
+    "A Bash command mokata cannot parse (variables, `eval`, heredoc-fed interpreters, `find -exec`, "
+    "`xargs`) is not seen by this gate either.",
+    "`git config` is read through one level of `sh -c`; a `git config` after a `cd` into another "
+    "repository is judged against this checkout's config (over-gating, never under).",
+    "Porcelain that writes config as a side effect (`git remote add`, `git push -u`, "
+    "`git branch -u`) is not gated: it sets fixed keys, not arbitrary ones.",
+    "`.gitattributes`, `.git/info/attributes` and `.gitmodules` are not gated: they only select a "
+    "filter/diff/merge driver, and a driver's program is defined in config, which is gated.",
+    "Of the global and system git config, only `core.hooksPath` is gated; other keys there "
+    "(`core.sshCommand`, `core.fsmonitor`, `core.pager`) are not.",
+    "On a filesystem without file ids (FAT/exFAT, some SMB) the identity rule is off and only the "
+    "name rule holds: a hard link to `.git/config` there is not seen.",
+    "The approval is SI.3's: whoever can run `mokata approve <id> --yes` in a shell (an agent with "
+    "Bash, too) can approve. The gate makes the write visible and human-shaped; it does not make "
+    "an agent with a shell unable to approve its own proposal.",
+)
+__doc__ = (__doc__ or "") + "\nTHE HONEST BOUNDS, rendered:\n" + "".join(
+    f"  * {b}\n" for b in HONEST_BOUNDS)
+
+
+def global_config_file(env: Optional[Dict[str, str]] = None) -> str:
+    """The file `git config --global` WRITES — git's own order: `$GIT_CONFIG_GLOBAL`; else
+    `~/.gitconfig` when it exists; else the XDG `git/config` when it exists; else `~/.gitconfig`.
+    Reads the environment as data and stats; never opens a file. Normalised."""
+    env = os.environ if env is None else env
+    named = env.get("GIT_CONFIG_GLOBAL")
+    if named:
+        return os.path.normpath(os.path.expanduser(named))
+    home = env.get("HOME") or (env.get("USERPROFILE") if os.name == "nt" else "") \
+        or os.path.expanduser("~")
+    dot = os.path.normpath(os.path.join(home, ".gitconfig"))
+    if os.path.isfile(dot):
+        return dot
+    xdg = os.path.join(env.get("XDG_CONFIG_HOME") or os.path.join(home, ".config"), "git", "config")
+    return os.path.normpath(xdg) if os.path.isfile(xdg) else dot
+
+
+def system_config_file(env: Optional[Dict[str, str]] = None) -> str:
+    """The file `git config --system` WRITES: `$GIT_CONFIG_SYSTEM`, else `/etc/gitconfig`; on
+    Windows (where it sits under git's install prefix) its NAME, never a guessed path."""
+    env = os.environ if env is None else env
+    named = env.get("GIT_CONFIG_SYSTEM")
+    if named:
+        return os.path.normpath(named)
+    return "the system git config" if os.name == "nt" else "/etc/gitconfig"
 
 _GIT = ".git"
 _CONFIG_NAMES = ("config", "config.worktree")
@@ -264,18 +304,19 @@ def kind_of(target: str, cwd: str) -> str:
         return HOOK
 
 
-def git_config_writes(command: str, cwd: str, depth: int = 0) -> List[str]:
-    """The config FILE each `git config` write in a shell command lands on (read forms excluded):
-    `-f FILE`, `--worktree` (the git dir's `config.worktree`), `--global`/`--system` when the key is
-    `core.hooksPath` (it changes which hooks THIS repository runs), else the common dir's `config`.
-    One level of `sh -c`/`bash -c` nesting is read, the self-protect lane's own bound. Never raises;
-    an unparseable command yields []."""
+def git_config_writes(command: str, cwd: str, depth: int = 0) -> List[Tuple[str, str]]:
+    """`[(file, kind)]` for each `git config` write in a shell command (read forms excluded):
+    `-f FILE` and this repository's config (`--worktree`: the git dir's `config.worktree`, else the
+    common dir's `config`) are `CONFIG`; `--global`/`--system` with the key `core.hooksPath` is
+    `GLOBAL_HOOKSPATH`, naming the file git really writes (`global_config_file` /
+    `system_config_file`), never this repository's. One level of `sh -c`/`bash -c` nesting is read,
+    the self-protect lane's own bound. Never raises; an unparseable command yields []."""
     from .selfprotect import (_SHELL_VERBS, _segments, _tokenize, git_subcommand, segment_verb,
                               shell_code)
     tokens = _tokenize(command or "")
     if not tokens:
         return []
-    out: List[str] = []
+    out: List[Tuple[str, str]] = []
     for seg in _segments(tokens):
         verb, operands = segment_verb(seg)
         if os.path.basename(verb) in _SHELL_VERBS and depth < 1:
@@ -310,19 +351,23 @@ def git_config_writes(command: str, cwd: str, depth: int = 0) -> List[str]:
         if not writes:
             continue
         if file_arg:
-            out.append(file_arg)
+            out.append((file_arg, CONFIG))
+            continue
+        if flags & {"--global", "--system"}:
+            # 0.0.29 C1 — the file the write REALLY reaches, gated whether or not cwd is in a repo
+            # (it was skipped outside one: fail-open). The gated key set is unchanged.
+            key = (positional[1] if positional[:1] in (["set"], ["unset"]) and len(positional) > 1
+                   else positional[0] if positional else "")
+            if key.lower() == "core.hookspath":
+                out.append((system_config_file() if "--system" in flags
+                            else global_config_file(), GLOBAL_HOOKSPATH))
             continue
         top, gitdirs = _git_dirs(cwd)
-        if flags & {"--global", "--system"}:
-            key = (positional[1] if positional[:1] == ["set"] and len(positional) > 1
-                   else positional[0] if positional else "")
-            if key.lower() == "core.hookspath" and gitdirs:
-                out.append(os.path.join(gitdirs[-1], "config"))
-            continue
         if not gitdirs:
             continue
         name = "config.worktree" if "--worktree" in flags else "config"
-        out.append(os.path.join(gitdirs[0] if "--worktree" in flags else gitdirs[-1], name))
+        out.append((os.path.join(gitdirs[0] if "--worktree" in flags else gitdirs[-1], name),
+                    CONFIG))
     return out
 
 
@@ -339,10 +384,10 @@ def hits(cwd: str, path: Optional[str], bash_targets: Sequence[str], command: st
         k = kind_of(t, cwd)
         if k:
             out.append((t, k))
-    for f in git_config_writes(command, cwd):
+    for f, k in git_config_writes(command, cwd):
         if f not in seen:
             seen.add(f)
-            out.append((f, CONFIG))
+            out.append((f, k))
     return out
 
 
@@ -355,6 +400,8 @@ _WHY = {
           "shell and with their credentials",
     CONFIG: "git's config names programs git runs (core.hooksPath, core.fsmonitor, filters, "
             "core.sshCommand)",
+    GLOBAL_HOOKSPATH: "core.hooksPath in your global git config decides which hooks EVERY "
+                      "repository here, this one included, runs",
 }
 
 
@@ -406,6 +453,7 @@ def refusal(cwd: str, session_id: str, hit: List[Tuple[str, str]], tool_name: st
             f"(it shows this write in full), then make exactly the same call again.")
 
 
-__all__ = ["CONFIG", "GATE_GIT_CONTROL", "GIT_CONTROL_TOOL", "HOOK", "call_args", "config_files",
+__all__ = ["CONFIG", "GATE_GIT_CONTROL", "GLOBAL_HOOKSPATH", "HONEST_BOUNDS",
+           "global_config_file", "system_config_file", "GIT_CONTROL_TOOL", "HOOK", "call_args", "config_files",
            "git_config_writes", "hits", "hooks_dirs", "kind_of", "name_kind", "preview_of",
            "refusal"]

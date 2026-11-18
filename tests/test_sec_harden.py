@@ -240,7 +240,7 @@ class G1_AnAgentCannotPlantAGitHookOrRewriteGitConfig(_Gate):
         self.assertBlocked(self.gate({"command": "git config core.hooksPath /tmp/e"}, tool="Bash",
                                      cwd=wt), "git config from a worktree")
         self.assertEqual(os.path.realpath(os.path.join(common, "config")),
-                         os.path.realpath(GC.git_config_writes("git config a.b c", wt)[0]))
+                         os.path.realpath(GC.git_config_writes("git config a.b c", wt)[0][0]))
         self.assertAllowed(self.gate(self.write_call("src/app.py", "y\n", base=wt), cwd=wt))
 
     def test_outside_a_mokata_repo_it_is_refused_and_says_to_make_the_change_yourself(self):

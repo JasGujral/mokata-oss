@@ -312,14 +312,17 @@
         const counted = (r) => {
           st.counting = false;
           if (st.dead) return;
-          if (r && r.state === "ok") { strip.done(); Object.assign(st.info, r); st.info.estimate = r.rows; } else {
+          if (r && r.state === "ok" && r.changed) {
+            // 0.0.29 E (F8): the file changed while it was counted — never a "complete" count
+            strip.done(); st.uncounted = r.changed;
+          } else if (r && r.state === "ok") { strip.done(); Object.assign(st.info, r); st.info.estimate = r.rows; } else {
             // Each way a count can end without a number says its OWN word (0.0.28 D) — never "reload",
             // which fails the same way: cancelled -> the Jobs drawer's Retry (the existing control);
             // failed -> the job's error; cannot be counted (a record over the size bound) -> the server's reason.
             strip.done();
             st.uncounted = r && r.cancelled ? "the count was cancelled — Retry in the Jobs drawer"
               : r && r.failed ? `the count failed: ${r.note || "no reason given"}`
-              : (r && (r.note || r.error)) || "the count could not finish";
+              : r && (r.note || r.error);
           }
           paintMeta(); draw();
         };

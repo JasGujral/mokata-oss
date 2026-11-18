@@ -96,7 +96,9 @@ def _project_always_on_lines(surface, budget: int) -> List[str]:
         return []
     try:
         from ..memory import MemoryStore, always_on_lines
-        store = MemoryStore.from_surface(surface)
+        # the always-on tier is read by kind: no model is loaded or fetched — this runs in doctor
+        # and at every SessionStart (0.0.29 C1 verify M2)
+        store = MemoryStore.from_surface(surface, knowledge=False, load_model=False)
         lines, _overflow = always_on_lines(store, budget - 1)   # -1 reserves the header
     except (OSError, ImportError, sqlite3.Error):
         note_degraded(
@@ -104,7 +106,8 @@ def _project_always_on_lines(surface, budget: int) -> List[str]:
             fallback="your captured project rules are NOT loaded this session",
             fix="run `mokata doctor` to repair the memory store")
         return []
-    return [_PROJECT_RULES_HEADER, *lines] if lines else []
+    from ..plugin_runtime import localize_commands   # lazy: the prompt hook imports this module
+    return [localize_commands(_PROJECT_RULES_HEADER, surface.root), *lines] if lines else []
 
 
 def always_on_rules_for(surface) -> RuleSet:

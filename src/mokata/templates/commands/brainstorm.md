@@ -199,7 +199,9 @@ table, and the moment the user approves one — CHECKPOINT the in-flight state b
 `session_save` tool with the current brainstorm state (`session_save` with `brainstorm` = the
 session so far; add `passed` = the pipeline phases that have passed once a gate clears). This is
 an UNGATED LOCAL save — the user's own transient state, not a share — so it never prompts and
-never blocks; if it degrades it warns once and your work still stands. It writes EXACTLY what
+never blocks. If it answers `ok:false`, tell the user what it says: with `approval_persisted:false`
+the approval is NOT on record — follow the reply's remedy before any implementation; with
+`approval_persisted:true` the approval stands. It writes EXACTLY what
 resume reads back, so a kill −9 rehydrates the approved approach, the milestones, and the passed
 checkpoint with no manual save. AND checkpoint each answered turn — one cheap, atomic
 `session_save` with `turn` = the current brainstorm state — so a crash loses at most one turn.

@@ -56,7 +56,8 @@ class TestSetupHarnessE2E(unittest.TestCase):
             # reverse
             rc, _ = run_cli(["unsetup", "claude", "--yes", "--path", d])
             self.assertEqual(rc, 0)
-            self.assertEqual(os.listdir(os.path.join(d, ".claude", "commands")), [])
+            # 0.0.29 C1: unsetup leaves no residue, so the emptied commands dir goes with its files
+            self.assertFalse(os.path.exists(os.path.join(d, ".claude", "commands")))
             # .mcp.json held only mokata's server → unsetup removes it byte-clean (5b: no {} husk)
             self.assertFalse(os.path.exists(os.path.join(d, ".mcp.json")))
             # config preserved across unsetup

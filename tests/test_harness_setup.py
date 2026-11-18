@@ -169,8 +169,9 @@ class TestUnsetup(unittest.TestCase):
             settings = _read(os.path.join(d, ".claude", "settings.json"))
             self.assertIn("permissions", settings)
             self.assertEqual(len(settings["hooks"]["PreToolUse"]), 1)  # only keepme
-            # copied commands removed; .mokata config left intact
-            self.assertEqual(os.listdir(os.path.join(d, ".claude", "commands")), [])
+            # copied commands removed AND the emptied commands/ dir with them (no residue; .claude/
+            # stays: the user's settings.json is still in it); .mokata config left intact
+            self.assertFalse(os.path.exists(os.path.join(d, ".claude", "commands")))
             self.assertTrue(os.path.exists(os.path.join(d, MOKATA_DIR, "manifest.json")))
 
     def test_unsetup_when_nothing_wired_is_safe(self):

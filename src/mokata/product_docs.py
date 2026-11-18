@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 from .legibility import _color_enabled, box, table
+from .plugin_runtime import localize_commands
 
 # The published documentation site (mkdocs site_url). The ONLY place docs content lives online.
 BASE_URL = "https://mokata.ai/"
@@ -86,7 +87,7 @@ def render_topic_list(*, ascii_only: bool = False) -> str:
     header = box(
         [f"mokata · docs — {len(TOPICS)} topics on the live site",
          f"the full docs: {BASE_URL}",
-         "open one:  mokata docs <topic>  (/mokata:docs <topic>) — prints its site URL"],
+         localize_commands("open one:  mokata docs <topic>  (/mokata:docs <topic>) — prints its site URL", None)],
         ascii_only=ascii_only,
     )
     rows = [(t.slug, t.title, topic_url(t.slug)) for t in TOPICS]

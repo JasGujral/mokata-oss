@@ -35,6 +35,7 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 
 from __future__ import annotations
 
+import dataclasses
 import difflib
 import re
 from dataclasses import dataclass, field
@@ -865,7 +866,7 @@ def spec_tests_ungraded(spec: Any) -> bool:
     return bool(getattr(spec, "committed", False)) and getattr(spec, "tests", None) is None
 
 
-def audit_spec(spec: Any, root: str) -> List[Finding]:
+def audit_spec(spec: Any, root: str, scanned: Optional[List[Any]] = None) -> List[Finding]:
     """Blocking findings where the saved ``spec`` and the live tree under ``root`` disagree:
 
       * ``spec-anchor`` — an AC's code anchor no longer resolves (its file is gone, or its symbol is
@@ -878,7 +879,11 @@ def audit_spec(spec: Any, root: str) -> List[Finding]:
 
     A COMMITTED spec is judged by its OWN declared tests (``spec.tests``): another spec's test
     tagged with the same AC id never satisfies it. A committed spec that declares none is not
-    judged on tests at all (``spec_tests_ungraded`` names it); re-emit it to record them."""
+    judged on tests at all (``spec_tests_ungraded`` names it); re-emit it to record them.
+
+    ``scanned`` (0.0.29 E): the tree's tests already read for the ids of SEVERAL specs
+    (`spec_drift` reads them once); each ref is narrowed to this spec's ids, so the answer is the
+    one a walk for this spec alone would give."""
     from .engine.acmapper import scan_tests
     from .engine.spec_anchor import resolve as resolve_anchor
 
@@ -893,7 +898,12 @@ def audit_spec(spec: Any, root: str) -> List[Finding]:
                     f"code drifted; amend the spec or restore the code"))
     ids = list(spec.ac_ids)
     if ids and not spec_tests_ungraded(spec):
-        scanned = scan_tests(root, ids)
+        if scanned is None:
+            scanned = scan_tests(root, ids)
+        else:
+            mine = set(ids)
+            scanned = [dataclasses.replace(t, ac_ids=[a for a in t.ac_ids if a in mine])
+                       for t in scanned if any(a in mine for a in t.ac_ids)]
         if any(t.ac_ids for t in scanned):     # the repo uses AC-tagged tests; one that doesn't is
             if getattr(spec, "committed", False):      # not judged on them
                 from .committed_specs import attributed_tests
@@ -928,10 +938,13 @@ def spec_drift(root: Any = ".") -> SpecDrift:
     from .committed_specs import load_committed
     committed = load_committed(root)
     loaded = load_spec_corpus(store)
-    specs, seen = [], set()
     # L7b — the COMMITTED specs first (in CI they are the only ones there), then this checkout's
-    # run state; a same-titled duplicate is checked once.
-    for spec in list(committed.specs) + list(loaded):
+    # run state. 0.0.29 E: every committed FILE is checked — a same-titled twin is a second spec,
+    # not a duplicate; a run-state spec is skipped when a spec of its title is already checked
+    # (the committed copy of the spec this checkout emitted).
+    specs = [sp for sp in committed.specs if sp.criteria]
+    seen = {sp.title for sp in specs}
+    for spec in loaded:
         if spec.title not in seen and spec.criteria:
             seen.add(spec.title)
             specs.append(spec)
@@ -952,8 +965,13 @@ def spec_drift(root: Any = ".") -> SpecDrift:
                          **tag)
     findings = list(unreadable)
     ungraded = sum(len(sp.criteria) for sp in specs if spec_tests_ungraded(sp))
+    # 0.0.29 E (`G3-L9-LOWS`): the tree's tests are read ONCE for every spec's ids.
+    from .engine.acmapper import scan_tests
+    union = list(dict.fromkeys(a for sp in specs if not spec_tests_ungraded(sp)
+                               for a in sp.ac_ids))
+    scanned = scan_tests(root, union) if union else []
     for spec in specs:
-        for f in audit_spec(spec, root):
+        for f in audit_spec(spec, root, scanned=scanned):
             if len(specs) > 1:
                 f = Finding(f.checker, f.severity, f.line, f"{spec.title} · {f.section}",
                             f.excerpt, f.message, f.suggestion)

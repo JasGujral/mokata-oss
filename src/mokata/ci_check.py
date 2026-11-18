@@ -25,7 +25,7 @@ from __future__ import annotations
 import os
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Iterator, List, Optional
+from typing import Any, Iterator, List, Optional, Sequence
 
 # ----------------------------------------------------------------- changed-file → touch-set
 def symbols_in_files(root: str, files: List[str]) -> List[str]:
@@ -326,7 +326,7 @@ def _completeness_one(root: str, spec: Any, store: Any, all_tests: List[Any]) ->
     if result.unmapped_ids:
         detail.append(f"{spec.title}: unmapped acceptance criteria: {', '.join(result.unmapped_ids)}")
     return CheckLeg("completeness", "block", result.reason, detail=detail,
-                    unblock=unblock_hint(result.gate_id), evidence=evidence)
+                    unblock=unblock_hint(result.gate_id, root), evidence=evidence)
 
 
 def _completeness_leg(root: str, store: Any) -> CheckLeg:
@@ -378,7 +378,7 @@ def _completeness_leg(root: str, store: Any) -> CheckLeg:
 
 
 def _spec_awareness_leg(surface: Any, changed_files: List[str],
-                        changed_symbols: List[str]) -> CheckLeg:
+                        changed_symbols: List[str], diff_base: str = "") -> CheckLeg:
     """Surface a regression: does this PR touch a previously saved spec/decision? Degrade-clean:
     no saved corpus → absent; a touch → BLOCK (a reviewer must confirm/amend); no overlap → pass.
 
@@ -394,6 +394,10 @@ def _spec_awareness_leg(surface: Any, changed_files: List[str],
     # "no saved spec is affected": grading an empty touch-set printed PASSED over a PR (a bad or
     # unfetched --base, no --files, MCP files="") that the leg never looked at.
     if not changed_files and not changed_symbols:
+        if diff_base:
+            # The base RESOLVED and the diff is genuinely empty: say that, not "supplied nothing".
+            return CheckLeg("spec-awareness", ABSENT,
+                            f"no files differ from {diff_base}; nothing to compare (not a pass)")
         return CheckLeg("spec-awareness", ABSENT,
                         "no changed files supplied — the change was not compared with the saved "
                         "specs/decisions (pass --files or a resolvable --base)")
@@ -411,7 +415,8 @@ def _spec_awareness_leg(surface: Any, changed_files: List[str],
     specs += [sp for sp in load_committed(surface.root).specs if sp.title not in titles]
     degraded: List[str] = []
     try:
-        store = MemoryStore.from_surface(surface)
+        # the decision corpus is read by key: no model is loaded or fetched (0.0.29 C1 verify M2)
+        store = MemoryStore.from_surface(surface, load_model=False)
         decisions = load_decisions(store)
     except (MemoryError, OSError, ImportError, ManifestError, SQLiteError) as exc:
         from .degrade import FAILURE_UNREACHABLE, note_degraded
@@ -493,10 +498,13 @@ LEG_NAMES = ("completeness", "spec-awareness", "spec-drift")
 
 def run_ci_check(root: str, changed_files: List[str],
                  changed_symbols: Optional[List[str]] = None,
-                 legs: Optional[tuple] = None) -> CICheckResult:
+                 legs: Optional[tuple] = None, diff_base: str = "") -> CICheckResult:
     """Run the completeness + spec-awareness legs over a PR's changed files. Pure of git/network
     (the caller supplies the changed-file list). NEVER raises — an uninitialized/unreadable repo
-    degrades to a clean PASS (nothing to check).
+    degrades to NOT CHECKED (`initialized=False`), never a pass.
+
+    `diff_base` names the ref the caller resolved the (empty) change set from, so an empty diff is
+    worded as "no files differ from <base>" instead of "no files supplied".
 
     `legs` (0.0.28 F) selects which legs run, by `LEG_NAMES`; None runs them all (the CLI and MCP
     check). The merge gate's spec leg asks for spec-awareness + spec-drift only: completeness is
@@ -530,7 +538,7 @@ def run_ci_check(root: str, changed_files: List[str],
     # shown as complete). Outside a job every checkpoint is a no-op, so the CLI is unchanged.
     from .knowledge.cancel import checkpoint
     run = {"completeness": lambda: _completeness_leg(root, surface.state),
-           "spec-awareness": lambda: _spec_awareness_leg(surface, changed_files, symbols),
+           "spec-awareness": lambda: _spec_awareness_leg(surface, changed_files, symbols, diff_base),
            "spec-drift": lambda: _committed_specs_leg(root)}
     done = []
     for name in LEG_NAMES:
@@ -545,28 +553,158 @@ def run_ci_check(root: str, changed_files: List[str],
 
 
 # ----------------------------------------------------------------- Ctrl-C in the CLI
+#: The stderr lines the CLI says while it is being stopped (0.0.29 R-B5).
+def say_cancelling(planned: "Sequence[str]" = (), trees: int = 0) -> str:
+    """The first Ctrl-C's line: WHAT is being cancelled and how many process trees it is ending
+    (B1 verifier Low)."""
+    what = " and ".join(planned) if planned else "this command"
+    ends = (f", ending the {trees} process tree{'s' if trees != 1 else ''} it started"
+            if trees else "")
+    return f"cancelling {what}{ends} — Ctrl-C again to stop at once"
+
+
+SAY_RECORDING = "recording the result — it cannot be stopped now; it stops right after"
+SAY_RECORDED_ANYWAY = "Ctrl-C came while the result was being recorded — it was recorded"
+SAY_AFTER_FINISH = "Ctrl-C came after the work had finished — its result stands"
+
+
+class _SigState:
+    """What the handler shares with the watcher and the block — plain attributes, read and written
+    one at a time under the GIL; the handler takes no lock (attack H2)."""
+    __slots__ = ("signals", "escalated", "closing", "main", "wfd")
+
+    def __init__(self, main: int, wfd: int) -> None:
+        self.signals = 0
+        self.escalated = False
+        self.closing = False
+        self.main = main
+        self.wfd = wfd
+
+
+def _poke(st: _SigState, byte: bytes) -> None:
+    import os
+    try:
+        os.write(st.wfd, byte)
+    except OSError:
+        pass
+
+
+def _signal_handler(st: _SigState, soft: "tuple") -> Any:
+    from .knowledge import cancel as C
+
+    def handler(signum: int, _frame: Any) -> None:
+        # Runs on the MAIN thread between bytecodes — possibly inside a commit or the door. It
+        # counts, writes at most a byte, and raises only outside every critical window.
+        if st.closing:
+            return
+        st.signals += 1
+        if signum in soft and st.signals == 1:
+            _poke(st, b"1")                       # the watcher pulls the lever
+            return
+        if st.escalated:
+            return                                # the unwind is under way: never skip a finally
+        st.escalated = True
+        if C.critical_depth(st.main) == 0:
+            raise KeyboardInterrupt
+        C._PENDING[st.main] = True                # delivered when the last window is left
+        _poke(st, b"2")
+    return handler
+
+
+def cancelled_text(recorded: "Sequence[str]" = (), planned: "Sequence[str]" = ()) -> str:
+    """What a cancelled CLI command says it recorded (0.0.29 N2: never "nothing recorded" after
+    the suite run was recorded)."""
+    done = list(recorded)
+    if not done:
+        return "cancelled — nothing recorded"
+    left = [p for p in planned if p not in done]
+    return ("cancelled — recorded: " + ", ".join(done)
+            + (("; not recorded: " + ", ".join(left)) if left else ""))
+
+
 @contextmanager
-def cancel_on_sigint() -> Iterator[Any]:
-    """Arm `knowledge.cancel` for a CLI command (0.0.28 F): Ctrl-C — SIGINT, or CTRL_C_EVENT on
-    Windows, which Python delivers as SIGINT — SETS the flag instead of raising mid-write, and the
-    next checkpoint raises `Cancelled`, so a half-done check records nothing. The handler is
-    installed only on the main thread (where Python allows one) and the previous one is restored."""
+def cancel_on_sigint(planned: "Sequence[str]" = ()) -> Iterator[Any]:
+    """Arm a `knowledge.cancel.Lever` for a CLI command (0.0.28 F; 0.0.29 R-B5).
+
+      * 1st Ctrl-C (SIGINT; on Windows also CTRL_BREAK): the lever is pulled — the command stops at
+        its next checkpoint; a pull that lands inside a record write waits for it.
+      * 2nd Ctrl-C, or SIGTERM/SIGHUP (POSIX; SIGHUP only when not ignored — `nohup` is kept): stop
+        AT ONCE — `KeyboardInterrupt` from the handler, which ends the door's trees through their
+        `finally`. Inside a critical window (a record write, the door's start/end) it is delivered
+        the moment the window ends, and the user is told.
+      * Later signals are ignored while the unwind runs; the handler stays installed until the
+        block is left, so no Ctrl-C can skip a `finally` that ends a tree.
+    A stop raises `Cancelled` whose text says what was and was not recorded (`cancelled_text`).
+    Off the main thread nothing is installed (Python allows a handler only there)."""
+    import os
     import signal
+    import sys
     import threading
     from .knowledge import cancel as C
-    flag = threading.Event()
-    on_main = threading.current_thread() is threading.main_thread()
-    prev = signal.getsignal(signal.SIGINT) if on_main else None
-    if on_main:
-        signal.signal(signal.SIGINT, lambda _signum, _frame: flag.set())
+    lever = C.Lever()
+    if threading.current_thread() is not threading.main_thread():
+        with C.scope(lever):
+            yield lever
+        return
+    rfd, wfd = os.pipe()
+    st = _SigState(threading.get_ident(), wfd)
+    soft = tuple(s for s in (signal.SIGINT, getattr(signal, "SIGBREAK", None)) if s is not None)
+    hard = [] if os.name == "nt" else [signal.SIGTERM]
+    if os.name != "nt" and signal.getsignal(signal.SIGHUP) != signal.SIG_IGN:
+        hard.append(signal.SIGHUP)
+    handler = _signal_handler(st, soft)
+    prev = {}
+    for sig in (*soft, *hard):
+        prev[sig] = signal.getsignal(sig)
+        signal.signal(sig, handler)
+
+    def say(text: str) -> None:
+        try:
+            sys.stderr.write(f"mokata: {text}\n")
+            sys.stderr.flush()
+        except (OSError, ValueError):
+            pass
+
+    def watch() -> None:
+        while True:
+            try:
+                b = os.read(rfd, 1)
+            except OSError:
+                return
+            if not b:
+                return
+            if b == b"1":
+                lever.pull()
+                from . import quiet_spawn as Q
+                say(say_cancelling(planned, len(Q._LIVE)))   # one read; never waits on a lock
+            elif b == b"2":
+                say(SAY_RECORDING)
+    watcher = threading.Thread(target=watch, name="mokata-ctrl-c", daemon=True)
+    watcher.start()
+    finished = False
     try:
-        with C.scope(flag):
-            yield flag
+        with C.scope(lever):
+            yield lever
+        finished = True
+    except KeyboardInterrupt:
+        if not st.escalated:
+            raise
+        raise C.Cancelled(cancelled_text(lever.recorded, planned)) from None
+    except C.Cancelled:
+        raise C.Cancelled(cancelled_text(lever.recorded, planned)) from None
     finally:
-        if on_main:
-            signal.signal(signal.SIGINT, prev if prev is not None else signal.default_int_handler)
+        st.closing = True
+        C._PENDING.pop(st.main, None)
+        os.close(wfd)
+        watcher.join()
+        os.close(rfd)
+        for sig, old in prev.items():
+            signal.signal(sig, old if old is not None else signal.SIG_DFL)
+        if lever.deferred_seen:
+            say(SAY_RECORDED_ANYWAY)
+        elif finished and lever.is_set():
+            say(SAY_AFTER_FINISH)
 
 
-#: What a cancelled CLI check prints; the exit status is 2, "did not run" (as `REFUSED_EXIT`).
-CANCELLED_TEXT = "cancelled — nothing recorded"
+#: The exit status of a cancelled CLI check: 2, "did not run" (as `REFUSED_EXIT`).
 CANCELLED_EXIT = 2

@@ -47,6 +47,7 @@ from .. import engine as _engine, events as _events, mcp as _mcp  # noqa: F401
 from ..knowledge.query import BUDGET_DEFAULT, BUDGET_FULL
 from .bus import HOOK_HEADER
 from .gate_door import GATE_PATH as _GATE_PATH
+from ..plugin_runtime import localize_commands
 
 IDLE_SECS = 30 * 60
 POLL_SECS = 1.0            # SSE keep-alive tick: focus / idle bookkeeping (events arrive pushed)
@@ -143,7 +144,8 @@ def record_path(root: str) -> str:
 
 def read_record(root: str) -> Optional[Dict[str, Any]]:
     """The server record — only if it is OURS and still private (0.0.28 C1: a record planted by another
-    account, or left readable by others, is refused, never adopted; `mokata doctor` names it)."""
+    account, or left readable by others, is refused, never adopted; `mokata doctor` names it). None: no
+    record. A refused one RAISES `errors.RecordRefused` (0.0.29 H4: absent is not refused)."""
     from ..winacl import read_private
     raw = read_private(record_path(root))
     if raw is None:
@@ -166,7 +168,14 @@ def _write_record(root: str, data: Dict[str, Any]) -> None:
 
 
 def _remove_record(root: str, pid: int) -> None:
-    rec = read_record(root)
+    """The shutdown path. A REFUSED record (0.0.29 H4) is not ours to remove: one line says so, it is
+    never unlinked, and nothing else in the shutdown is skipped (`mokata doctor --fix` deals with it)."""
+    from ..errors import RecordRefused
+    try:
+        rec = read_record(root)
+    except RecordRefused as exc:
+        print(f"mokata ide: {exc.line()}; left in place on shutdown", file=sys.stderr)
+        return
     if rec and rec.get("pid") == pid:
         try:
             os.remove(record_path(root))
@@ -186,11 +195,20 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
+#: The commands a page names in an empty state (`sessions.js`, `plan.js`, `review.js`): the server
+#: renders each for the active route and ships them in `/api/state` as `commands`.
+PAGE_COMMANDS = ("brainstorm", "spec")
+
 TERMINAL_NEEDS_TTY = ("the embedded terminal is enabled only when you start `mokata ide` from your own "
                       "terminal (a TTY) — a window opened from inside a session "
                       "(/mokata:review-window) or without a TTY cannot start processes "
                       "(doc 109 §6: the same bar as `mokata approve`)")
 TERMINAL_NOT_SAMPLE = "no terminal on SAMPLE data (`mokata ide --demo`)"
+
+
+#: Does a `stat` signature see every change to the bridge record that matters (content, ACL, links)?
+#: POSIX: yes — `st_ctime` moves on a chmod, a link and any write. Windows: no (see `hook_token_now`).
+HOOK_SIG_SEES_EVERY_CHANGE = os.name != "nt"
 
 
 class AppState:
@@ -217,17 +235,22 @@ class AppState:
         self.landing: Optional[tuple] = None
         # ID.S3 — the event bus (pushed events + the stat-gated tails), and the hook token from the
         # bridge record: it authorises `POST /api/bus` and nothing else.
-        from .bus import EventBus, read_bridge
+        from .bus import EventBus
         self.bus = EventBus()
-        bridge = None if demo else read_bridge(root)
-        self.hook_token = bridge["token"] if bridge else ""
+        # 0.0.29 H4 — the hook token follows the bridge record: `hook_token_now` re-reads it whenever
+        # the file's identity/size/times change, so a `mokata doctor --fix` rotation ends the old
+        # token at once, with no restart and no wait for a request carrying the new one.
+        self.hook_sig: Optional[tuple] = None
+        self.hook_token = ""
+        if not demo:
+            self.hook_token_now()
         self.watcher: Optional[Any] = None
         self.self_seqs: set = set()          # P12: store rows this server published itself
         # ID.S3 (Lane ID2) — the embedded terminal (enabled only for a TTY-launched, real-repo
         # window) and the joined session (focus + follow + the default context target).
         from .terminal import TerminalHost, available
         gate = ((False, TERMINAL_NOT_SAMPLE) if demo else
-                (False, TERMINAL_NEEDS_TTY) if not terminal else available())
+                (False, localize_commands(TERMINAL_NEEDS_TTY, root)) if not terminal else available())
         self.terminals = TerminalHost(root, enabled=gate)
         self.joined: Optional[str] = None
         # 0.0.26 P38 — Approve/Reject in the window needs a code printed to THIS process's own
@@ -244,6 +267,32 @@ class AppState:
         self.jobs = J.JobRegistry()
         J.install(self.jobs)
         self.loop: Optional[asyncio.AbstractEventLoop] = None
+
+    def hook_token_now(self) -> str:
+        """The bridge record's token as it is NOW (0.0.29 H4). One `stat` per call; the record is
+        re-read only when `(st_dev, st_ino, st_size, st_mtime_ns, st_ctime_ns)` changed — the record is
+        replaced (temp + rename) on every write, so a rotation is always seen. The signature is taken
+        BEFORE the read, so a write that lands between the two is seen again on the next call. A record
+        that is absent, refused or unparseable leaves NO token: the old one is never kept.
+
+        Windows (0.0.29 H-a xplat): `st_ctime` is the file's CREATION time there, so an ACL change, a
+        second hard link, or an in-place same-size rewrite with its mtime put back moves nothing in this
+        signature. There the record is re-read on EVERY call (`HOOK_SIG_SEES_EVERY_CHANGE`)."""
+        from ..errors import RecordRefused
+        from .bus import bridge_path, read_bridge
+        try:
+            st = os.stat(bridge_path(self.root))
+            sig: Optional[tuple] = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+        except OSError:
+            sig = None
+        if not HOOK_SIG_SEES_EVERY_CHANGE or sig != self.hook_sig or (sig is None and self.hook_token):
+            self.hook_sig = sig
+            try:
+                bridge = read_bridge(self.root) if sig is not None else None
+            except RecordRefused:
+                bridge = None
+            self.hook_token = bridge["token"] if bridge else ""
+        return self.hook_token
 
     def attach_loop(self) -> None:
         """Bind job events to the event bus, from the server's loop (first request / stream)."""
@@ -399,10 +448,13 @@ def build_app(state: AppState, features: Optional[List[Any]] = None):
 
     def _hook_authed(request: Request) -> bool:
         """ID.S3 — an observe-only hook: its own token, and NO Origin (a browser always sends
-        one on a POST, so no page — ours or another site's — can use this door)."""
+        one on a POST, so no page — ours or another site's — can use this door). 0.0.29 H4: the token
+        is the bridge record's CURRENT one (one `stat` per hook request, `AppState.hook_token_now`)."""
         got = request.headers.get(HOOK_HEADER, "")
-        return bool(state.hook_token and got and request.headers.get("origin") is None
-                    and hmac.compare_digest(got.encode(), state.hook_token.encode()))
+        if not got or request.headers.get("origin") is not None or state.demo:
+            return False
+        token = state.hook_token_now()
+        return bool(token and hmac.compare_digest(got.encode(), token.encode()))
 
     def guard(handler, *, auth: bool = True, hook: bool = False):
         async def wrapped(request: Request):
@@ -953,6 +1005,13 @@ def build_app(state: AppState, features: Optional[List[Any]] = None):
             out["graph_degraded"] = True
         return out
 
+    def state_with_commands(_request: Request) -> Dict[str, Any]:
+        """`/api/state` + the `commands` map the pages name in their empty states, rendered for THIS
+        route (`slash_command`): JS never decides the route, it reads what the server installed."""
+        from ..plugin_runtime import slash_command
+        return {**state.source.state(state.focus),
+                "commands": {n: slash_command(n, state.root) for n in PAGE_COMMANDS}}
+
     async def ping(request: Request):
         return JSONResponse({"ok": True, "root": state.root, "focus": state.focus,
                              "demo": state.demo, "pid": os.getpid(), "pages": state.clients,
@@ -1188,7 +1247,7 @@ def build_app(state: AppState, features: Optional[List[Any]] = None):
     add("/static/vendor/{name}", vendor, "static")
     add("/static/features/{name}", feature_static, "static")
     add("/api/ping", ping, "read")
-    add("/api/state", lambda r: state.source.state(state.focus), "json")
+    add("/api/state", state_with_commands, "json")
     add("/api/live", lambda r: ws_view(q(r, "ws"), state.source.live(q(r, "mokata") == "1")),
         "json")
     add("/api/session", lambda r: ws_view(q(r, "ws"), state.source.session(q(r, "id"))), "json")
@@ -1431,6 +1490,14 @@ def serve(root: str, port: int = 0, focus: Optional[str] = None, demo: bool = Fa
     except ImportError:
         print(INSTALL_LINE, file=sys.stderr)
         return 3
+    # 0.0.29 H4 — a REFUSED server record (foreign, or readable by others) is never written over on
+    # the strength of "no record": the window does not start, and says which file and what to run.
+    from ..errors import RecordRefused
+    try:
+        read_record(root)
+    except RecordRefused as exc:
+        print(f"mokata ide: {exc.line()}", file=sys.stderr)
+        return 1
     if not port and not demo:
         from .bus import preferred_port
         port = preferred_port(root)           # ID.S3: the stable port the http hooks post to

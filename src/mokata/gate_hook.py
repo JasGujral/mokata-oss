@@ -484,6 +484,47 @@ def _read(store: StateStore, key: str) -> Optional[dict]:
     return data if isinstance(data, dict) else None
 
 
+#: 0.0.29 lane G (#83) — the brainstorm progress record the approach-approval block reads (the
+#: session-scoped `brainstorm.BRAINSTORM_PROGRESS_KEY`, `<key>__<run>`; run id == session id).
+PROGRESS_PREFIX = "brainstorm_progress__"
+#: A progress record larger than this is not parsed on the hook's block path: the original text is
+#: shown instead (never a guess). Measured (macOS, 0.0.29 lane G evidence `g-gate-block-latency.txt`):
+#: a 30.5 MiB record blocks in ~18 ms (p50, in-process), inside the 150 ms gate target; above it
+#: the read is skipped.
+PROGRESS_READ_MAX_BYTES = 32 * 1024 * 1024
+
+
+def _progress_says_approved(store: StateStore, run_id: str) -> bool:
+    """Does this run's brainstorm progress record an APPROVED approach with a CHOSEN one? Only a
+    literal `approved is True` and a `chosen` that names one of the record's `approaches` (exactly
+    what `BrainstormSession.from_dict` restores as a chosen approach) say yes; absent, unreadable,
+    corrupt, oversized or anything else says no. Never raises; feeds the WORDING of a block, never
+    a verdict."""
+    key = PROGRESS_PREFIX + run_id
+    try:
+        if os.stat(store.path(key)).st_size > PROGRESS_READ_MAX_BYTES:
+            return False
+    except (OSError, ValueError):
+        return False
+    data = _read(store, key)
+    if data is None:
+        return False
+    chosen = data.get("chosen")
+    if data.get("approved") is not True or not isinstance(chosen, str) or not chosen:
+        return False
+    approaches = data.get("approaches")
+    return isinstance(approaches, list) and any(
+        isinstance(a, dict) and a.get("name") == chosen for a in approaches)
+
+
+def _record_red_sentence() -> str:
+    """0.0.29 lane G (#82-2) — the NON-override road to a RED the user already has, named before the
+    override. Imported lazily, on the block branch only (as `APPROVE_CMD` is)."""
+    from .awaiting import TEST_RUN_RED_CMD
+    return ("Only if you ran the test and saw it fail, record that: "
+            f"`{TEST_RUN_RED_CMD}` (its FULL id).")
+
+
 def _red_set_empty(store: StateStore, run_id: str) -> Optional[bool]:
     """Has this run recorded NO failing test at all? True (empty) / False (something is on record) /
     **None when the state cannot be trusted** — and None must ALLOW.
@@ -540,6 +581,7 @@ def check_write(root: str, path: str, run_id: Optional[str] = None,
     used for ONE thing: matching the literal markers a spec declared as DEFERRED. A caller that
     supplies none still gets every path-level check — the marker check simply has nothing to look
     at, which is an allow, not a guess."""
+    from .plugin_runtime import localize_commands   # lazy: hook import budget
     if not path:
         return GateOutcome(True, "no target path")
     if is_test_path(path):
@@ -560,10 +602,10 @@ def check_write(root: str, path: str, run_id: Optional[str] = None,
         if claim == CLAIM_OPEN:
             return GateOutcome(
                 False,
-                f"{GATE_RUN_REG}: /mokata:brainstorm was started in this session, but no run is "
+                localize_commands(f"{GATE_RUN_REG}: /mokata:brainstorm was started in this session, but no run is "
                 f"registered for it yet, so {os.path.basename(path)} has no run to be checked "
                 f"against. -> to unblock: let brainstorm do its step 1 (the `session_save` MCP "
-                f"tool with register=true), or /clear to drop the pipeline and edit by hand.",
+                f"tool with register=true), or /clear to drop the pipeline and edit by hand.", root),
                 gate=GATE_RUN_REG)
         if claim == CLAIM_BOUND:
             run_id = claimed
@@ -592,10 +634,10 @@ def check_write(root: str, path: str, run_id: Optional[str] = None,
         return GateOutcome(
             True, "no mokata run has state in this repo",
             notice=(
-                "mokata: run-state gates are OFF for this window — no mokata run has state in "
+                localize_commands("mokata: run-state gates are OFF for this window — no mokata run has state in "
                 "this repo, so mokata is not policing these edits (hand-editing outside a run "
                 "is never blocked, by design). Start a tracked run with /mokata:brainstorm to "
-                "turn enforcement on."),
+                "turn enforcement on.", root)),
         )
 
     # INT-2a (B-F4) — a session that never asked for a pipeline is NOT policed by a run that ANOTHER
@@ -618,10 +660,10 @@ def check_write(root: str, path: str, run_id: Optional[str] = None,
                 True, f"run {run.run_id} belongs to another session; this session is not bound "
                       f"to a mokata run",
                 notice=(
-                    f"mokata: run-state gates are OFF for this window — it is not bound to a mokata "
+                    localize_commands(f"mokata: run-state gates are OFF for this window — it is not bound to a mokata "
                     f"run, and run {run.run_id} belongs to another session, so its gates do not "
                     f"police your edits here. Start /mokata:brainstorm in this window to have it "
-                    f"tracked (or pin a run with MOKATA_SESSION_ID)."),
+                    f"tracked (or pin a run with MOKATA_SESSION_ID).", root)),
             )
 
     # SL.S3 (0.0.22 C2) — a BLOCK is stamped with the run whose state produced it, so the hook can
@@ -636,6 +678,7 @@ def check_write(root: str, path: str, run_id: Optional[str] = None,
 def _decide_for_run(root: str, path: str, run: "RunResolution", content: str) -> GateOutcome:
     """The run-state gates for a write in a RESOLVED run (split out of `check_write` at C2 so a
     block can carry its run id). Same order, same verdicts."""
+    from .plugin_runtime import localize_commands   # lazy: hook import budget
     store = StateStore(state_dir(root))
     has_approach = _exists(store, APPROACH_PREFIX, run.run_id)
     spec_data = _read(store, SPEC_PREFIX + run.run_id)
@@ -671,20 +714,35 @@ def _decide_for_run(root: str, path: str, run: "RunResolution", content: str) ->
                     "then re-check with mokata doctor.")
             else:
                 notice = (
-                    "mokata: run-state gates are OFF for this window — this run has no REGISTERED "
+                    localize_commands("mokata: run-state gates are OFF for this window — this run has no REGISTERED "
                     "mokata pipeline, so mokata is not policing these edits (an unregistered run "
                     "is never blocked, by design). Register one with /mokata:brainstorm to turn "
-                    "enforcement on.")
+                    "enforcement on.", root))
             return GateOutcome(True, "no active mokata run — not policed", notice=notice)
         if GATE_PHASE in read_override(root, run.run_id):
             return GateOutcome(True, f"{GATE_PHASE}: overridden for this session",
                                gate=GATE_PHASE, overridden=True)
+        if _progress_says_approved(store, run.run_id):
+            # 0.0.29 lane G (#83) — MESSAGE ONLY, the verdict is the same block. An OBSERVATION of
+            # two records, never a diagnosis: the progress record says approved + chosen, and no
+            # approval is on record. (When the whole state directory refuses writes the progress
+            # record is absent too, and the original text shows: the `session_save` answer at
+            # approval time is the loud channel; this sentence is the second, best-effort one.)
+            return GateOutcome(
+                False,
+                f"{GATE_PHASE}: this run's brainstorm progress records an approved, chosen "
+                f"approach, but no approval is on record — its save did not land (the "
+                f"`session_save` answer that carried it said so). {os.path.basename(path)} is "
+                f"implementation. Re-call `session_save` with the approved brainstorm, or "
+                f"override: mokata gate override {GATE_PHASE} --reason \"<why>\"",
+                gate=GATE_PHASE,
+            )
         return GateOutcome(
             False,
-            f"{GATE_PHASE}: brainstorm in progress — approve an approach first. "
+            localize_commands(f"{GATE_PHASE}: brainstorm in progress — approve an approach first. "
             f"{os.path.basename(path)} is implementation, but no approach is approved for this run "
             f"yet. Explore and approve one approach (/mokata:brainstorm), or override: "
-            f"mokata gate override {GATE_PHASE} --reason \"<why>\"",
+            f"mokata gate override {GATE_PHASE} --reason \"<why>\"", root),
             gate=GATE_PHASE,
         )
 
@@ -707,17 +765,17 @@ def _decide_for_run(root: str, path: str, run: "RunResolution", content: str) ->
             approve = "  ".join(APPROVE_CMD.format(proposal_id=p) for p in awaiting_ids)
             return GateOutcome(
                 False,
-                f"{GATE_SPEC}: a spec emit is ALREADY WAITING ON YOU — approve it and this gate "
+                localize_commands(f"{GATE_SPEC}: a spec emit is ALREADY WAITING ON YOU — approve it and this gate "
                 f"opens. {os.path.basename(path)} is implementation. Run: {approve} — then re-run "
                 f"`{EMIT_FINISH_CMD}` to land it. (Or emit afresh (/mokata:spec), or override: "
-                f"mokata gate override {GATE_SPEC} --reason \"<why>\")",
+                f"mokata gate override {GATE_SPEC} --reason \"<why>\")", root),
                 gate=GATE_SPEC,
             )
         return GateOutcome(
             False,
-            f"{GATE_SPEC}: an approach is approved for this run but no spec is emitted — "
+            localize_commands(f"{GATE_SPEC}: an approach is approved for this run but no spec is emitted — "
             f"{os.path.basename(path)} is implementation. Emit the spec first (/mokata:spec), "
-            f"or override: mokata gate override {GATE_SPEC} --reason \"<why>\"",
+            f"or override: mokata gate override {GATE_SPEC} --reason \"<why>\"", root),
             gate=GATE_SPEC,
         )
 
@@ -764,9 +822,10 @@ def _decide_for_run(root: str, path: str, run: "RunResolution", content: str) ->
                                gate=GATE_TDD, overridden=True)
         return GateOutcome(
             False,
-            f"{GATE_TDD}: no failing test is on record for this run — {os.path.basename(path)} is "
-            f"implementation. Write the failing test first and watch it fail (/mokata:test), "
-            f"or override: mokata gate override {GATE_TDD} --reason \"<why>\"",
+            localize_commands(f"{GATE_TDD}: no failing test is on record for this run — {os.path.basename(path)} is "
+            f"implementation. Write the failing test first and watch it fail (/mokata:test). "
+            f"{_record_red_sentence()} Or override: mokata gate override {GATE_TDD} "
+            f"--reason \"<why>\"", root),
             gate=GATE_TDD,
         )
 
@@ -782,12 +841,13 @@ def _decide_for_run(root: str, path: str, run: "RunResolution", content: str) ->
                                gate=GATE_TDD, overridden=True)
         return GateOutcome(
             False,
-            f"{GATE_TDD}: the spec was amended to v{amend.to_version} and its new acceptance "
+            localize_commands(f"{GATE_TDD}: the spec was amended to v{amend.to_version} and its new acceptance "
             f"criteria still owe a failing test — {', '.join(owed)} "
             f"{'is' if len(owed) == 1 else 'are'} not RED yet. Write "
             f"{'it' if len(owed) == 1 else 'them'} and watch "
-            f"{'it' if len(owed) == 1 else 'them'} fail (/mokata:test), or override: "
-            f"mokata gate override {GATE_TDD} --reason \"<why>\"",
+            f"{'it' if len(owed) == 1 else 'them'} fail (/mokata:test). "
+            f"{_record_red_sentence()} Or override: "
+            f"mokata gate override {GATE_TDD} --reason \"<why>\"", root),
             gate=GATE_TDD,
         )
 

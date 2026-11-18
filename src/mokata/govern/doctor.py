@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import Any, List
+from typing import Any, Dict, List, Optional
 
 from .. import schema
 from ..adapters import overlapping_capabilities, validate_adapter
@@ -372,6 +372,61 @@ def windows_shim_findings(root: str, home: Any, hooks: List[Any]) -> List[Doctor
         "statusLine refresh, hook and MCP start runs through cmd.exe and flashes a cmd window: "
         + "; ".join(hits[:4]) + (f" (+{len(hits) - 4} more)" if len(hits) > 4 else "")
         + f". Fix: run `{SETUP_REMEDY}` (it now wires the real .exe), then restart Claude Code")]
+
+
+def _wrapped_statusline(command: str) -> str:
+    """The user's own line inside mokata's `statusline --wrap '<line>'` command, else ""."""
+    import shlex
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return ""
+    for i, w in enumerate(words[:-1]):
+        if w == "--wrap":
+            return words[i + 1]
+    return ""
+
+
+def windows_command_line_findings(root: str, home: Any = None, baseline: Optional[str] = None,
+                                  *, nt: Optional[bool] = None,
+                                  env: Optional[Dict[str, str]] = None) -> List[DoctorFinding]:
+    """Ruling D16 (0.0.29 lane B, round-4 verifier M1) — every wrapped statusLine or baseline
+    line the Windows cmd guard (`quiet_spawn.win_shell_line`) REFUSES, with the line, the reason
+    and the fix, so a refused line never degrades silently. Windows only (elsewhere nothing is
+    refused); reads files and PATH, spawns nothing."""
+    is_nt = (os.name == "nt") if nt is None else nt
+    if not is_nt:
+        return []
+    import json as _json
+    from ..quiet_spawn import CmdLineRefused, win_shell_line
+    lines: List[tuple] = []
+    home_dir = str(home) if home else os.path.expanduser("~")
+    for path in (os.path.join(root, ".claude", "settings.json"),
+                 os.path.join(root, ".claude", "settings.local.json"),
+                 os.path.join(home_dir, ".claude", "settings.json")):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                cmd = ((_json.load(fh).get("statusLine") or {}).get("command") or "")
+        except (OSError, ValueError, AttributeError):
+            continue
+        wrapped = _wrapped_statusline(cmd) if isinstance(cmd, str) else ""
+        if wrapped:
+            lines.append(("statusLine", f"the wrapped line in {path}", wrapped,
+                          "the statusLine shows `mokata: statusLine refused` in its place"))
+    if baseline:
+        lines.append(("baseline", "`settings.baseline.test_command`", baseline,
+                      "`mokata baseline` reports NOT RUN"))
+    out: List[DoctorFinding] = []
+    for kind, where, line, effect in lines:
+        try:
+            win_shell_line(line, root, env)
+        except CmdLineRefused as exc:
+            out.append(DoctorFinding(
+                "warning", "windows-line-refused",
+                f"{kind}: {where} is REFUSED on Windows and does not run ({effect}) — {exc}. "
+                f"On Windows mokata resolves every program of a cmd line from PATH or refuses the "
+                f"line (docs/reference/platform-support.md)"))
+    return out
 
 
 def hook_resolution_findings(surface: Any, home: Any = None, *,
@@ -928,8 +983,15 @@ def http_gate_findings(surface: Any, *, listening: Any = None,
     if not http_gates_wired(local):
         return []
     from ..claude_code_version import fmt, installed_version
+    from ..errors import RecordRefused
     from ..ide.bus import read_bridge
-    rec = read_bridge(surface.root) or {}
+    try:
+        rec = read_bridge(surface.root) or {}
+    # D9 (0.0.29): a refused record is a line, never a traceback. NARROW (H-a merge): `read_bridge`
+    # returns None for an absent or unparseable record and raises only `RecordRefused`; any other
+    # error here is a real one and must not be swallowed as "refused".
+    except RecordRefused as exc:
+        return [DoctorFinding("warning", "ide-bridge-record-refused", f"IDE bridge record: {exc}")]
     try:
         port = int(rec.get("port") or 0)
     except (TypeError, ValueError):
@@ -981,6 +1043,23 @@ def ide_bridge_version_findings(surface: Any, *, version: Any = None) -> List[Do
                 f"`mokata setup claude --ide-bridge` wired: {rows[sid]['loss']}. Update Claude "
                 "Code (`claude update`)."))
     return out
+
+
+def unused_settings_findings(surface: Any) -> List[DoctorFinding]:
+    """0.0.29 lane G (G-Q1) — a setting mokata no longer reads, left in the manifest. Named so it is
+    not mistaken for a knob that works; changes nothing (pre-1.0: no shim). Never raises."""
+    try:
+        mcp = surface.manifest.setting("mcp", {})
+        flat = surface.manifest.setting("mcp.test_timeout_seconds")
+    except Exception:  # noqa: BLE001 — informational; a bad manifest is reported elsewhere
+        return []
+    if flat is None and not (isinstance(mcp, dict) and "test_timeout_seconds" in mcp):
+        return []
+    return [DoctorFinding(
+        "info", "setting-no-longer-read",
+        "`settings.mcp.test_timeout_seconds` is no longer read (baseline has no wall clock since "
+        "0.0.29; `settings.baseline.silence_seconds` is the knob) — delete it from "
+        "`.mokata/manifest.json`")]
 
 
 def billing_env_findings(environ: Any = None) -> List[DoctorFinding]:
@@ -1191,6 +1270,12 @@ def diagnose(surface: Any) -> DoctorReport:
     # This is the only place that difference is visible.
     findings.extend(hook_resolution_findings(surface))
 
+    # 0.0.29 ruling D16 — a statusLine / baseline line the Windows cmd guard refuses is reported
+    # with the line, the reason and the fix (never silent).
+    from ..baseline import baseline_command
+    findings.extend(windows_command_line_findings(getattr(surface, "root", "."), None,
+                                                  baseline_command(m)))
+
     # 0.0.26 P31 — where sessions may edit: the session worktree policy, always stated.
     findings.extend(session_worktree_findings(surface))
 
@@ -1247,6 +1332,8 @@ def diagnose(surface: Any) -> DoctorReport:
     findings.extend(ide_bridge_version_findings(surface))
     # 6b-key) NO-API-KEY-GUARD (0.0.26 L4) — a key/token in the env would move Claude Code off the login.
     findings.extend(billing_env_findings())
+    # 6b-g) 0.0.29 lane G (G-Q1) — a left-over setting nothing reads any more.
+    findings.extend(unused_settings_findings(surface))
 
     # 6c) TM.S1 — run mode. Flag a hand-edited invalid `settings.mode` (read_mode stays safe/
     # local, but doctor must SEE it); the local default is never an error.

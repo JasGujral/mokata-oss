@@ -73,7 +73,8 @@ def bridge_path(root: str) -> str:
 
 def read_bridge(root: str) -> Optional[Dict[str, Any]]:
     """The bridge record — only if it is OURS and still private (0.0.28 C1: a planted or weak record is
-    refused, never adopted)."""
+    refused, never adopted). None: no record. A refused one RAISES `errors.RecordRefused` (0.0.29 H4:
+    absent and refused are different answers; `winacl.read_private`)."""
     from ..winacl import read_private
     raw = read_private(bridge_path(root))
     if raw is None:
@@ -121,21 +122,47 @@ def ensure_bridge(root: str) -> Dict[str, Any]:
     0.0.28 C1: written through the private door. A record that fails verification (planted, or left
     readable by others) is NOT returned: a fresh one replaces it (the replace raises when the folder
     will not let this user remove a foreign file). Its only callers are `mokata setup`'s bridge and
-    gate steps, which bake the record they get back into `settings.local.json` in the same run."""
-    rec = read_bridge(root)
+    gate steps, which bake the record they get back into `settings.local.json` in the same run — so a
+    refused record is replaced by a NEW token, never kept (0.0.29 H4: the same rule as `--fix`)."""
+    from ..errors import RecordRefused
+    try:
+        rec = read_bridge(root)
+    except RecordRefused:
+        rec = None
     if rec:
         return rec
-    from ..atomicfile import atomic_write_text
-    rec = {"port": _pick_port(root), "token": secrets.token_urlsafe(24)}
-    path = bridge_path(root)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    atomic_write_text(path, json.dumps(rec), private=True)
+    rec = new_bridge_record(root)
+    write_bridge(root, rec)
     return rec
 
 
+def new_bridge_record(root: str, port: int = 0) -> Dict[str, Any]:
+    """A fresh record in memory: `port` kept when the caller has one (the baked URLs stay right), and a
+    NEW token, always (0.0.29 H4 `rotate_bridge`: a token others could read is never kept)."""
+    return {"port": port if 0 < port < 65536 else _pick_port(root),
+            "token": secrets.token_urlsafe(24)}
+
+
+def write_bridge(root: str, rec: Dict[str, Any]) -> None:
+    """The record, through the private door (temp + replace: an old weak file, a hard link or a link at
+    the path is replaced, never written through)."""
+    from ..atomicfile import atomic_write_text
+    path = bridge_path(root)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    atomic_write_text(path, json.dumps(rec), private=True)
+
+
 def preferred_port(root: str) -> int:
-    """The bridge port when this repo has one and it is free; 0 (= pick any) otherwise."""
-    rec = read_bridge(root)
+    """The bridge port when this repo has one and it is free; 0 (= pick any) otherwise. A REFUSED
+    bridge record (0.0.29 H4) is treated as absent, with one line saying so: the window still opens,
+    on any port, and the hooks cannot reach it until `mokata doctor --fix` runs."""
+    from ..errors import RecordRefused
+    try:
+        rec = read_bridge(root)
+    except RecordRefused as exc:
+        import sys
+        print(f"mokata ide: {exc.line()}; the live bridge is off until then", file=sys.stderr)
+        return 0
     if rec and port_free(int(rec["port"])):
         return int(rec["port"])
     return 0
@@ -415,4 +442,5 @@ async def read_body(request: Any, limit: Optional[int] = None) -> Optional[bytes
 
 __all__ = ["EventBus", "Tails", "normalise", "from_claude_hook", "from_neutral", "ensure_bridge",
            "read_bridge", "preferred_port", "bridge_url", "bridge_path", "port_free", "POSTABLE",
+           "new_bridge_record", "write_bridge",
            "HOOK_HEADER", "BUS_PATH", "TAIL_SECS", "TOOL", "EDIT", "TURN_END", "STORE"]

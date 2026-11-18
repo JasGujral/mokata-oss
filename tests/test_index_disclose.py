@@ -55,15 +55,17 @@ class TestMixedLanguageRepo(_Base):
         self.assertIn("languages indexed: python;", out)
         self.assertIn("4 file(s) skipped as unsupported", out)
         self.assertIn("1 go", out)
-        self.assertIn("3 javascript", out)     # .ts and .js are one language in the table
+        self.assertIn("2 javascript", out)
+        self.assertIn("1 typescript", out)     # one parser family, two languages a person names
 
     def test_mcp_status_reports_the_same(self):
         root = self.repo(self.FILES)
         self.run_index(root)
         res = M.index_status(path=root)
         self.assertEqual(res["languages_indexed"], ["python"])
-        self.assertEqual(res["unsupported_files"], 4)
-        self.assertEqual(res["unsupported_by_language"], {"javascript": 3, "go": 1})
+        self.assertEqual(res["unsupported_files"]["count"], 4)
+        self.assertEqual(res["unsupported_by_language"],
+                         {"javascript": 2, "typescript": 1, "go": 1})
         self.assertIn("4 file(s) skipped as unsupported", res["coverage"])
 
     def test_rerun_after_the_index_exists_still_discloses(self):
@@ -80,20 +82,25 @@ class TestUncountedLanguages(_Base):
     def test_cli_names_the_set_it_counts(self):
         out = self.run_index(self.repo(self.FILES))
         self.assertIn("0 file(s) skipped as unsupported", out)
-        self.assertIn("counted only for javascript, go, rust, java", out)
+        self.assertIn("counted only for go, java, javascript, rust, typescript", out)
         self.assertIn("other languages are neither indexed nor counted", out)
 
     def test_mcp_names_the_set_it_counts(self):
         root = self.repo(self.FILES)
         self.run_index(root)
         res = M.index_status(path=root)
-        self.assertEqual(res["unsupported_counted_languages"], ["javascript", "go", "rust", "java"])
+        self.assertEqual(res["unsupported_files"],         # the qualifier inline, one field
+                         {"count": 0, "counted_for_languages":
+                          ["go", "java", "javascript", "rust", "typescript"]})
+        self.assertNotIn("unsupported_counted_languages", res)
         self.assertIn("neither indexed nor counted", res["coverage"])
 
     def test_counted_set_is_derived_from_the_language_table(self):
         from mokata.languages import LANGUAGES
         cov = KnowledgeIndex().coverage()
-        self.assertEqual(cov["counted"], [n for n in LANGUAGES if n != "python"])
+        self.assertEqual(cov["counted"], sorted(
+            {"typescript" if e in (".ts", ".tsx") else n for n, lang in LANGUAGES.items()
+             if n != "python" for e in lang.extensions}))
 
 
 class TestPythonOnlyRepo(_Base):
@@ -107,7 +114,7 @@ class TestPythonOnlyRepo(_Base):
         self.run_index(root)
         res = M.index_status(path=root)
         self.assertEqual(res["languages_indexed"], ["python"])
-        self.assertEqual(res["unsupported_files"], 0)
+        self.assertEqual(res["unsupported_files"]["count"], 0)
 
 
 class TestNoPythonRepo(_Base):
@@ -124,12 +131,28 @@ class TestNoPythonRepo(_Base):
         self.run_index(root)
         res = M.index_status(path=root)
         self.assertEqual(res["languages_indexed"], [])
-        self.assertEqual(res["unsupported_files"], 3)
+        self.assertEqual(res["unsupported_files"]["count"], 3)
 
     def test_unbuilt_status_still_says_python_only(self):
         res = M.index_status(path=self.repo(self.FILES))
         self.assertFalse(res["built"])
         self.assertIn("Python files only", res["note"])
+
+    def test_unbuilt_status_says_not_built_instead_of_zeros(self):
+        res = M.index_status(path=self.repo(self.FILES))
+        self.assertEqual(res["coverage"], "index: not built — run `mokata index`")
+        for zero in ("tracked", "added", "removed", "changed", "unsupported_files"):
+            self.assertNotIn(zero, res)
+
+
+class TestPythonSuffixes(_Base):
+    """`.pyi` stubs and an upper-case `.PY` are Python — indexed, never skipped."""
+
+    def test_stubs_and_upper_case_are_indexed(self):
+        root = self.repo(["a.py", "stubs/b.pyi", "LEGACY.PY", "web/app.TS"])
+        out = self.run_index(root)
+        self.assertIn("index: built 3 file(s)", out)
+        self.assertIn("1 file(s) skipped as unsupported (1 typescript)", out)
 
 
 class TestCountedInTheOneWalk(unittest.TestCase):
@@ -139,7 +162,7 @@ class TestCountedInTheOneWalk(unittest.TestCase):
                 _write(root, rel)
             idx = KnowledgeIndex()
             idx.build(root)
-            self.assertEqual(idx.unsupported, {"javascript": 1})   # pruned dirs never counted
+            self.assertEqual(idx.unsupported, {"typescript": 1})   # pruned dirs never counted
 
     def test_abandoned_walk_leaves_no_stale_counts(self):
         with tempfile.TemporaryDirectory() as root:
@@ -147,7 +170,7 @@ class TestCountedInTheOneWalk(unittest.TestCase):
             _write(root, "b.ts")
             idx = KnowledgeIndex()
             idx.build(root)
-            self.assertEqual(idx.unsupported, {"javascript": 1})
+            self.assertEqual(idx.unsupported, {"typescript": 1})
             gen = idx._iter_files(root, (".py",))
             next(gen)
             self.assertEqual(idx.unsupported, {})

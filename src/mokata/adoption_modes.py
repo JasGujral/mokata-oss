@@ -152,6 +152,8 @@ class ModeWiringResult:
                                   # tier is OFF even with model2vec installed (measured, I-02)
     notes: List[str] = field(default_factory=list)
     rerun: str = ""               # the setup command a fix names; "" = `setup_command_for(mode)`
+    actions: List[str] = field(default_factory=list)  # ACT_* keys, in order: what this run DID
+                                  # (0.0.29 C1 M3 — `plan_mode` must have stated each one first)
 
     def row(self, key: str) -> Optional[DepRow]:
         return next((r for r in self.rows if r.key == key), None)
@@ -160,6 +162,13 @@ class ModeWiringResult:
     def complete(self) -> bool:
         """Every dependency the mode wants is installed, usable and switched on."""
         return all(r.ok for r in self.rows) and not self.notes
+
+    @property
+    def only_install_left(self) -> bool:
+        """#86 (0.0.29 C1): everything is wired and the ONE install line is all that is left —
+        every row that is not active is a package that line installs."""
+        return (bool(self.install_line) and not self.notes
+                and all(r.ok or r.status == MISSING for r in self.rows))
 
 
 def mode_names() -> List[str]:
@@ -203,7 +212,10 @@ def render_quickstart(mode: str, outcome: Optional["ModeWiringResult"] = None) -
     0.0.25 I-02 (`INSTALL-OUTCOME-REPORT`): given an `outcome` that is not complete, the banner
     never claims "everything wired" — it says what is not, and points at the table above it."""
     lines = list(mode_spec(mode).quickstart)
-    if outcome is not None and not outcome.complete:
+    if outcome is not None and outcome.only_install_left:
+        # The block above already carries the one line; repeating it here would be a second copy.
+        lines[0] = lines[0].replace("everything wired", "wired, one command left")
+    elif outcome is not None and not outcome.complete:
         lines[0] = lines[0].replace("everything wired", "PARTIALLY wired")
         lines.append("  ⚠ Not every dependency is active — the table above names each "
                      "one, why, and its fix.")
@@ -211,11 +223,24 @@ def render_quickstart(mode: str, outcome: Optional["ModeWiringResult"] = None) -
 
 
 def render_outcome(outcome: "ModeWiringResult") -> str:
-    """The one closing table: each dependency, its status and CAUSE, the row's own fix when it has
-    one — and, when packages are missing, the ONE install line for THIS installer followed by the
-    setup re-run. Empty for a mode with no dependencies."""
+    """The one closing block (#86, 0.0.29 C1) — exactly one of two shapes beyond "all active":
+
+      * only packages are missing -> the ONE install line for THIS installer and nothing else (the
+        embedder setting and the graph pin are already written; each switches itself on when its
+        package lands, so no setup re-run follows);
+      * otherwise -> the table: each dependency, its status and CAUSE, and the row's own fix — a row
+        whose fix is not the install (a blocked model fetch, a failed index build) — plus the
+        install line once when packages are also missing.
+    Empty for a mode with no dependencies."""
     if not outcome.rows:
         return ""
+    if outcome.only_install_left:
+        missing = ", ".join(r.label for r in outcome.rows if not r.ok)
+        return "\n".join([
+            "", f"── {outcome.mode} mode: wired — one command left " + "─" * 20,
+            f"  mokata is wired for {missing}; run this once to install them (setup never "
+            f"rebuilds its own environment):",
+            f"      {outcome.install_line}"])
     w = max(len(r.label) for r in outcome.rows)
     out = ["", f"── {outcome.mode} mode: optional dependencies " + "─" * 20]
     for r in outcome.rows:
@@ -229,10 +254,9 @@ def render_outcome(outcome: "ModeWiringResult") -> str:
     for n in outcome.notes:
         out.append(f"  note: {n}")
     if outcome.install_line:
-        out.append(f"  → one line installs everything {outcome.mode} mode needs "
-                   f"(setup never rebuilds its own environment):")
+        out.append(f"  → one line installs every missing package (setup never rebuilds its own "
+                   f"environment); what is wired for them switches on when they land:")
         out.append(f"      {outcome.install_line}")
-        out.append(f"    then:  {outcome.rerun or setup_command_for(outcome.mode)}")
     return "\n".join(out)
 
 
@@ -321,11 +345,88 @@ _PRESENT: Dict[str, Callable[[], bool]] = {
 }
 
 
+#: 0.0.29 C1 re-verify M3 — what `wire_mode` can DO, each stated by `plan_mode` before the human
+#: approves the setup run (the text approved must be true and complete).
+ACT_EMBEDDER = "embedder-setting"
+ACT_MODEL_FETCH = "model-fetch"
+ACT_MODEL_LOAD = "model-load"
+ACT_SEARCH_INDEX = "search-index"
+ACT_GRAPH_PIN = "graph-pin"
+ACT_GRAPH_INDEX = "graph-index"
+
+
+def _model_cached() -> bool:
+    from .memory.embed import MODEL2VEC_MODEL, cached_model_dir
+    return cached_model_dir(MODEL2VEC_MODEL) is not None
+
+
+def plan_mode(root: str, mode: str, *, fetch: bool = True,
+              present: Optional[Dict[str, Callable[[], bool]]] = None,
+              crg_command_fn: Optional[Callable[[], Optional[str]]] = None,
+              graph_pinned_fn: Optional[Callable[[str], bool]] = None,
+              embedder_wired_fn: Optional[Callable[[str], bool]] = None,
+              model_cached_fn: Optional[Callable[[], bool]] = None,
+              install_line_fn: Optional[Callable[[str], str]] = None) -> List[Tuple[str, str]]:
+    """What `wire_mode(root, mode, fetch=fetch)` is about to do, as `(ACT_*, sentence)` — read-only,
+    the SAME probes `wire_mode` reads, shown in the plan the human approves (0.0.29 C1 M3). A
+    missing package adds a sentence with no action key: nothing is installed."""
+    from .memory.embed import MODEL2VEC_MODEL, MODEL_SIZE, MODEL_SOURCE
+    keys = mode_dependencies(mode)
+    probes = {**_PRESENT, **(present or {})}
+    have = {k: bool(probes[k]()) for k in keys}
+    out: List[Tuple[str, str]] = []
+    from .config import Surface
+    by_init = not Surface.is_initialized(root) and profile_for_mode(mode) == "full"
+    if by_init:
+        # the setup plan's own "Will initialize mokata (profile 'full')" writes these two: said
+        # here so the plan names them, with no action key (`wire_mode` then finds them done)
+        out.append(("", "the init above also writes `settings.memory.embedder = auto` and makes "
+                        "code-review-graph the code graph (profile 'full')"))
+    if "embeddings" in keys:
+        if not by_init and not (embedder_wired_fn or _embedder_wired)(root):
+            out.append((ACT_EMBEDDER, "set `settings.memory.embedder = auto` in .mokata/manifest.json "
+                                      "(switches the semantic memory tier on)"))
+        if have["embeddings"] and fetch:
+            if (model_cached_fn or _model_cached)():
+                out.append((ACT_MODEL_LOAD, f"load the semantic model {MODEL2VEC_MODEL} from this "
+                                            f"machine's Hugging Face cache (no download)"))
+            else:
+                out.append((ACT_MODEL_FETCH, f"DOWNLOAD the semantic model {MODEL2VEC_MODEL} "
+                                             f"({MODEL_SIZE}) from {MODEL_SOURCE} into the Hugging "
+                                             f"Face cache (HF_HOME) — the only network call"))
+            if mode == "full":
+                out.append((ACT_SEARCH_INDEX, "build the meaning-search index for this repo "
+                                              "(embeds your files on this machine)"))
+    if "code-graph" in keys:
+        runnable = have["code-graph"] and bool((crg_command_fn or _crg_command)())
+        if (not have["code-graph"] or runnable) and not by_init \
+                and not (graph_pinned_fn or _graph_pinned)(root):
+            out.append((ACT_GRAPH_PIN, "pin code-review-graph as the code graph in "
+                                       ".mokata/manifest.json"))
+        if runnable and fetch and mode == "full":
+            out.append((ACT_GRAPH_INDEX, "build code-review-graph's index for this repo "
+                                         "(local, under .code-review-graph/)"))
+    missing = [_DEP_PACKAGES[k] for k in keys if not have[k]]
+    if missing:
+        out.append(("", f"install NOTHING: {', '.join(missing)} not in this environment — the "
+                        f"closing block names the one install line"))
+    return out
+
+
+def render_mode_plan(mode: str, plan: List[Tuple[str, str]]) -> str:
+    if not plan:
+        return ""
+    return "\n".join([f"\nMode '{mode_spec(mode).name}' will also:"]
+                     + [f"  - {text}" for _key, text in plan])
+
+
 def _warm_model() -> str:
     """Load (downloading on a cold cache, ~30 MB from huggingface.co) and encode once — the model
     warm-up. Returns the live embedder id; raises with the reason when it cannot."""
     from .memory.embed import Model2VecEmbedder
-    return Model2VecEmbedder().embedder_id
+    # 0.0.29 C1 re-verify M2/M3 — the fetch consent: this runs only under `setup --mode`, after
+    # the human approved a plan that states the download (`plan_mode`).
+    return Model2VecEmbedder(fetch_consent=True).embedder_id
 
 
 def _crg_missing_cause(cause: str) -> str:
@@ -353,6 +454,30 @@ def model_fetch_cause(error: str, environ: Optional[Dict[str, str]] = None) -> s
 
 
 _EMBEDDER_KEY = "settings.memory.embedder"
+
+#: 0.0.29 C1 (#86, rulings C-Q1/Q2 + T-Q3) — the settings a PROFILE itself names, written by every
+#: door that lands it (`init --profile`, the wizard, `reconfigure --profile`: all `init.plan_init`)
+#: into the manifest the human approves, and shown in that plan. `full` switches the semantic tier
+#: on (`auto` degrades to hashing until mokata[full] is installed); the ~30 MB model is never
+#: fetched by init — it downloads on first use, or in `setup --mode full`'s warm-up. The
+#: code-review-graph pin is already the head of `full`'s `code_graph` chain (`profiles.py`).
+PROFILE_SETTINGS: Dict[str, Tuple[Tuple[Tuple[str, ...], str], ...]] = {
+    "full": ((("memory", "embedder"), "auto"),),
+}
+
+
+def apply_profile_settings(data: Dict[str, Any], profile: str) -> List[str]:
+    """Set `profile`'s own settings in manifest `data` (in place) unless the user already set the
+    key; returns the `key = value` lines it set, for the plan the human approves."""
+    said: List[str] = []
+    for path, value in PROFILE_SETTINGS.get(profile, ()):
+        node = data.setdefault("settings", {})
+        for part in path[:-1]:
+            node = node.setdefault(part, {})
+        if not node.get(path[-1]):
+            node[path[-1]] = value
+            said.append(f"{'.'.join(path)} = {value}")
+    return said
 
 
 def _embedder_wired(root: str) -> bool:
@@ -487,6 +612,8 @@ def wire_mode(
     build_index_fn: Optional[Callable[..., Any]] = None,
     build_search_fn: Optional[Callable[..., Any]] = None,
     rg_command_fn: Optional[Callable[[], Optional[str]]] = None,
+    fetch: bool = True,
+    model_cached_fn: Optional[Callable[[], bool]] = None,
 ) -> ModeWiringResult:
     """DETECT and WIRE the mode's optional dependencies. Never installs anything.
 
@@ -510,6 +637,11 @@ def wire_mode(
     itself approved, and `--mode` is the request for exactly this wiring (ruling R-c, 0.0.26 O13:
     approving the setup run IS the consent for the embedder setting, the CRG pin and the index
     build).
+    0.0.29 C1 verify H1 — `fetch=False` is the INIT door (C-Q1/Q2, §3a NEVER): the same settings
+    and pin, and NOTHING fetched or built — no model warm-up, no meaning-search index, no
+    code-review-graph index. The rows say where each one happens instead (first use, or
+    `setup --mode full`, the separate explicit yes). The plan init shows says "init downloads
+    nothing", and this is what makes that sentence true.
     DEGRADE_CLEAN: the repo is already wired when this runs; nothing here can undo that."""
     emit = out or print
     spec = mode_spec(mode)
@@ -530,15 +662,31 @@ def wire_mode(
             result.install_line = (install_line_fn or _install_line)(spec.extra)
 
         e = result.row("embeddings")
-        if e is not None and e.status != MISSING:
+        if e is not None:
+            # 0.0.29 C1 (#86): the setting is written whether or not model2vec is here yet — `auto`
+            # degrades to the hashing tier until the package (and then its model) is usable and
+            # switches itself on after that, so the install line alone completes the mode.
             wired = bool((embedder_wired_fn or _embedder_wired)(root))
             if not wired:
-                # Wired even when the model cannot load yet: `auto` degrades to the hashing tier
-                # until it can, and switches itself on once the model is cached.
+                result.actions.append(ACT_EMBEDDER)
                 wired = bool((wire_embedder_fn or _wire_embedder)(root, out=emit, ledger=ledger))
             result.embedder_wired = wired
+            if e.status == MISSING and not wired:
+                # the install line will not fix an uncommitted write: its own cause and fix
+                e.status = NOT_WIRED
+                e.cause = (f"{_DEP_PACKAGES['embeddings']} is not installed and the "
+                           f"`memory.embedder` setting write was not committed")
+                e.fix = "mokata config set settings.memory.embedder auto"
+        if e is not None and e.status not in (MISSING, NOT_WIRED):
+            wired = result.embedder_wired
+            if fetch:
+                result.actions.append(ACT_MODEL_LOAD if (model_cached_fn or _model_cached)()
+                                      else ACT_MODEL_FETCH)
             try:
-                e.detail = (warm_fn or _warm_model)()
+                e.detail = ((warm_fn or _warm_model)() if fetch else
+                            f"switched on; the model (~30 MB) is fetched only by "
+                            f"`{result.rerun or setup_command_for(mode)}`, after you approve its "
+                            f"plan — keyword ranking meanwhile")
                 e.status = ACTIVE
             except Exception as exc:                  # noqa: BLE001 — see the D5 register
                 e.status = BLOCKED
@@ -548,9 +696,10 @@ def wire_mode(
             if e.status == ACTIVE and not wired:
                 e.status, e.cause = NOT_WIRED, "the `memory.embedder` setting write was not committed"
                 e.fix = "mokata config set settings.memory.embedder auto"
-            if mode == "full":
+            if mode == "full" and fetch:
                 # 0.0.26 O13 — full mode ENDS with meaning search built, not "built on first use".
                 if e.status == ACTIVE:
+                    result.actions.append(ACT_SEARCH_INDEX)
                     srow = _search_index_row(root, emit, build_search_fn)
                 else:
                     srow = DepRow(SEARCH_ROW_KEY, SEARCH_ROW_LABEL, status=BLOCKED,
@@ -559,7 +708,25 @@ def wire_mode(
                 result.rows.insert(result.rows.index(e) + 1, srow)
 
         g = result.row("code-graph")
-        if g is not None and g.status != MISSING:
+        if g is not None and g.status == MISSING:
+            # 0.0.29 C1 (#86): pinned before the package exists. The chain keeps the AST/lexical
+            # floors beneath it (they answer meanwhile, as on every `--profile full` repo without
+            # it); once installed it answers and the first structural query builds its index.
+            pinned = bool((graph_pinned_fn or _graph_pinned)(root))
+            if not pinned:
+                if adopt_fn is None:
+                    from .knowledge.graph_adopt import adopt_graph as adopt_fn
+                result.actions.append(ACT_GRAPH_PIN)
+                ares = adopt_fn(root, tool="code-review-graph", assume_yes=True, out=emit,
+                                ledger=ledger)
+                pinned = bool(getattr(ares, "committed", False))
+            result.graph_adopted = pinned
+            if not pinned:
+                g.status = NOT_WIRED
+                g.cause = ("code-review-graph is not installed and pinning it as the code graph "
+                           "was not committed")
+                g.fix = "mokata graph adopt"
+        elif g is not None:
             if not (crg_command_fn or _crg_command)():
                 g.status = BLOCKED
                 from .crg_resolve import INSTALL_HINT, resolve_crg
@@ -577,6 +744,7 @@ def wire_mode(
                 if not pinned:
                     if adopt_fn is None:
                         from .knowledge.graph_adopt import adopt_graph as adopt_fn
+                    result.actions.append(ACT_GRAPH_PIN)
                     ares = adopt_fn(root, tool="code-review-graph", assume_yes=True, out=emit,
                                     ledger=ledger)
                     pinned = bool(getattr(ares, "committed", False))
@@ -584,7 +752,10 @@ def wire_mode(
                 if pinned:
                     g.status = ACTIVE
                     g.detail = "pinned as the code graph"
-                    if mode == "full":
+                    if not fetch:
+                        g.detail += "; its index builds on the first structural query"
+                    elif mode == "full":
+                        result.actions.append(ACT_GRAPH_INDEX)
                         idx = _index_row(root, mode, emit, build_index_fn)
                         result.rows.insert(result.rows.index(g) + 1, idx)
                 else:
@@ -617,8 +788,9 @@ def wire_mode(
 # a hook that installs ~360 MB unasked is exactly what DB.S4 / P2 forbid. The documented pattern is
 # CHECK ON MISS at SessionStart: if the repo's mode wants dependencies this environment lacks, the
 # briefing names the commands that reach the CLI route's end state — the ONE install line for
-# `mokata[<extra>]` when a package is missing, then `mokata setup claude --mode <m>` (0.0.26 L1:
-# setup itself never installs).
+# `mokata[<extra>]` when a package is missing, and `mokata setup claude --mode <m>` ONLY when the
+# mode's settings are themselves unwired (0.0.26 L1: setup itself never installs; 0.0.29 C1 #86:
+# a repo whose settings are written before the packages exist needs the install line alone).
 #
 # The mode is DERIVED, never recorded (the module docstring's rule — a mode is not a second config
 # axis). Two persisted facts name it:
@@ -710,6 +882,7 @@ def plugin_setup_command(mode: str, *, platform: Optional[str] = None) -> str:
 
 
 def finish_commands_for(mode: str, *, packages_missing: bool, mokata_on_path: bool,
+                        unwired: bool,
                         via_plugin: bool = False,
                         install_line_fn: Optional[Callable[[str], str]] = None,
                         platform: Optional[str] = None) -> Tuple[str, ...]:
@@ -718,7 +891,8 @@ def finish_commands_for(mode: str, *, packages_missing: bool, mokata_on_path: bo
     A package is missing, or there is no `mokata` CLI -> first the ONE install line: the README's
     `uv tool install "mokata[<extra>]"` on a plugin-only machine or from the plugin's uvx env
     (whose installer is not the user's), else the line for the installer that owns this env.
-    Then always the setup that detects and wires."""
+    Then the setup that wires — only when the repo is `unwired` (0.0.29 C1, #86: a wired repo's
+    settings switch themselves on when the packages land, so the install is the one command)."""
     extra = mode_spec(mode).extra
     if via_plugin:
         # 0.0.26 L8 — the plugin route: ONE command, the plugin's pinned environment (it carries
@@ -732,7 +906,8 @@ def finish_commands_for(mode: str, *, packages_missing: bool, mokata_on_path: bo
             cmds.append(f"uv tool install {quote_arg(f'mokata[{extra}]', platform)}")
         else:
             cmds.append((install_line_fn or _install_line)(extra))
-    cmds.append(setup_command_for(mode))
+    if unwired or not cmds:
+        cmds.append(setup_command_for(mode))
     return tuple(cmds)
 
 
@@ -769,6 +944,7 @@ def first_session_check(
     missing: List[str] = [] if via_plugin else [
         _DEP_LABELS[k] for k in mode_dependencies(mode) if not probes[k]()]
     packages_missing = bool(missing)
+    n_packages = len(missing)
     if spec.offers_embeddings and not (
             ((data.get("settings") or {}).get("memory") or {}).get("embedder")):
         missing.append("semantic tier switched on (memory.embedder)")
@@ -785,6 +961,7 @@ def first_session_check(
         mode=mode, missing=tuple(missing), via_plugin=via_plugin,
         commands=finish_commands_for(mode, packages_missing=packages_missing,
                                      mokata_on_path=mokata_on_path, via_plugin=via_plugin,
+                                     unwired=len(missing) > n_packages,
                                      install_line_fn=install_line_fn))
 
 

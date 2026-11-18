@@ -1584,5 +1584,113 @@ class TestNoSNAPSHOTIsTrackedInTheRepo(unittest.TestCase):
                          "the predicate this guard uses does not notice a planted snapshot")
 
 
+# ---- 0.0.29 D3 `MUTATE-SH-WINDOWS-NEWLINE` --------------------------------------------------------
+
+#: The line-ending victim. Its test records the bytes it SAW on disk while the mutant was live, so
+#: "every byte but the replaced span is the original" is observed, not inferred from the restore.
+EOL_VICTIM = ('"""Line-ending fixture."""\n\n\ndef answer(flag):\n    if flag:\n'
+              '        return "yes"\n    return "no"\n')
+EOL_TEST = '''\
+import os
+import unittest
+
+import eol_victim
+
+
+class TestAnswer(unittest.TestCase):
+    def test_yes(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "eol_victim.py"), "rb") as fh:
+            seen = fh.read()
+        with open(os.path.join(here, "seen.bin"), "wb") as fh:
+            fh.write(seen)
+        self.assertEqual("yes", eol_victim.answer(True))
+'''
+
+
+class TestTheMutantKeepsTheTargetsLineEndings(unittest.TestCase):
+    """`mutate.sh` changes exactly the bytes it was told to and restores exactly the bytes it took,
+    on every OS. Before 0.0.29 a text-mode read turned a CRLF target LF on every OS, and the
+    text-mode write turned the mutant CRLF on Windows only — whose hash then never matched the LF
+    bytes the run recorded: `TARGET CHANGED UNDER THE RUN`, rc 4, on every Windows mutant. Runs on
+    Windows through bash (`_support.bash_argv`): the mirror Windows cell IS the proof rc 4 is gone.
+    FIRING CONTROLS (mutate.sh): `open(path, "wb")` -> text mode; the apply hash over a re-encode;
+    a lenient `decode`."""
+
+    def setUp(self):
+        if not _support.BASH:
+            self.skipTest(_support.NO_BASH)
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.target = os.path.join(self.tmp, "eol_victim.py")
+        with open(os.path.join(self.tmp, "test_eol.py"), "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(EOL_TEST)
+
+    def _write(self, data: bytes):
+        with open(self.target, "wb") as fh:
+            fh.write(data)
+        return data
+
+    def _mutate(self, old, new):
+        env = dict(os.environ, PYTHON=sys.executable, MUTATE_TESTS_DIR=self.tmp,
+                   MUTATE_LOCKFILE=os.path.join(self.tmp, ".mutate.lock"))
+        env.pop("PYTHONDONTWRITEBYTECODE", None)
+        return subprocess.run(_support.bash_argv(MUTATE_SH, "eol", self.target, old, new,
+                                                 "test_eol.py"),
+                              capture_output=True, text=True, env=env, cwd=ROOT,
+                              stdin=subprocess.DEVNULL)
+
+    def _seen(self):
+        with open(os.path.join(self.tmp, "seen.bin"), "rb") as fh:
+            return fh.read()
+
+    def _assert_one_span_changed_and_restored(self, eol):
+        original = self._write(EOL_VICTIM.replace("\n", eol).encode("utf-8"))
+        proc = self._mutate('return "yes"', 'return "no!"')
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertTrue(proc.stdout.startswith("RED"), proc.stdout + proc.stderr)
+        self.assertNotIn("TARGET CHANGED UNDER THE RUN", proc.stdout)
+        self.assertEqual(self._seen(), original.replace(b'return "yes"', b'return "no!"'),
+                         "the mutant run changed bytes outside the replaced span")
+        with open(self.target, "rb") as fh:
+            self.assertEqual(fh.read(), original, "the restore is not byte-identical")
+
+    def test_a_CRLF_target_stays_CRLF_through_the_mutant_and_the_restore(self):
+        self._assert_one_span_changed_and_restored("\r\n")
+
+    def test_an_LF_target_stays_LF_through_the_mutant_and_the_restore(self):
+        self._assert_one_span_changed_and_restored("\n")
+
+    def test_a_target_whose_path_holds_a_backslash_is_hashed_by_its_bytes(self):
+        """`shasum` / `sha256sum` ESCAPE their output — a leading `\\` on the hash — when the FILE
+        NAME holds a backslash, which every Windows path does. Hashed by name, the snapshot's
+        hash was `\\<hex>`, never equal to the apply's, and every Windows run of this class was
+        `the source changed between the plan and the apply` (0.0.29 D probe run 43413469846). On
+        POSIX a backslash in a directory name reproduces it. FIRING CONTROL: hash `"$1"` by name."""
+        if os.name != "nt":
+            sub = os.path.join(self.tmp, "back\\slash")
+            os.makedirs(sub)
+            shutil.move(os.path.join(self.tmp, "test_eol.py"), os.path.join(sub, "test_eol.py"))
+            self.tmp, self.target = sub, os.path.join(sub, "eol_victim.py")
+        self._assert_one_span_changed_and_restored("\n")
+
+    def test_a_multiline_pattern_against_a_CRLF_target_is_refused_by_name(self):
+        original = self._write(EOL_VICTIM.replace("\n", "\r\n").encode("utf-8"))
+        proc = self._mutate('    if flag:\n        return "yes"', '    if flag:\n        return "no!"')
+        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+        self.assertIn("BROKEN", proc.stdout)
+        self.assertIn("CRLF", proc.stderr)
+        with open(self.target, "rb") as fh:
+            self.assertEqual(fh.read(), original, "a refused mutation touched the target")
+
+    def test_a_target_that_is_not_UTF8_is_refused_and_untouched(self):
+        original = self._write(EOL_VICTIM.encode("utf-8") + b"# caf\xe9\n")
+        proc = self._mutate('return "yes"', 'return "no!"')
+        self.assertEqual(proc.returncode, 3, proc.stdout + proc.stderr)
+        self.assertIn("not UTF-8", proc.stderr)
+        with open(self.target, "rb") as fh:
+            self.assertEqual(fh.read(), original)
+
+
 if __name__ == "__main__":
     unittest.main()

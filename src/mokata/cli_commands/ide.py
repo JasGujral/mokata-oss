@@ -6,6 +6,8 @@ import argparse
 import os
 import sys
 
+from ..errors import RecordRefused
+
 
 def cmd_ide(args: argparse.Namespace) -> int:
     from ..config import find_project_root
@@ -51,7 +53,7 @@ def cmd_ide(args: argparse.Namespace) -> int:
         print(f"  http://127.0.0.1:{port}/pair?t={token}"
               + (f"&focus={args.session}" if args.session else ""), flush=True)
         # P38: a foreground window at a human TTY may print one-time approval codes to this
-        # terminal (re-checked by the server; never in a detached child, never in CLAUDECODE).
+        # terminal (re-checked by the server; never in a detached child, never in an agent's shell).
         return serve(root, port, args.session, args.demo, None, token, terminal=_terminal_wanted(args),
                      approve_here=not args.demo)
     try:
@@ -65,6 +67,9 @@ def cmd_ide(args: argparse.Namespace) -> int:
     except RuntimeError as exc:
         print(f"mokata ide: {exc}", file=sys.stderr)
         return 1
+    except RecordRefused as exc:       # 0.0.29 H4: a refused server record is named, never started over
+        print(f"mokata ide: {exc.line()}", file=sys.stderr)
+        return 1
     print(launched.line())
     _bridge_notice(root, launched.url, args.demo)
     return 0
@@ -72,12 +77,14 @@ def cmd_ide(args: argparse.Namespace) -> int:
 
 def _terminal_wanted(args) -> bool:
     """0.0.25 — the embedded terminal starts processes, so it is OPT-IN (`--terminal`), offered only
-    to a human at a TTY, and never inside a Claude Code session (`CLAUDECODE=1`: a window the agent
+    to a human at a TTY, and never inside a Claude Code session (`prompt.agent_shell`: a window the agent
     opened must not hand the agent a second shell). A refused request says why."""
     if not getattr(args, "terminal", False):
         return False
-    if os.environ.get("CLAUDECODE"):
-        print("note: --terminal ignored — this is a Claude Code session (CLAUDECODE is set); run "
+    from ..prompt import agent_shell      # 0.0.29 H-a: ONE agent-shell definition in src/
+    signal = agent_shell()
+    if signal:
+        print(f"note: --terminal ignored — this is a Claude Code session ({signal} is set); run "
               "`mokata ide --terminal` from your own terminal", file=sys.stderr)
         return False
     if not _human_tty():
@@ -91,16 +98,18 @@ def _human_tty() -> bool:
     """ID.S3 — the embedded terminal is offered only to a window a human started at a TTY (doc 109
     §6's bar for approvals: a model-run `mokata ide` has no TTY, so it gets no process-starting
     window)."""
-    try:
-        return sys.stdin.isatty() and sys.stdout.isatty()
-    except (AttributeError, ValueError, OSError):
-        return False
+    from ..prompt import real_terminal       # 0.0.29 H-a xplat: Windows NUL is not a terminal
+    return real_terminal(sys.stdin) and real_terminal(sys.stdout)
 
 
 def _bridge_notice(root: str, url: str, demo: bool) -> None:
     """ID.S3 — say so when `--ide-bridge` hooks cannot reach this server (their port was taken)."""
     from ..ide.bus import read_bridge
-    rec = None if demo else read_bridge(root)
+    try:
+        rec = None if demo else read_bridge(root)
+    except RecordRefused as exc:       # 0.0.29 H4: absent and refused are different answers
+        print(f"note: {exc.line()}; Claude Code's http hooks cannot reach this window until then")
+        return
     if rec and f"127.0.0.1:{rec['port']}/" not in url:
         print(f"note: the live-bridge port {rec['port']} was busy, so Claude Code's http hooks "
               "cannot reach this window; follow mode falls back to the hook timeline (≤1 s). Free "

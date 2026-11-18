@@ -21,3 +21,4 @@ test_harness_setup
 test_b1_hook_path_resolution
 test_win_cmd_flash
 test_win_no_console_windows
+test_c_setup_wiring_small

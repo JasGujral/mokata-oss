@@ -47,7 +47,7 @@ DECISIONS = ("approve", "reject")
 NO_TTY = ("Approve here needs `mokata ide --foreground` running in your own terminal — the window "
           "prints a one-time code there (a window an agent opened has no terminal, so it can only "
           "show you the command). Or approve in any terminal:")
-IN_SESSION = ("this window was started inside a Claude Code session (CLAUDECODE is set) — an agent's "
+IN_SESSION = ("this window was started inside a Claude Code session (`prompt.agent_shell`) — an agent's "
               "window never approves; use the command in your own terminal:")
 SAMPLE = "SAMPLE data (`mokata ide --demo`) — there is nothing to approve"
 
@@ -61,12 +61,13 @@ def human_terminal(environ: Optional[Dict[str, str]] = None, stdin: Any = None,
                    stdout: Any = None) -> Tuple[bool, str]:
     """(available, why not) — the SAME bar as `mokata approve` (stdin is a TTY), plus stdout (the code
     is printed there) and not inside a Claude Code session. Fails closed: anything unreadable is no."""
+    from ..prompt import agent_shell, real_terminal   # 0.0.29 H-a: ONE definition of each
     env = os.environ if environ is None else environ
-    if env.get("CLAUDECODE"):
+    if agent_shell(env):
         return False, IN_SESSION
     for stream in (sys.stdin if stdin is None else stdin, sys.stdout if stdout is None else stdout):
         try:
-            if stream is None or not stream.isatty():
+            if not real_terminal(stream):      # 0.0.29 H-a xplat: Windows NUL is not a terminal
                 return False, NO_TTY
         except (AttributeError, OSError, ValueError):
             return False, NO_TTY

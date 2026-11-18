@@ -143,7 +143,7 @@
       return;
     }
     if (!P.run) {
-      showState("No run yet. A run appears here once a brainstorm registers it (/mokata:brainstorm); its plan once the approach is approved, its spec once it is emitted.", "");
+      showState(`No run yet. A run appears here once a brainstorm registers it (${MK.cmd("brainstorm")}); its plan once the approach is approved, its spec once it is emitted.`, "");
       clearPlan();
       return;
     }

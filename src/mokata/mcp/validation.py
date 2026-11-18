@@ -191,7 +191,8 @@ def guard_path(path: str, field: str = "path") -> str:
     candidate = path or "."
     root = os.path.realpath(os.getcwd())
     resolved = os.path.realpath(os.path.join(root, candidate))
-    if resolved != root and not resolved.startswith(root + os.sep):
+    from ..fs_identity import require_inside
+    if not require_inside(resolved, root):               # ALLOW side: identity (0.0.29 H3)
         raise ValidationError(
             field, "is a relative path that resolves OUTSIDE the working root; pass a path inside "
                    "it, or an absolute path to the repo you mean")

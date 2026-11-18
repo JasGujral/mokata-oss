@@ -90,6 +90,48 @@ _mk_pinned_python() {
     [ -n "$_mk_py" ] && [ -x "$_mk_py" ]
 }
 
+# mokata's ONE user-cache rule (`mokata.pycache.user_cache_base`, 0.0.29 F) in builtins: is "$1" an
+# ABSOLUTE path by this platform's own rule? POSIX: a leading `/` only. A drive with a root
+# (`C:\x`, `C:/x`) or a UNC head (`\\srv\s`) only where the shell IS on Windows — Git Bash / MSYS /
+# Cygwin, told by variables (`MSYSTEM`, `OSTYPE`), never by running a binary. Anything else is
+# relative, and a relative cache base is ignored: taken as given it put the hooks' bytecode under
+# whatever directory the hook ran in — the user's project (USER-CACHE-DIR-RELATIVE-XDG).
+_mk_abs() {
+    case $1 in
+        /*) return 0 ;;
+    esac
+    _mk_win=""
+    case ${MSYSTEM:-} in ?*) _mk_win=1 ;; esac
+    case ${OSTYPE:-} in msys*|cygwin*) _mk_win=1 ;; esac
+    [ -n "$_mk_win" ] || return 1
+    case $1 in
+        [A-Za-z]:[\\/]*) return 0 ;;
+        [\\/][\\/][!\\/]*) return 0 ;;
+    esac
+    return 1
+}
+
+# BYTECODE (0.0.28 W5; one rule since 0.0.29 F). Claude Code exports PYTHONDONTWRITEBYTECODE=1 to
+# every child, hooks included, and the pinned uv runtime is installed without .pyc: honouring it,
+# every hook recompiled its ~60 modules. So the launched Python writes its bytecode into mokata's OWN
+# per-user cache — `$XDG_CACHE_HOME` if absolute, else `$HOME/.cache` if absolute, then
+# `mokata/pycache` — never beside the sources (a plugin checkout is not ours to dirty) and never
+# under a relative path. No absolute base -> the variable stays and nothing is written. An
+# unwritable cache costs the compile and nothing else: Python skips a write it cannot make.
+_mk_bytecode_cache() {
+    _mk_base=""
+    if [ -n "${XDG_CACHE_HOME:-}" ] && _mk_abs "$XDG_CACHE_HOME"; then
+        _mk_base=$XDG_CACHE_HOME
+    elif [ -n "${HOME:-}" ] && _mk_abs "$HOME"; then
+        _mk_base=$HOME/.cache
+    fi
+    if [ -n "$_mk_base" ]; then
+        PYTHONPYCACHEPREFIX=$_mk_base/mokata/pycache
+        export PYTHONPYCACHEPREFIX
+        unset PYTHONDONTWRITEBYTECODE
+    fi
+}
+
 _mk_find_uvx() {
     _mk_uvx=""
     if command -v uvx >/dev/null 2>&1; then

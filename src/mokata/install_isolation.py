@@ -33,29 +33,18 @@ import sysconfig
 from typing import Callable, List, Optional, Tuple
 
 from . import __version__
+from .fs_identity import refuse_if_inside, same_entry
 
 #: The isolated install commands, in the order the docs give them.
 ISOLATED_INSTALLS = ("pipx install mokata", "uv tool install mokata",
                      "brew install JasGujral/mokata/mokata")
 #: Bound on asking a foreign `mokata` its version — a doctor line must not hang.
-VERSION_TIMEOUT_SECONDS = 3
+VERSION_TIMEOUT_SECONDS = 30   # ≥4× a cold Windows console-script launcher (measured 0.51 s cold on macOS); 0.0.29 R-B9
 
 CODE_IN_PROJECT = "install-in-project-env"
 CODE_SHADOWED = "install-shadowed"
 
 _VERSION_RE = re.compile(r"(\d+(?:\.\d+)+)")
-
-
-def _norm(path: str) -> str:
-    return os.path.normcase(os.path.realpath(os.path.abspath(path)))
-
-
-def _is_within(child: str, parent: str) -> bool:
-    child, parent = _norm(child), _norm(parent)
-    try:
-        return os.path.commonpath([child, parent]) == parent
-    except ValueError:            # different drives on Windows
-        return False
 
 
 def _is_mokata_source_checkout(root: str) -> bool:
@@ -72,7 +61,8 @@ def _is_mokata_source_checkout(root: str) -> bool:
 def in_project_env(root: str, prefix: Optional[str] = None) -> Optional[str]:
     """The warning text when this mokata runs from an environment inside ``root``; else None."""
     prefix = sys.prefix if prefix is None else prefix
-    if not root or not prefix or not _is_within(prefix, root):
+    # REFUSE side (a warning): inside on disk OR by any fold-equal spelling (0.0.29 H3).
+    if not root or not prefix or not refuse_if_inside(prefix, root):
         return None
     if _is_mokata_source_checkout(root):
         return None
@@ -112,12 +102,14 @@ def _metadata_version(prefix: str) -> Optional[str]:
 
 
 def _ask_version(exe: str) -> Optional[str]:
+    from .quiet_spawn import run_jobbed
     try:
-        proc = subprocess.run([exe, "--version"], capture_output=True, text=True,
-                              timeout=VERSION_TIMEOUT_SECONDS)
-    except (OSError, subprocess.SubprocessError, ValueError):
+        # 0.0.29 R-B9: through the process door (a console-script launcher's grandchild can no
+        # longer hold the output open past the bound).
+        _rc, out, err = run_jobbed([exe, "--version"], timeout=VERSION_TIMEOUT_SECONDS)
+    except (OSError, subprocess.SubprocessError):
         return None
-    return _parse_version((proc.stdout or "") + " " + (proc.stderr or ""))
+    return _parse_version((out or "") + " " + (err or ""))
 
 
 def path_mokata_version(exe: str) -> Optional[str]:
@@ -143,7 +135,7 @@ def shadowed(which: Callable[[str], Optional[str]] = shutil.which,
     if not exe:
         return None
     own_scripts = sysconfig.get_path("scripts") if own_scripts is None else own_scripts
-    if own_scripts and _norm(os.path.dirname(os.path.realpath(exe))) == _norm(own_scripts):
+    if own_scripts and same_entry(os.path.dirname(os.path.realpath(exe)), own_scripts):
         return None                       # PATH resolves to this very install
     other = version_of(exe)
     if not other or other == own_version:

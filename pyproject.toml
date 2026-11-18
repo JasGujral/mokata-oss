@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mokata"
-version = "0.0.28"
+version = "0.0.29"
 description = "The memory + seatbelt for your AI coding agent. Spec-driven TDD for Claude Code — knowledge-aware, human-gated, local-first."
 readme = "README.md"
 # PY-FLOOR-3.12 (0.0.26 L12, Jas 2026-10-22: "we can force mokata to support 3.12 and onwards").
@@ -106,10 +106,15 @@ graph-ts = ["tree-sitter>=0.23", "tree-sitter-typescript>=0.23"]
 # `test_full_extra_is_the_union` pins this list to the union of the others so it cannot drift.
 # code-review-graph declares `tree-sitter>=0.23,<1`; measured 2026-10-21 in a fresh venv:
 # tree-sitter 0.26.0 + tree-sitter-typescript 0.23.2 + code-review-graph 2.3.9 import together.
+# 0.0.29 C1 (D15 `CRG-PULLS-MCP-2`): code-review-graph is PINNED to 2.4.0 — the newest release
+# measured working on mokata's `mcp<2` (it resolves fastmcp 3.4.11 + mcp 1.30.0 beside mokata and
+# answered a real `query callers` over its MCP wire, 2026-11-17). Its own `fastmcp<5` admits
+# fastmcp 4.x, which needs mcp 2.x; only a request that also carries mokata's mcp ceiling avoids
+# it, so every non-joint install seam appends it (`install_route.HELD`).
 full = [
     "model2vec>=0.3", "numpy>=1.24",
     "tree-sitter>=0.23", "tree-sitter-typescript>=0.23",
-    "code-review-graph",
+    "code-review-graph==2.4.0",
     "starlette>=0.27", "uvicorn>=0.23.1", "sse-starlette>=1.6.1",
     "pywinpty>=2.0; sys_platform == \"win32\"",
     "pygments>=2.15",

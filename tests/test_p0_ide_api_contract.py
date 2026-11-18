@@ -34,6 +34,7 @@ import unittest
 from pathlib import Path
 
 import _support  # noqa: F401  (puts src/ on the path)
+from _ide_follow import Following
 
 from mokata.ide import contract as C
 from mokata.ide import snapshots as S
@@ -113,7 +114,11 @@ def client(root: str, demo: bool = False, features=None):
     app = build_app(state) if features is None else build_app(state, features=features)
     c = TestClient(app, base_url=BASE, follow_redirects=False)
     c.get(f"/pair?t={TOKEN}")
-    return c, app, state
+    # 0.0.29 D5 `CI-TIMING-LOWS-0028`: a jobbed route is read the way the PAGE reads it — through
+    # its 202 handle to the final answer (`_ide_follow.Following`). A probe that means to see the
+    # 202 sets `sync_ms` itself, which `Following` honours. Before, a slow runner answered
+    # `/api/impact` with 202 and the probe graded the box's speed, not the contract.
+    return Following(c), app, state
 
 
 def send(c, entry, probe):
@@ -246,6 +251,37 @@ class EveryAnswerMatchesItsShape(_Fixture):
                 n += 1
         self.assertEqual([], errs)
         self.assertGreaterEqual(n, 70)
+
+    def test_a_jobbed_probe_that_answers_202_first_still_validates_against_the_200_shape(self):
+        """0.0.29 D5: the impact computation is HELD until the client has been told 202 (an event
+        the test controls, never a clock), so the first reply is the job handle on every box —
+        and the probe still grades the 200 contract, because it follows the handle like the page."""
+        import threading
+        from unittest import mock
+        c, _a, state = client(self.d)
+        entry = next(e for e in self.contract["routes"] if e["path"] == "/api/impact")
+        probe = next(p for p in entry["probes"] if p["status"] == 200)
+        told_202, statuses = threading.Event(), []
+        inner = c._c
+        real_get = inner.get
+
+        def spy_get(url, *a, **kw):
+            r = real_get(url, *a, **kw)
+            statuses.append(r.status_code)
+            if r.status_code == 202:
+                told_202.set()
+            return r
+        real_impact = state.source.impact
+
+        def held_impact(*a, **kw):
+            told_202.wait(120)
+            return real_impact(*a, **kw)
+        with mock.patch.object(inner, "get", spy_get), \
+                mock.patch.object(state.source, "impact", held_impact):
+            resp = send(c, entry, probe)
+        self.assertEqual(202, statuses[0], statuses)
+        self.assertEqual(200, resp.status_code, statuses)
+        self.assertEqual([], check(resp, entry, probe, self.contract["schemas"]))
 
     def test_a_changed_answer_shape_is_caught(self):
         """The validator is not a rubber stamp: a dropped key and a wrong type are named."""

@@ -28,7 +28,7 @@ import time
 from collections import deque
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..knowledge.cancel import report
+from ..knowledge.cancel import checkpoint, report
 from . import nav
 
 PAGE_NODES = 2000               # nodes per page of a picture (the page draws <= DRAW_LIMIT)
@@ -37,6 +37,9 @@ MAX_CHAINS = 50                 # untested chains listed; the answer says how ma
 CHAIN_COUNT_CAP = 1000
 PARTIAL_EVERY_S = 2.0          # P37: a long ring re-sends its picture this often while confirming          # chains counted past the listed ones before saying "at least"
 STRUCTURAL = ("structural", "verified_empty")
+#: 0.0.29 E Path B (ruling D6): the basis of a row read from the index's bare-name edges — matched
+#: by NAME, drawn pending and never as resolved until code-review-graph's answer confirms it.
+NAME_MATCHED = "name-matched"
 
 
 class _G:
@@ -79,8 +82,8 @@ class _G:
             return None
         key = (src, dst, kind)
         if key in self.edges:
-            if not pending:
-                self.edges[key].pop("pending", None)
+            if not pending and self.edges[key].pop("pending", None):
+                self.edges[key]["basis"] = basis      # the answer that confirmed it says how
             return key
         e = {"id": f"e{len(self.edges)}", "source": src, "target": dst,
              "kind": kind, "basis": basis, "site": f"{path}:{line}"}
@@ -303,20 +306,44 @@ def _index_for(root: str, layer: Any) -> Any:
     return crg_nodes.reader(root)
 
 
+def _ring_read(index: Any, names: List[str], cache: Optional[Dict[Any, Any]] = None,
+               ) -> Tuple[List[Tuple[str, str, str, int]], set, List[Tuple[str, str, str, int]]]:
+    """0.0.29 E — ONE batched read of the index for a ring: the proven caller rows of every name
+    in `names` and the names among them with bare-name CALLS edges (`D`), bracketed by the index's
+    stamp (`NodeReader.read_stable`), and the bare-name rows themselves (matched by NAME — only
+    the tool can confirm them; ruling D6). A frontier already read (the early-ring pass) is not
+    read again."""
+    key = frozenset(names)
+    if cache is not None and key in cache:
+        return cache[key]
+
+    def read() -> Tuple[List[Tuple[str, str, str, int]], set, List[Tuple[str, str, str, int]]]:
+        # A code-review-graph LOCAL name (`d:S<hash>:<n>`) is name-matched by the tool under its
+        # leading name, which no index row of the local name can stand for — always confirmed.
+        bare: set = {n for n in key if ":" in n}
+        matched: List[Tuple[str, str, str, int]] = []
+        return index.callers_by_name(sorted(key), bare=bare, matched=matched), bare, matched
+    got = index.read_stable(read)
+    if cache is not None:
+        cache[key] = got
+    return got
+
+
 def _early_rings(g: _G, index: Any, symbol: str, center: str, depth: int,
-                 progress: Any) -> int:
+                 progress: Any, cache: Optional[Dict[Any, Any]] = None) -> int:
     """0.0.26 P37 (R4) — every ring's PROVEN edges, read from the index in milliseconds, drawn
     `pending` before the tool's (slow) answers confirm them ring by ring. Never truncates the
     picture: it stops where this page of the tool's answer would (`g.limit`) and leaves the rest
     to it. Returns the rings read. An unreadable index reads nothing — the answers still come."""
     import sqlite3
+    from ..knowledge import crg_nodes
     frontier = {symbol: center}
     seen = {symbol}
     rings = 0
     for hop in range(1, depth + 1):
         try:
-            rows = index.callers_by_name(list(frontier))
-        except (sqlite3.Error, OSError, ValueError):
+            rows = _ring_read(index, list(frontier), cache)[0]
+        except (sqlite3.Error, OSError, ValueError, crg_nodes.IndexBuilding):
             break
         nxt: Dict[str, str] = {}
         for callee, caller, path, line in rows:
@@ -370,6 +397,23 @@ class _Ripple:
         self.imports: Any = None
         self.meta: Dict[str, Any] = {}
         self.lock = threading.Lock()
+        # 0.0.29 E (`GRAPH-TS-IMPACT-RIPPLE-74S`) — rings >= 2 with the index: ONE batched read of
+        # the ring (`batch`: name -> its proven rows) and a code-review-graph question only for
+        # the names in `bare` (the rows its own resolution adds). Kept on the ripple, so Continue
+        # resumes mid-ring without reading or asking again. `batch_hop` is the ring it belongs to;
+        # `batch` False = this ring is confirmed name by name (the index was being built).
+        self.batch: Any = None
+        self.batch_hop = 0
+        self.bare: set = set()
+        self.reads: Dict[Any, Any] = {}
+        # Path B (ruling D6): on the LAST ring a name in `bare` is not asked during the walk — its
+        # name-matched rows (`matched`) are drawn pending, labelled, and the name waits in
+        # `deferred` until Continue asks the tool about it (`_confirm_page`). An inner ring's
+        # names are still asked in the walk: their answers seed the next ring.
+        self.matched: Dict[str, List[Tuple[Any, str]]] = {}
+        self.deferred: List[Tuple[str, str]] = []
+        self.di = 0                         # the deferred name being confirmed
+        self.drows: Optional[Tuple[Any, int]] = None
 
     def _payload(self, **extra: Any) -> Dict[str, Any]:
         return self.g.payload(view="ripple", center=self.center, symbol=self.symbol,
@@ -390,13 +434,17 @@ class _Ripple:
                        partial=self._payload(partial=True, rings_done=0))
             else:
                 self.early = _early_rings(g, self.index, self.symbol, self.center, self.depth,
-                                          lambda hop: report(
+                                          cache=self.reads, progress=lambda hop: report(
                     note=f"read {hop} ring(s) from the code graph's index; confirming ring 1 of "
                          f"{self.depth}",
                     partial=self._payload(partial=True, rings_done=0, index_rings=hop)))
         last_partial = time.monotonic()
+        if self.hop > self.depth and self.deferred:
+            self._confirm_page()
         while self.hop <= self.depth and not g.truncated:
             hop = self.hop
+            if hop >= 2 and self.index is not None and self.batch_hop != hop:
+                self._read_ring(hop)
             while self.fi < len(self.frontier):
                 sym, nid = self.frontier[self.fi]
                 if self.rows is None:
@@ -407,18 +455,24 @@ class _Ripple:
                         shown = self._payload(partial=True, rings_done=hop - 1,
                                               index_rings=self.early,
                                               answer_bases=sorted(set(self.answers)))
-                    report(done=self.fi, total=len(self.frontier), unit=f"ring-{hop} names asked",
-                           note=f"{hop - 1} of {self.depth} ring(s) done; asking who calls {sym}",
-                           **({"partial": shown} if shown else {}))
-                    res = nav.run(self.root, "callers", sym, layer=self.layer)
-                    self.answers.append(res.basis)
-                    if self.direct is None:
-                        self.direct = len(res.references)
-                    self.rows = (res, 0)
-                res, at = self.rows
-                refs = res.references
+                    self.rows = (self._answer(hop, sym, shown, nid), 0)
+                refs, at = self.rows
                 while at < len(refs):
-                    r = refs[at]
+                    r, basis = refs[at]
+                    if basis == NAME_MATCHED:
+                        fresh = (_sym_id(r.symbol) if r.symbol else f"site:{r.path}:{r.line}") \
+                            not in g.nodes
+                        cid = _ref_node(g, r, hop)
+                        if cid is None:
+                            if g.truncated:
+                                break
+                            at += 1
+                            continue
+                        at += 1
+                        if fresh:
+                            g.nodes[cid]["pending"] = True
+                        g.edge(cid, nid, "CALLS", NAME_MATCHED, r.path, r.line, pending=True)
+                        continue
                     cid = _ref_node(g, r, hop)
                     if cid is None:
                         if g.truncated:
@@ -427,7 +481,7 @@ class _Ripple:
                         continue
                     at += 1
                     g.confirm(cid)
-                    g.edge(cid, nid, "CALLS", res.basis, r.path, r.line)
+                    g.edge(cid, nid, "CALLS", basis, r.path, r.line)
                     self.callers_of.setdefault(nid, []).append(cid)
                     if r.symbol and r.symbol not in self.seen and g.nodes[cid]["kind"] != "test":
                         self.seen.add(r.symbol)
@@ -435,7 +489,7 @@ class _Ripple:
                     elif r.symbol and r.symbol not in self.seen:
                         self.seen.add(r.symbol)
                 if g.truncated:
-                    self.rows = (res, at)
+                    self.rows = (refs, at)
                     break
                 self.rows = None
                 self.fi += 1
@@ -447,12 +501,114 @@ class _Ripple:
                    partial=self._payload(partial=True, rings_done=hop, index_rings=self.early,
                                          answer_bases=sorted(set(self.answers)), **self.meta))
             self.frontier, self.nxt, self.fi = self.nxt, [], 0
+            self.batch, self.bare, self.matched = None, set(), {}
             self.hop += 1
             if not self.frontier:
                 self.hop = self.depth + 1      # every ring is in
                 break
-        self.complete = not g.truncated
+        self.complete = not g.truncated and not self.deferred
         return self._finish()
+
+    def _confirm_page(self) -> None:
+        """Continue after every ring is in: ask code-review-graph about the deferred names, one
+        at a time, as far as this page holds. What it answers is confirmed (and drawn, as the
+        per-node walk would have); a name-matched row it does not answer is dropped once the last
+        name is asked (`drop_unconfirmed`)."""
+        g, hop = self.g, self.depth
+        while self.di < len(self.deferred):
+            sym, nid = self.deferred[self.di]
+            if self.drows is None:
+                report(done=self.di, total=len(self.deferred), unit="names matched by name",
+                       note=f"confirming {len(self.deferred) - self.di:,} name(s) matched by "
+                            f"name with code-review-graph; asking who calls {sym}")
+                res = nav.run(self.root, "callers", sym, layer=self.layer)
+                self.answers.append(res.basis)
+                self.drows = ([(r, res.basis) for r in res.references], 0)
+            refs, at = self.drows
+            while at < len(refs):
+                r, basis = refs[at]
+                cid = _ref_node(g, r, hop)
+                if cid is None:
+                    if g.truncated:
+                        break
+                    at += 1
+                    continue
+                at += 1
+                g.confirm(cid)
+                key = (cid, nid, "CALLS")
+                was = key in g.edges and not g.edges[key].get("pending")
+                g.edge(cid, nid, "CALLS", basis, r.path, r.line)
+                if not was:
+                    self.callers_of.setdefault(nid, []).append(cid)
+                if r.symbol and r.symbol not in self.seen:
+                    self.seen.add(r.symbol)
+            if g.truncated:
+                self.drows = (refs, at)
+                return
+            self.drows = None
+            self.di += 1
+        self.deferred, self.di = [], 0
+
+    def _read_ring(self, hop: int) -> None:
+        """Ring `hop` (>= 2) read from the index in ONE batched read (chunked), bracketed by its
+        stamp. While code-review-graph builds its index the ring is confirmed name by name, as
+        before 0.0.29, and the job says why."""
+        from ..knowledge import crg_nodes
+        self.batch_hop = hop
+        names = [sym for sym, _nid in self.frontier]
+        try:
+            rows, self.bare, matched = _ring_read(self.index, names, self.reads)
+        except crg_nodes.IndexBuilding:
+            self.batch, self.bare = False, set()
+            report(note=f"ring {hop} of {self.depth}: code-review-graph is building its index — "
+                        f"asking it about each of {len(names):,} name(s)")
+            return
+        batch: Dict[str, List[Tuple[Any, str]]] = {}
+        for callee, caller, path, line in rows:
+            batch.setdefault(callee, []).append((_Ref(path, line, caller), "structural"))
+        self.batch = batch
+        self.matched = {}
+        for callee, caller, path, line in matched:
+            self.matched.setdefault(callee, []).append((_Ref(path, line, caller), NAME_MATCHED))
+        self.answers.append("structural")
+        report(done=0, total=len(self.frontier), unit=f"ring-{hop} names",
+               note=f"ring {hop} of {self.depth}: {len(rows):,} call(s) into {len(names):,} "
+                    f"name(s) read from the code graph's index; confirming "
+                    f"{len(self.bare):,} name(s) matched by name with code-review-graph")
+
+    def _answer(self, hop: int, sym: str, shown: Any, nid: str = "") -> List[Tuple[Any, str]]:
+        """The rows of one frontier name: from the ring's batched read, plus code-review-graph's
+        answer when the name is in `bare` (its rows the index read already holds are not drawn
+        twice); without a batch (ring 1, no index, a building index) the tool's answer alone."""
+        batched = self.batch if (hop >= 2 and self.batch_hop == hop
+                                     and isinstance(self.batch, dict)) else None
+        if batched is not None and sym not in self.bare:
+            checkpoint()                         # a cancelled job stops here, per name
+            if shown is not None:
+                report(partial=shown)
+            return list(batched.get(sym, ()))
+        if batched is not None and hop == self.depth:  # Path B: drawn pending, asked on Continue
+            checkpoint()
+            if shown is not None:
+                report(partial=shown)
+            self.deferred.append((sym, nid))
+            return list(batched.get(sym, ())) + list(self.matched.get(sym, ()))
+        asked = (f"confirming {len(self.bare):,} name(s) matched by name with "
+                 f"code-review-graph; asking who calls {sym}") if batched is not None \
+            else f"asking who calls {sym}"
+        report(done=self.fi, total=len(self.frontier), unit=f"ring-{hop} names asked",
+               note=f"{hop - 1} of {self.depth} ring(s) done; {asked}",
+               **({"partial": shown} if shown is not None else {}))
+        res = nav.run(self.root, "callers", sym, layer=self.layer)
+        self.answers.append(res.basis)
+        if self.direct is None:
+            self.direct = len(res.references)
+        if batched is None:
+            return [(r, res.basis) for r in res.references]
+        mine = list(batched.get(sym, ()))
+        have = {(r.path, r.line, r.symbol) for r, _b in mine}
+        return mine + [(r, res.basis) for r in res.references
+                       if (r.path, r.line, r.symbol) not in have]
 
     def _finish(self) -> Dict[str, Any]:
         g = self.g
@@ -479,7 +635,7 @@ class _Ripple:
         g.truncated = full or not self.complete
         callers_of = {k: list(v) for k, v in self.callers_of.items()}
         for (src, dst, kind), e in g.edges.items():   # index edges no answer reached yet
-            if e.get("pending") and kind == "CALLS":
+            if e.get("pending") and kind == "CALLS" and e["basis"] != NAME_MATCHED:
                 callers_of.setdefault(dst, []).append(src)
         _mark_coverage(g, callers_of)
         for n in g.nodes.values():               # tests sit on the OUTER ring, whatever their hop
@@ -487,7 +643,15 @@ class _Ripple:
                 n["ring"] = self.depth + 1
         chains, total, exact = _untested_chains(g, self.center, callers_of)
         extra: Dict[str, Any] = {"more": not self.complete}
-        if not self.complete:
+        if not self.complete and self.hop > self.depth and self.deferred:
+            # what the picture shows faded: one per pending name-matched caller -> callee edge
+            # (a second site of the same pair, or a row whose edge is already proved, adds none)
+            named = sum(1 for e in g.edges.values()
+                        if e.get("pending") and e["basis"] == NAME_MATCHED)
+            extra["more_note"] = (f"{named:,} call(s) matched by name only — not "
+                                  f"confirmed; Continue asks code-review-graph about "
+                                  f"{len(self.deferred) - self.di:,} name(s)")
+        elif not self.complete:
             extra["more_note"] = (f"showing {len(g.nodes):,} affected so far (ring {self.hop} of "
                                   f"{self.depth}) — Continue draws the next {PAGE_NODES:,}")
         if self.early:

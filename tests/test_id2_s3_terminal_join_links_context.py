@@ -399,6 +399,10 @@ class TheTerminalIsOfferedOnlyWhereItShouldBe(unittest.TestCase):
                                             (True, False, False)):
             with mock.patch.object(sys, "stdin") as si, mock.patch.object(sys, "stdout") as so:
                 si.isatty.return_value, so.isatty.return_value = stdin_tty, stdout_tty
+                # a double has no OS handle (as io.StringIO: fileno() raises), so its own isatty()
+                # is all there is; a MagicMock's fileno() hands back a mock, which the Windows
+                # console check (prompt.real_terminal, 0.0.29 H-a xplat) rightly refuses
+                si.fileno.side_effect = so.fileno.side_effect = OSError("no OS handle")
                 self.assertEqual(want, cli_ide._human_tty())
         from mokata.ide import launch
         seen = []
@@ -428,7 +432,9 @@ class TheTerminalIsOfferedOnlyWhereItShouldBe(unittest.TestCase):
                     mock.patch.dict(os.environ, {"CLAUDECODE": cc} if cc else {}, clear=False), \
                     mock.patch("sys.stderr", io.StringIO()) as err:
                 if not cc:
-                    os.environ.pop("CLAUDECODE", None)
+                    from mokata.prompt import AGENT_SHELL_SIGNALS
+                    for name in AGENT_SHELL_SIGNALS:      # 0.0.29 H-a: one definition
+                        os.environ.pop(name, None)
                 self.assertEqual(want, cli_ide._terminal_wanted(argparse.Namespace(terminal=flag)))
                 if flag and not want:
                     self.assertIn("--terminal ignored", err.getvalue())

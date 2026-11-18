@@ -86,6 +86,7 @@ def resolve_registered(root: str = ".", home: Optional[str] = None) -> Optional[
 class HandshakeResult:
     ok: bool
     code: str                 # connected | command_not_found | sdk_absent | timeout | error
+    #                           | left_running (0.0.29: the server could not be ended)
     detail: str = ""
     fix: str = ""
 
@@ -102,7 +103,7 @@ _INIT_REQUEST = {
 }
 
 
-def _terminate(tree: "quiet_spawn.Jobbed") -> None:
+def _terminate(tree: "quiet_spawn.Jobbed") -> "quiet_spawn.Ended":
     """End the whole tree through the door (the only kill), THEN close our ends of the pipes.
 
     The order is the fix (0.0.28 I1): a timed-out bounded read leaves its reader thread blocked in
@@ -117,6 +118,21 @@ def _terminate(tree: "quiet_spawn.Jobbed") -> None:
                 stream.close()
         except OSError:
             pass
+    # 0.0.29 `MCP-TERMINATE-DROPS-ENDED`: what the end said is the caller's to report.
+    return tree.last_end if tree.last_end is not None else quiet_spawn.Ended(True)
+
+
+def _said(res: HandshakeResult, ended: "quiet_spawn.Ended") -> HandshakeResult:
+    """`res`, plus — when the server mokata started could not be ended — that fact: never a plain
+    timeout or ok. An otherwise-connected answer becomes `left_running` (not ok)."""
+    if ended.ok:
+        return res
+    why = f"; mokata could not end the server it started: {ended.why}"
+    if res.ok:
+        return HandshakeResult(False, "left_running", "the server answered" + why,
+                               "end the leftover `mokata-mcp` process yourself (or reboot), "
+                               "then run `mokata mcp status` again")
+    return HandshakeResult(res.ok, res.code, res.detail + why, res.fix)
 
 
 def handshake(command: str, args: Optional[List[str]] = None,
@@ -155,11 +171,11 @@ def handshake(command: str, args: Optional[List[str]] = None,
     # into the same death-classification block below that `holder.get("line") or ""` fed before.
     read = read_line_bounded(proc.stdout, timeout)
     if read.timed_out:
-        _terminate(tree)
-        return HandshakeResult(
+        ended = _terminate(tree)
+        return _said(HandshakeResult(
             False, "timeout",
             f"no MCP initialize response within {timeout:.0f}s",
-            "the server launched but isn't answering — run `mokata mcp start` to see why")
+            "the server launched but isn't answering — run `mokata mcp start` to see why"), ended)
 
     line = read.text
     if not line.strip():
@@ -176,34 +192,34 @@ def handshake(command: str, args: Optional[List[str]] = None,
         # which is precisely when a hang is least welcome. Non-hanging behaviour is unchanged:
         # a dead process EOFs immediately and yields exactly the same text.
         err = (read_bounded(proc.stderr.read, 2.0).text or "").strip()
-        _terminate(tree)
+        ended = _terminate(tree)
         if "No module named 'mcp'" in err or "MCP SDK is not installed" in err:
-            return HandshakeResult(
+            return _said(HandshakeResult(
                 False, "sdk_absent",
                 "the server exited: the MCP SDK is not installed (a required dependency)",
-                "reinstall mokata — `pip install -U mokata` — to restore the SDK")
+                "reinstall mokata — `pip install -U mokata` — to restore the SDK"), ended)
         tail = err.splitlines()[-1] if err else ""
-        return HandshakeResult(
+        return _said(HandshakeResult(
             False, "error",
             "the server exited without an MCP response" + (f": {tail}" if tail else ""),
-            "run `mokata mcp start` to see the server's own error output")
+            "run `mokata mcp start` to see the server's own error output"), ended)
 
-    _terminate(tree)
+    ended = _terminate(tree)
     try:
         msg = json.loads(line)
     except json.JSONDecodeError:
-        return HandshakeResult(
+        return _said(HandshakeResult(
             False, "error", "the server's first output was not valid JSON-RPC",
-            "run `mokata mcp start` to inspect the server output")
+            "run `mokata mcp start` to inspect the server output"), ended)
     if isinstance(msg, dict) and "result" in msg:
-        return HandshakeResult(True, "connected")
+        return _said(HandshakeResult(True, "connected"), ended)
     if isinstance(msg, dict) and "error" in msg:
-        return HandshakeResult(
+        return _said(HandshakeResult(
             False, "error", f"the server rejected initialize: {msg.get('error')}",
-            "update mokata (`pip install -U mokata`)")
-    return HandshakeResult(
+            "update mokata (`pip install -U mokata`)"), ended)
+    return _said(HandshakeResult(
         False, "error", "unexpected MCP response shape",
-        "run `mokata mcp start` to inspect the server output")
+        "run `mokata mcp start` to inspect the server output"), ended)
 
 
 # --------------------------------------------------------------------------------------
@@ -566,42 +582,68 @@ def version_parity(root: str = ".", home: Optional[str] = None, *,
                               cli_version=cli_version, timeout=timeout)
 
 
+#: The command that removes the user-scope copy — it shows its plan before asking (P2).
+UNSETUP_USER_SCOPE = "mokata unsetup claude --scope user"
+
+
+def _same_launch(a: Registration, b: Registration) -> bool:
+    """Do two registrations launch the same server? Path spelling, case on Windows and a `.exe`
+    suffix are normalised; anything else that differs is a real difference."""
+    def norm(cmd: str) -> str:
+        c = os.path.normcase(os.path.normpath(cmd))
+        return c[:-4] if os.name == "nt" and c.endswith(".exe") else c
+    return norm(a.command) == norm(b.command) and list(a.args) == list(b.args)
+
+
 @dataclass
 class ScopeShadowFinding:
     """Both-scope sweep: is mokata registered in BOTH project `.mcp.json` and user
-    `~/.claude.json`? If so, Claude Code uses the project one (resolve_registered precedence) and
-    the user one is a stale-shadow risk. Read-only; `render` names the winner and the loser path."""
+    `~/.claude.json`? Claude Code uses the project one (resolve_registered precedence). 0.0.29 C1:
+    two registrations that launch the same server are a harmless DUPLICATE (⚠); two that differ
+    are a stale SHADOW (✗). Both name the removal as a command. Read-only."""
     shadowed: bool
     winner_scope: str = ""
     winner_path: Optional[Path] = None
     loser_scope: str = ""
     loser_path: Optional[Path] = None
+    identical: bool = False
 
     def render(self) -> List[str]:
         if not self.shadowed:
             return []
+        remove = (f"  to remove the {self.loser_scope}-scope copy: `{UNSETUP_USER_SCOPE}` "
+                  "(it shows its plan first; it also unwires mokata for every other repo that "
+                  "relies on the user scope)")
+        if self.identical:
+            return [
+                "mokata-mcp: SCOPE DUPLICATE ⚠ — the same mokata server is registered in both "
+                f"scopes; Claude Code uses the {self.winner_scope} one, so this is harmless.",
+                f"  active (wins): {self.winner_path}  [{self.winner_scope} scope]",
+                f"  duplicate:     {self.loser_path}  [{self.loser_scope} scope]",
+                remove,
+            ]
         return [
-            "mokata-mcp: SCOPE SHADOW ✗ — mokata is registered in BOTH scopes; Claude Code uses "
-            f"the {self.winner_scope} one.",
+            "mokata-mcp: SCOPE SHADOW ✗ — mokata is registered in BOTH scopes with DIFFERENT "
+            f"commands; Claude Code uses the {self.winner_scope} one.",
             f"  active (wins): {self.winner_path}  [{self.winner_scope} scope]",
-            f"  shadowed:      {self.loser_path}  [{self.loser_scope} scope]  "
-            "← stale-shadow risk; remove mokata's entry here to avoid confusion.",
+            f"  shadowed:      {self.loser_path}  [{self.loser_scope} scope]  ← a stale entry",
+            remove,
         ]
 
 
 def scope_shadow(root: str = ".", home: Optional[str] = None) -> ScopeShadowFinding:
     """Detect a mokata registration present in BOTH scopes. Project wins (the order/paths
-    `resolve_registered` and `harness_setup` use), so the user-scope copy is flagged as the
-    stale-shadow risk with its exact path to clean. Read-only. Never raises."""
+    `resolve_registered` and `harness_setup` use). Read-only. Never raises."""
     try:
         proj = Path(claude_mcp_config_path("project", root, home))
         user = Path(claude_mcp_config_path("user", root, home))
-        has_proj = _read_server(proj) is not None
-        has_user = _read_server(user) is not None
+        p_reg = _read_server(proj)
+        u_reg = _read_server(user)
     except Exception:
         return ScopeShadowFinding(False)
-    if has_proj and has_user:
-        return ScopeShadowFinding(True, "project", proj, "user", user)
+    if p_reg is not None and u_reg is not None:
+        return ScopeShadowFinding(True, "project", proj, "user", user,
+                                  identical=_same_launch(p_reg, u_reg))
     return ScopeShadowFinding(False)
 
 
@@ -688,6 +730,30 @@ default shown. A closed set of values is listed under *Allowed*; any other value
 - **`refused` with `reason_code: "not-initialized"`.** mokata is not set up in that repo. The
   refusal's `remedyCommand` is `mokata init`; run it in the repo root, then call again.
 - **`error`.** A real fault on mokata's side, with a hint naming its fix.
+- **`refused` with `reason_code: "cancelled"`.** The work stopped at its next checkpoint because
+  the call was cancelled; the reason says what, if anything, it had already recorded.
+
+## Long work and cancel
+
+A call that is still working after the reply budget answers `status: "running"` and the work
+goes on, held by the server. A re-call with exactly the same arguments joins it and receives its
+result; cancelling that re-call (when it is the only one attached) stops the work and ends every
+process it started. Cancelling a call stops its work unless another call is attached to the same
+work. When the server exits, all of its work is stopped. A result that describes the working tree
+(`baseline`, `ci_check`, `coverage`, `lat_check`) is only handed to a call made on the same tree.
+
+**A cancelled write is never run twice.** The next identical call collects what the cancelled one
+did (committed, refused, or "nothing changed"), marked `collected`; only the call after that starts
+it again. A result collected after it finished carries `kept.ran_at` and `kept.age_s`: when it ran.
+
+The server holds at most 256 such uncollected write results. Past that the oldest is dropped and a
+note stays in its place, so the next identical call is told `already_ran`: when the write ran and
+whether it succeeded, without its full result, and the write is not run again. These notes are kept
+for 7 days (at most 4096 of them). After that, an identical call is a new request and runs.
+
+Under MCP, git and ssh never prompt for credentials, so a credential that only an askpass helper
+supplies (VS Code's, for example) is not used by `commit_push` or `worktree_merge`. Configure a git
+credential helper (or an ssh key in an agent) for those pushes.
 
 Arrays and objects may be sent as a JSON string of the same value; integers and numbers as their
 decimal text; booleans as `"true"`/`"false"`.

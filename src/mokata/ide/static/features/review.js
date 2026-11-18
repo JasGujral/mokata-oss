@@ -78,7 +78,7 @@
                   el("p", "small dim", d.command ? "Set it up with: " + d.command : ""));
       return;
     }
-    if (d.state === "no-run") { host.append(el("p", "empty", "No run has state in this repository yet — tests appear here once a run emits a spec (/mokata:spec).")); return; }
+    if (d.state === "no-run") { host.append(el("p", "empty", `No run has state in this repository yet — tests appear here once a run emits a spec (${MK.cmd("spec")}).`)); return; }
     // ---- the head: run · approval · totals · command
     const head = el("div", "rv-head");
     const runBox = el("div", "combo");

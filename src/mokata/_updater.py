@@ -51,15 +51,35 @@ def _alive(pid: int) -> bool:
     return True
 
 
-def _run(argv):
+def _run(argv, *, step_secs=None):
+    """One updater step (STDLIB ONLY: the updater cannot import mokata — it is replacing it). The
+    output goes to a TEMP FILE, never a pipe, so a grandchild that inherited it (a pip build
+    backend, a uv cache worker) cannot hold the step open after pip/uv exits (0.0.29
+    `SPAWN-REGISTER-FILED-LAUNCHERS`). The wait is sliced; past `STEP_SECS` the step's own process
+    is killed. Returns at the leader's exit."""
+    import tempfile
     kw = {"creationflags": _NO_WINDOW} if os.name == "nt" else {}
-    try:
-        done = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
-                              errors="replace", stdin=subprocess.DEVNULL, timeout=STEP_SECS,
-                              check=False, **kw)
-    except (OSError, subprocess.SubprocessError) as exc:
-        return -1, f"{type(exc).__name__}: {exc}"
-    return done.returncode, ((done.stdout or "") + (done.stderr or ""))[-6000:]
+    bound = STEP_SECS if step_secs is None else step_secs
+    with tempfile.TemporaryFile() as out:
+        try:
+            proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out,
+                                    stderr=subprocess.STDOUT, **kw)
+        except (OSError, ValueError) as exc:
+            return -1, f"{type(exc).__name__}: {exc}"
+        end = time.monotonic() + bound
+        while True:
+            try:
+                rc = proc.wait(min(0.25, max(0.0, end - time.monotonic())))
+                break
+            except subprocess.TimeoutExpired:
+                if time.monotonic() < end:
+                    continue
+                proc.kill()
+                proc.wait()
+                return -1, f"TimeoutExpired: the step did not finish within {bound:g} s"
+        out.seek(0)
+        text = out.read().decode("utf-8", "replace")
+    return rc, text[-6000:]
 
 
 def wait_for(pids, *, alive=_alive, sleep=time.sleep, timeout=WAIT_SECS, clock=time.time) -> bool:

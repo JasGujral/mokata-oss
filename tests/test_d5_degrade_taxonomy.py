@@ -59,6 +59,7 @@ DEGRADE_FAMILY = {
     # index whose vectors were written by a different embedder. A misclassified failure sends the
     # user to check a connection that was never the problem.
     "ModelUnavailable": FAILURE_ENGINE,             # model2vec absent/unloadable → hashing
+    "ModelNotCached": FAILURE_ENGINE,               # 0.0.29 C1: model not on disk, no fetch consent
     "EmbedderStampMismatch": FAILURE_ENGINE,        # embedder ≠ the stamp → lexical, + re-embed
     "SessionTransportUnavailable": FAILURE_UNREACHABLE,
     "SharedAuditUnavailable": FAILURE_UNREACHABLE,  # → the log stays LOCAL
@@ -66,6 +67,9 @@ DEGRADE_FAMILY = {
     "SubagentUnavailable": FAILURE_UNREACHABLE,     # → sequential flow
     "BackendError": FAILURE_UNREACHABLE,            # knowledge query → the grep floor
     "CrgUnavailable": FAILURE_UNREACHABLE,          # code-review-graph down → the AST floor
+    # 0.0.29 E — the crg index is being rebuilt under the read (its stamp moved twice); the
+    # ripple falls back to asking the tool per node, the same remedy as an unreachable index.
+    "IndexBuilding": FAILURE_UNREACHABLE,
     # 0.0.26 O2 — the graph is healthy and holds no node for the target. Inherits BackendError's
     # class; the layer catches it BEFORE the degrade path, so it never reaches `note_degraded` and
     # never renders the "unreachable" sentence — the floor answers with a note naming both backends.
@@ -198,6 +202,18 @@ HARD_ERRORS = {
     "RefRefused",
     "Expired",
     "SpillFull",
+    # 0.0.29 lane B (ruling D16) — the Windows cmd guard refused a statusLine / baseline line BY
+    # NAME, with the reason and the fix. HARD: nothing falls back; the line does not run, the
+    # statusLine shows a visible refusal and `mokata doctor` lists it. Also an `OSError`, so every
+    # door caller's "could not start" path still holds.
+    "CmdLineRefused",
+    # 0.0.29 H4 — a private-set record that exists but is refused (foreign, weak, not a regular
+    # file). HARD: "no record" and "a refused record" are different answers; nothing falls back to
+    # the refused bytes, and each surface names the file and `mokata doctor --fix`.
+    "RecordRefused",
+    # 0.0.29 H-a round 2 (M3) — a settings file `mokata doctor --fix` was about to rewrite differs
+    # from the bytes its plan showed. HARD: nothing is written to it; the apply names it and rc is 1.
+    "ChangedSincePlan",
     # 0.0.23 C2 — a regex the user typed that does not compile. HARD: the reason is shown; a silent
     # switch to a literal search would answer a question nobody asked.
     "BadPattern",
@@ -235,6 +251,10 @@ HARD_ERRORS = {
     # passed off as the server's) and `ServerError` (the server answered a JSON-RPC error, shown
     # with its code). None of them falls back silently.
     "MethodRefused", "ServerGone", "ServerError",
+    # 0.0.29 A (D14) — `ServerSilent`: a call-hierarchy question the server said nothing about for
+    # `lsp.CALLS_SILENCE_S`. HARD: the question is cancelled and the route answers from the call
+    # graph LABELLED `lsp.state: no-answer` with the NOT RUN sentence; never passed off as the server's.
+    "ServerSilent",
     # 0.0.27 P8 — a file that cannot be shown as a table (NUL bytes, UTF-32, unreadable). HARD:
     # answered as a 200 whose `state` + `note` say why in plain words (`ide/features/table.py`);
     # there is no weaker rendering to fall back to — a guess at the encoding is garbage on screen.
@@ -282,7 +302,10 @@ CLASSED_HARD_ERRORS = {"ProvisionError": FAILURE_SCHEMA,
 # file vanished under a read (SpillGone, caught in explain/store.py and turned into NeedsRebuild).
 # Neither is an error a user sees: both ROUTE the request to a rebuild that runs as a job with
 # progress and Cancel — the tool answers `building`, never a failure and never an inline build.
-CONTROL_SIGNALS = {"_GroupRollback", "Cancelled", "_Unknown", "NeedsRebuild", "SpillGone"}
+# 0.0.29 lane G: `Silent`/`Spooled` (baseline.py) are raised from the door's progress hook to end
+# a run and caught by `baseline_status` a few lines up — control flow, not failures.
+CONTROL_SIGNALS = {"_GroupRollback", "Cancelled", "_Unknown", "NeedsRebuild", "SpillGone",
+                   "Silent", "Spooled"}
 
 
 def _exception_classes():
@@ -637,6 +660,10 @@ def _live_classes():
     from mokata.execmode import tasks
     from mokata.govern import authoring, graph_required, revert, secret_ignore, tdd
     from mokata.knowledge import crg_client, query
+    # 0.0.29 G — `Silent`/`Spooled`, the baseline run's control signals.
+    from mokata import baseline
+    # 0.0.29 E — `IndexBuilding`, the crg index read while code-review-graph rebuilds it.
+    from mokata.knowledge import crg_nodes
     # 0.0.26 P0 — `ContractError` (the IDE contract), `RouteConflict` (the IDE route registry).
     from mokata.ide import contract as _ide_contract, routes as _ide_routes  # noqa: F401
     # 0.0.27 P13 — `TraceRefused` (a proof trace of a target that cannot be traced).
@@ -709,6 +736,12 @@ def _live_classes():
     mods += (_ide_diffview, _ide_imagediff)
     mods += (_hints,)
     mods += (_secrets,)
+    # 0.0.29 lane B — `CmdLineRefused` lives in `errors` (quiet_spawn re-exports it lazily, so the
+    # hook path never imports `errors`).
+    from mokata import errors as _errors
+    mods += (_errors,)
+    mods += (crg_nodes,)
+    mods += (baseline,)
     mods += (git_safe, merge_gate, merge_lock, merge_spec, merge_suite)
     live = {"MokataError": MokataError}
     for mod in mods:

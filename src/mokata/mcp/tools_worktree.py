@@ -163,7 +163,10 @@ def worktree_merge(
             # THE MCP consent check (trust + a human-minted record for this exact merge), redeemed
             # at the merge's commit point — never earlier, so a refusal before it burns nothing.
             return _consent(path, MG.TOOL, args, proposal_id, run_id=MG.APPROVAL_RUN)
-        out = MG.run_merge(path, proposal_id, redeem=through_consent)
+        # 0.0.29 R-B2: the seal is the cancel lever's (as the IDE's `seal=J.seal_current`): a
+        # cancel before it stops the merge with nothing changed; after it, the merge completes.
+        from ..knowledge import cancel as C
+        out = MG.run_merge(path, proposal_id, redeem=through_consent, seal=C.seal)
         return {"status": "committed" if out.merged else out.state, "committed": out.merged,
                 **out.to_dict()}
     if not target:

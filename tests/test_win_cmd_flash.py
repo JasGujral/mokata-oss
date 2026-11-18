@@ -136,7 +136,7 @@ class NoSpawnInTheIdeReachIsUnflagged(unittest.TestCase):
 class TheWiringNeverPicksAShim(unittest.TestCase):
     """`resolved_console_script` feeds the hooks, the statusLine and the MCP registration."""
 
-    def _resolve(self, which_hit, files=(), windows=True, scripts=None):
+    def _resolve(self, which_hit, files=(), scripts=None):
         from mokata import harness_setup as HS
         with tempfile.TemporaryDirectory() as d:
             for f in files:
@@ -144,7 +144,7 @@ class TheWiringNeverPicksAShim(unittest.TestCase):
             with mock.patch.object(HS.shutil, "which", return_value=which_hit), \
                  mock.patch.object(HS.sys, "executable", os.path.join(d, "python.exe")), \
                  mock.patch.object(HS.sysconfig, "get_path", return_value=scripts or d):
-                got = HS.resolved_console_script("mokata-hook", windows=windows)
+                got = HS.resolved_console_script("mokata-hook")
             return got, d
 
     def test_a_pyenv_shim_on_path_loses_to_the_real_exe(self):
@@ -162,9 +162,14 @@ class TheWiringNeverPicksAShim(unittest.TestCase):
         shim = r"C:\x\shims\mokata-hook.bat"
         self.assertEqual(self._resolve(shim)[0], shim, "a flashing hook beats a dead one")
 
-    def test_posix_is_unchanged(self):
-        self.assertEqual(self._resolve("/usr/local/bin/mokata-hook", files=["mokata-hook"],
-                                       windows=False)[0], "/usr/local/bin/mokata-hook")
+    def test_posix_takes_the_interpreters_own_install_before_path(self):
+        # 0.0.29 INIT-WIRES-FIRST-PATH-INSTALL: the install that ran setup beats a PATH hit
+        got, d = self._resolve("/usr/local/bin/mokata-hook", files=["mokata-hook"])
+        self.assertEqual(got, os.path.join(d, "mokata-hook"))
+
+    def test_posix_with_no_sibling_takes_the_path_hit(self):
+        self.assertEqual(self._resolve("/usr/local/bin/mokata-hook")[0],
+                         "/usr/local/bin/mokata-hook")
 
 
 class DoctorNamesAnAlreadyWiredShim(unittest.TestCase):

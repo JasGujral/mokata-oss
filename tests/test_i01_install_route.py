@@ -181,8 +181,10 @@ class TestOtherRoutes(unittest.TestCase):
         self.assertNotIn("code-review-graph", plan.argv)
         self.assertNotIn("mokata[embeddings]", plan.argv)
         self.assertEqual(1, len(plan.then))
-        self.assertEqual(plan.then[0][1:], ["inject", "--include-apps", "mokata", "code-review-graph"],
+        self.assertEqual(plan.then[0][1:5], ["inject", "--include-apps", "mokata", "code-review-graph"],
                          "CRG's command must reach PATH")
+        # 0.0.29 C1 (D15): every inject carries mokata's mcp ceiling into pip's own resolve.
+        self.assertTrue(all(c[-1].startswith("--pip-args=mcp") for c in [plan.argv, *plan.then]))
         self.assertIn(" && ", plan.display)
 
     def test_pipx_with_only_libraries_never_passes_include_apps(self):

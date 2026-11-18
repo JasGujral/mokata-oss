@@ -96,6 +96,9 @@ class InitPlan:
     # worktree's ledger to the main checkout) is shown rather than guessed. Empty when the
     # location cannot be resolved: an unknown location is its own state, not a silent omission.
     audit_dir: str = ""
+    # 0.0.29 C1 (#86) — the settings the profile itself switches on (`adoption_modes.
+    # PROFILE_SETTINGS`), already IN `manifest_data` and listed in the plan the human approves.
+    settings: List[str] = field(default_factory=list)
 
     def write_files(self) -> List[str]:
         os.makedirs(os.path.join(self.root, MOKATA_DIR), exist_ok=True)
@@ -172,6 +175,8 @@ def plan_init(
     detected = {tid: detector.is_present(tid, tdef) for tid, tdef in TOOL_CATALOG.items()}
 
     manifest_data = build_manifest_data(profile, __version__)
+    from .adoption_modes import apply_profile_settings
+    settings = apply_profile_settings(manifest_data, profile)
 
     mdir = os.path.join(root, MOKATA_DIR)
     manifest_path = os.path.join(mdir, MANIFEST_FILENAME)
@@ -204,11 +209,13 @@ def plan_init(
         gitignore_path=gitignore_path,
         overwrites=overwrites,
         audit_dir=audit_dir,
+        settings=settings,
     )
 
 
 def render_plan(plan: InitPlan) -> str:
     """Human-readable preview of what init will do (the human-gate surface)."""
+    from .adoption_modes import setup_command_for
     lines: List[str] = []
     lines.append(f"mokata init — profile '{plan.profile}'")
     lines.append("")
@@ -229,6 +236,15 @@ def render_plan(plan: InitPlan) -> str:
         lines.append("Capabilities: none (engine-only profile).")
     lines.append("")
 
+    if plan.settings:
+        lines.append("Settings this profile switches on (written into the manifest below):")
+        for line in plan.settings:
+            lines.append(f"  {line}")
+        lines.append("  (semantic recall degrades to the hashing floor until mokata[full] is "
+                     "installed; init downloads nothing and builds no index — the ~30 MB model is "
+                     f"fetched only by `{setup_command_for('full')}`, after you approve its "
+                     "plan)")
+        lines.append("")
     lines.append("Will write:")
     lines.append(f"  {plan.manifest_path}")
     if not os.path.exists(plan.constitution_path):

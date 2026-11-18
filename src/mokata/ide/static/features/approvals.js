@@ -273,7 +273,7 @@
       const card = [...host.querySelectorAll(".ap-card")].find((x) => x.dataset.pid === focusAt.pid);
       const ctl = card ? [...card.querySelectorAll("button, input")] : [];
       const to = ctl.includes(focusAt.el) ? focusAt.el : ctl.find((x) => x.textContent === focusAt.label) || ctl[0];
-      if (to) to.focus();
+      if (to) to.focus();   // a busy card is re-attached as the SAME input: the browser keeps its caret
       else if (!bar.hidden) $("wait-toggle").focus();     // its card went (decided elsewhere)
       else { const tab = document.querySelector('#screen-tabs [aria-selected="true"]'); if (tab) tab.focus(); }
     }

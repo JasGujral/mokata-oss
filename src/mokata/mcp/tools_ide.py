@@ -32,6 +32,7 @@ from .pagination import DEFAULT_PAGE_LIMIT, paginate
 from .registry import _tool
 from .tool_annotations import Field
 from .validation import ValidationError
+from ..plugin_runtime import localize_commands
 
 _PATH = "Repo root the tool operates on (default: the server's working directory)."
 
@@ -50,8 +51,8 @@ def _root(path: str) -> str:
 def _not_running(root: str) -> Dict[str, Any]:
     return {"status": NOT_RUNNING, "running": False, "repo": root,
             "message": "no mokata ide window is serving this repository",
-            "hint": f"run `{OPEN_CMD}` in a terminal (or `/mokata:review-window` in a session) — "
-                    "it opens the window, or re-focuses the open one"}
+            "hint": localize_commands(f"run `{OPEN_CMD}` in a terminal (or `/mokata:review-window` in a session) — "
+                    "it opens the window, or re-focuses the open one", root)}
 
 
 # Provenance (developers): ID.S3 (0.0.25 Lane ID3). Read-only: it pings 127.0.0.1 (bounded by
@@ -68,14 +69,29 @@ def ide_status(path: Annotated[str, Field(description=_PATH)] = ".") -> Dict[str
     Returns: `running`, local `url`, `demo` (true means labelled sample data), focused `session`, attached `pages`, and `bridge` hook status.
     Errors: none; an absent window is reported as `not_running`.
     """
+    from ..errors import RecordRefused
     from ..ide.bus import read_bridge
     from ..ide.launch import _call, running
+    from ..ide.server import read_record
     root = _root(path)
-    bridge = read_bridge(root)
+    refused = []                     # 0.0.29 H4: a record mokata refuses is named, never read as absent
+    try:
+        bridge = read_bridge(root)
+    except RecordRefused as exc:
+        bridge = None
+        refused.append(exc.line())
     bridge_view = {"wired": bool(bridge), "port": bridge["port"] if bridge else None}
+    try:
+        read_record(root)
+    except RecordRefused as exc:
+        refused.append(exc.line())
     rec = running(root)
     if not rec:
-        return {**_not_running(root), "bridge": bridge_view}
+        out = {**_not_running(root), "bridge": bridge_view}
+        if refused:
+            out["refused"] = refused
+            out["message"] = "a mokata ide record is refused: " + "; ".join(refused)
+        return out
     port = int(rec.get("port") or 0)
     pong = _call(port, str(rec.get("token") or ""), "/api/ping", timeout=IDE_CALL_TIMEOUT) or {}
     return {"status": "ok", "running": True, "repo": root, "url": f"http://127.0.0.1:{port}/",

@@ -39,6 +39,21 @@ import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SRC = os.path.join(ROOT, "src")
+# 0.0.29 D1: the ONE hermetic git door (this harness cannot import `_support`: no PyYAML in the e2e
+# job). Resolved relative to THIS file and APPENDED, never inserted at 0 — the way `_support` finds
+# its own sibling.
+_TESTS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _TESTS_DIR not in sys.path:
+    sys.path.append(_TESTS_DIR)
+import _hermetic_git  # noqa: E402
+
+#: PROCESS-WIDE, as `_support` does it: every host `GIT_*` is deleted from THIS process at import,
+#: so a flow or fixture that spawns git with no `env=` (`test_search_jobs_worktrees`,
+#: `_explain_fixture.git`) inherits a clean env, not the host's `GIT_DIR` / `GIT_CONFIG_*`
+#: (verifier D12 M-1; graded by `test_hermetic_git_env`). Names only — a value can carry a token.
+HERMETIC_GIT_SCRUBBED = _hermetic_git.host_git_names(os.environ)
+for _name in HERMETIC_GIT_SCRUBBED:
+    del os.environ[_name]
 REQUIRED = os.environ.get("MOKATA_REQUIRE_E2E") == "1"
 #: Which playwright browser the flows run in (`MOKATA_E2E_BROWSER`, default chromium). Validated here,
 #: at import: a name this harness does not know is an error naming it, never a quiet fallback to
@@ -106,7 +121,7 @@ WORKTREE = "feat-coupons"
 
 
 def _env():
-    env = dict(os.environ)
+    env = _hermetic_git.scrub(os.environ)
     env["PYTHONPATH"] = SRC + os.pathsep + env.get("PYTHONPATH", "")
     env.pop("CLAUDECODE", None)
     return env
@@ -114,7 +129,8 @@ def _env():
 
 def _git(cwd, *args):
     subprocess.run(["git", *args], cwd=cwd, check=True, stdin=subprocess.DEVNULL,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                   env=_hermetic_git.git_env())
 
 
 def _write(repo, rel, body, mode="w"):
@@ -274,6 +290,9 @@ class IdeFlow(unittest.TestCase):
 
     no_browser = None
     browser = pw = server = None
+    #: 0.0.29 D6: harness navigations in flight (the Firefox filter's term) and the evidence dir.
+    _navigating = 0
+    _evidence = None
 
     @classmethod
     def setUpClass(cls):
@@ -307,23 +326,74 @@ class IdeFlow(unittest.TestCase):
         except BaseException:
             cls._teardown()
             raise
-        cls.page = cls.browser.new_page(viewport={"width": 1400, "height": 900}, locale=cls.LOCALE)
-        cls.page.set_default_timeout(STEP_MS)
         cls.errors = []
         cls.requests = []
-        page = cls.page
-        page.on("console", lambda m: cls.errors.append("console.%s: %s" % (m.type, m.text))
-                if m.type == "error" and not cls._expected_console(m.text) else None)
-        page.on("pageerror", lambda e: cls.errors.append("pageerror: %s" % e))
-        page.on("request", lambda r: cls.requests.append((r.method, r.url)))
-        page.on("response", lambda r: cls.errors.append("HTTP %d %s" % (r.status, r.url))
-                if r.status >= 400 and r.status not in cls.EXPECTED_HTTP else None)
+        cls._contexts, cls._listened, cls._navigating = [], [], 0
+        cls._evidence = os.environ.get("MOKATA_E2E_EVIDENCE_DIR") or None
+        cls.context = cls.new_context(viewport={"width": 1400, "height": 900})
+        if cls._evidence:
+            # The action timeline, console and network — NO DOM snapshots. Measured on the mirror
+            # (0.0.29 D probe 43416006107, 3 rounds per cell): with snapshots every action is
+            # slower (explorer + image flows 31 s -> 45 s Chromium, 39 s -> 57 s Firefox, past the
+            # e2e legs' ceilings at suite scale) and it turned a latent race in
+            # `test_explorer_locator` test_16 red 3/3 in both browsers (0/3 without). The timeline
+            # alone is what named that race: an `until` true at 10124 ms, the row read at 10141 ms.
+            cls.context.tracing.start(snapshots=False, screenshots=False, sources=False)
+        cls.page = page = cls.context.new_page()
+        cls._listen(page)
+        cls.page.set_default_timeout(STEP_MS)
         page.goto(cls.server.url)
         got = page.evaluate("navigator.language")
         if cls.SELF_CHECK_LOCALE and got != cls.LOCALE:
             cls._teardown()
             raise AssertionError("the page's locale is %r, not the pinned %r (%s)"
                                  % (got, cls.LOCALE, BROWSER))
+
+    # -- 0.0.29 D6 `E2E-HARNESS-LOWS`: ONE door for a flow's browser contexts ---------------------
+
+    @classmethod
+    def new_context(cls, **kw):
+        """The one door for a browser context in a flow (`browser.new_context` / `new_page` direct
+        is a red: `test_d6_e2e_harness_doors.NoFlowBypassesTheContextDoor`). The locale is PINNED to the flow's
+        `LOCALE`, every page the context opens gets the flow's console / pageerror / request /
+        response listeners and the navigation counter, and the context is closed at teardown."""
+        kw = {**dict(locale=cls.LOCALE), **kw}           # pinned unless the flow names one
+        ctx = cls.browser.new_context(**kw)
+        cls._contexts.append(ctx)
+        ctx.on("page", cls._listen)
+        return ctx
+
+    @classmethod
+    def _listen(cls, page):
+        if any(p is page for p in cls._listened):       # `new_page` also fires the "page" event
+            return
+        cls._listened.append(page)
+        page.on("console", lambda m: cls.errors.append("console.%s: %s" % (m.type, m.text))
+                if m.type == "error" and not cls._expected_console(m.text) else None)
+        page.on("pageerror", lambda e: cls.errors.append("pageerror: %s" % e))
+        page.on("request", lambda r: cls.requests.append((r.method, r.url)))
+        page.on("response", lambda r: cls.errors.append("HTTP %d %s" % (r.status, r.url))
+                if r.status >= 400 and r.status not in cls.EXPECTED_HTTP else None)
+        for name in ("goto", "reload"):
+            setattr(page, name, cls._counted(page, getattr(page, name)))
+
+    @classmethod
+    def _counted(cls, page, nav):
+        """A navigation the HARNESS (a flow's step) starts: counted while in flight, plus one
+        round-trip to the page after it returns, so the console events it caused are dispatched
+        while it still counts. A navigation the PAGE starts is never counted."""
+        def run(*a, **kw):
+            cls._navigating += 1
+            try:
+                out = nav(*a, **kw)
+                try:
+                    page.evaluate("0")                     # the turn after: drain its events
+                except Exception:                          # noqa: BLE001 — a closed page drains nothing
+                    pass
+                return out
+            finally:
+                cls._navigating -= 1
+        return run
 
     @classmethod
     def _expected_console(cls, text):
@@ -334,11 +404,19 @@ class IdeFlow(unittest.TestCase):
         # aborts the page's open EventSource while the document is still loading. That is the
         # browser reporting its own abort of the live stream, not the page failing; the filter is
         # this one message about this one route, so a real stream failure still reds.
-        return (BROWSER == "firefox" and "/api/events" in text
+        # 0.0.29 D6: exempt ONLY while a harness-started navigation is in flight (`_counted`). The
+        # same message from a navigation the PAGE started is a product bug, and reds.
+        return (BROWSER == "firefox" and cls._navigating > 0 and "/api/events" in text
                 and "was interrupted while the page was loading" in text)
 
     @classmethod
     def _teardown(cls):
+        for ctx in getattr(cls, "_contexts", None) or ():
+            try:
+                ctx.close()
+            except Exception:                              # noqa: BLE001 — teardown never raises
+                pass
+        cls._contexts = []
         for name, stop in (("browser", lambda b: b.close()), ("pw", lambda p: p.stop())):
             obj = getattr(cls, name, None)
             if obj is not None:
@@ -359,6 +437,52 @@ class IdeFlow(unittest.TestCase):
     def setUp(self):
         if self.no_browser:
             self.skipTest(self.no_browser)
+        if self._evidence:
+            self.context.tracing.start_chunk(title=self.id())
+            self._errors_at, self._requests_at = len(self.errors), len(self.requests)
+
+    def tearDown(self):
+        if not getattr(self, "_evidence", None) or self.no_browser:
+            return
+        if self._failed():
+            self._keep_evidence()
+        else:
+            self.context.tracing.stop_chunk()
+
+    def _failed(self):
+        """True when THIS test has failed or errored so far (3.10: `_outcome.errors`; 3.11+: the
+        result's lists, which unittest fills as each part fails)."""
+        outcome = getattr(self, "_outcome", None)
+        if outcome is None:
+            return False
+        if hasattr(outcome, "errors"):
+            return any(exc is not None for _t, exc in outcome.errors)
+        result = getattr(outcome, "result", None)
+        return any(t is self for t, _tb in (getattr(result, "failures", []) +
+                                            getattr(result, "errors", [])))
+
+    def _keep_evidence(self):
+        """0.0.29 D6 `E2E-RACES-UNNAMED`: the NEXT once-only red names itself. Under
+        `$MOKATA_E2E_EVIDENCE_DIR` (CI sets it; a local run writes nothing): the Playwright trace of
+        this test, a screenshot, the console/page errors and the requests since the test began,
+        and the server's own output. ci.yml uploads the directory on failure."""
+        out = os.path.join(self._evidence, "%s-%s" % (BROWSER, self.id()))
+        os.makedirs(out, exist_ok=True)
+        for what, act in (
+                ("trace", lambda: self.context.tracing.stop_chunk(path=os.path.join(out, "trace.zip"))),
+                ("screenshot", lambda: self.page.screenshot(path=os.path.join(out, "screenshot.png"),
+                                                            full_page=True))):
+            try:
+                act()
+            except Exception as exc:                       # noqa: BLE001 — evidence never masks the red
+                with open(os.path.join(out, "%s.unavailable.txt" % what), "w", encoding="utf-8") as fh:
+                    fh.write("%s\n" % exc)
+        for name, lines in (
+                ("console.txt", self.errors[self._errors_at:]),
+                ("requests.txt", ["%s %s" % mu for mu in self.requests[self._requests_at:]]),
+                ("server.log", list(self.server.lines) if self.server else [])):
+            with open(os.path.join(out, name), "w", encoding="utf-8") as fh:
+                fh.write("\n".join(lines) + "\n")
 
     # -- helpers a flow uses ------------------------------------------------------------------
 

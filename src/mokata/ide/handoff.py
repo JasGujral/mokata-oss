@@ -122,13 +122,17 @@ def _ast(root: str, _args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _update(root: str, _args: Dict[str, Any]) -> Dict[str, Any]:
-    from ..quiet_spawn import hidden
+    from ..quiet_spawn import run_jobbed
     from ..update import plan_update
     plan = plan_update(root, check=False)
     if plan.argv is None:
         return {"ok": False, "message": f"run it yourself: {plan.command}"}
-    rc = subprocess.run(list(plan.argv), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL, check=False, **hidden()).returncode
+    # 0.0.29 R-B9: through the process door — no clock (an install takes what it takes), the whole
+    # pip/uv tree ended on exit.
+    try:
+        rc, _out, _err = run_jobbed(list(plan.argv), timeout=None)
+    except OSError as exc:
+        return {"ok": False, "message": f"the update could not run: {exc}"}
     return {"ok": rc == 0, "message": "mokata updated" if rc == 0 else f"update exited {rc}"}
 
 

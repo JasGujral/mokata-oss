@@ -25,6 +25,7 @@ from ._common import (
     _load_surface,
     _cli_ask,
 )
+from ..plugin_runtime import localize_commands
 
 
 def cmd_exec(args: argparse.Namespace) -> int:
@@ -66,8 +67,8 @@ def cmd_decompose(args: argparse.Namespace) -> int:
     surface = _load_surface(args.path)
     spec = load_emitted_spec(surface.state)
     if spec is None or not spec.criteria:
-        print("mokata decompose: no emitted spec with acceptance criteria — run "
-              "/mokata:spec first (the split is derived from the approved ACs).")
+        print(localize_commands("mokata decompose: no emitted spec with acceptance criteria — run "
+              "/mokata:spec first (the split is derived from the approved ACs).", surface.root))
         return 0
     layer = KnowledgeLayer.from_surface(surface)
     plan = decompose(spec, layer=layer)

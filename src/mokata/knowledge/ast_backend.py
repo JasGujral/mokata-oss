@@ -39,6 +39,7 @@ from ..repo_identity import tree_temp_local_dir as _tree_temp_local  # P31: one 
 import ast
 import json
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from collections.abc import Mapping
@@ -141,6 +142,10 @@ IMPORT_TYPE = "type"
 #: turns a silent shape mismatch into a re-parse. §7d — pre-1.0 this is a re-derive, not a
 #: migration: the cache is derived data and rebuilding it costs one walk.
 CACHE_SCHEMA_VERSION = 2
+
+#: 0.0.29 E — how often an asker waiting on another asker's index walk checks its own Cancel. A
+#: poll slice, never a deadline: the wait lasts as long as the walk does.
+_WAIT_SLICE_S = 0.25
 
 
 def parse_source(source: str) -> ast.AST:
@@ -322,6 +327,15 @@ class AstBackend(GraphBackend):
         # already owns — so the index costs two pointers per edge, not a new tuple per edge.
         self._rev_maps: Dict[str, Optional[Dict[str, list]]] = {}
         self._uncovered: Optional[List[str]] = None   # grep-corpus files the index does not hold
+        # 0.0.29 E (`AST-INDEX-NOT-SINGLE-FLIGHT`) — ONE walk per backend at a time. `_build` guards
+        # the build state below (never held across a walk, a wait or a `checkpoint()`);
+        # `_building` is the running build's Event (set when it ends, ok or not); `_epoch` counts
+        # `invalidate()` calls and `_built_epoch` is the epoch the loaded index's walk STARTED at —
+        # an asker is served by an index whose walk started at or after the asker arrived.
+        self._build = threading.Lock()
+        self._building: Optional[threading.Event] = None
+        self._epoch = 0
+        self._built_epoch = 0
 
     # --- public API ----------------------------------------------------------
     def query(self, kind: str, target: str, depth: int = 1) -> QueryResult:
@@ -442,11 +456,15 @@ class AstBackend(GraphBackend):
 
     def _uncovered_files(self) -> List[str]:
         """The grep floor's corpus MINUS what this index holds — computed once per index build."""
-        if self._uncovered is None:
+        out = self._uncovered
+        if out is None:
+            gen = self._generation
             held = self._edges or {}
-            self._uncovered = [ab for ab in self.grep._walk_files()
-                               if name_of(ab, self.root) not in held]
-        return self._uncovered
+            out = [ab for ab in self.grep._walk_files() if name_of(ab, self.root) not in held]
+            with self._build:                     # never stored over a newer index's reset
+                if self._generation == gen:
+                    self._uncovered = out
+        return out
 
     def _holds_definition(self, kind: str, target: str) -> bool:
         """D2 — whether this floor may certify a ZERO for `kind(target)`.
@@ -479,15 +497,54 @@ class AstBackend(GraphBackend):
         """GR.S4: drop the in-memory edge index so the NEXT query re-parses. The rebuild is
         (mtime,size)-keyed, so the re-parse touches only CHANGED files (cost ∝ churn) — this
         is the AST-floor half of the freshness rebuild. 0.0.25 K: the dropped index is kept as the
-        rebuild's cache, so an unchanged file costs a `stat`, not a JSON re-read of the cache."""
-        if self._edges is not None:
-            self._prior = (self._edges, self._stat)
-        self._edges = None
+        rebuild's cache, so an unchanged file costs a `stat`, not a JSON re-read of the cache.
+
+        0.0.29 E: during a running build this only bumps the epoch — the build in flight finishes
+        (its askers arrived before the change and are served by it) and the next asker walks again,
+        from that build's index (a stat per unchanged file)."""
+        with self._build:
+            self._epoch += 1
+            if self._building is None and self._edges is not None:
+                self._prior = (self._edges, self._stat)
+                self._edges = None
 
     def _ensure_index(self) -> None:
-        if self._edges is not None:
-            return
-        prior, self._prior = self._prior, None
+        """Load the index, at most ONE walk at a time (0.0.29 E, single flight). An asker that
+        finds a walk running waits for it — `checkpoint()` between wait slices, so ITS Cancel ends
+        its wait, never the walk — and is served by it. A walk that fails (cancelled, crashed)
+        wakes its waiters; the first to look again owns the next walk, which resumes from what the
+        failed one had parsed (`_partial`)."""
+        with self._build:
+            entry = self._epoch
+        while True:
+            with self._build:
+                if self._edges is not None and self._built_epoch >= entry:
+                    return
+                ev = self._building
+                if ev is None:
+                    ev = self._building = threading.Event()
+                    start = self._epoch
+                    if self._edges is not None:          # loaded, but invalidated since
+                        prior = (self._edges, self._stat)
+                    else:
+                        prior, self._prior = self._prior, None
+                    partial, self._partial = self._partial, {}
+                    owner = True
+                else:
+                    owner = False
+            if not owner:
+                while not ev.wait(_WAIT_SLICE_S):
+                    checkpoint()
+                continue
+            try:
+                self._build_index(prior, partial, start)
+            finally:
+                with self._build:
+                    self._building = None
+                ev.set()
+
+    def _build_index(self, prior, partial, start: int) -> None:
+        """One walk (the caller owns the build). Publishes the index under `_build` in one step."""
         disk: Dict[str, Any] = {} if prior is not None else self._load_cache()
         edges: Dict[str, FileEdges] = {}
         # (mtime, size) of EVERY source file seen — parsed or not. A file `ast.parse` rejects is
@@ -496,20 +553,23 @@ class AstBackend(GraphBackend):
         # files on the scale repo forced a 30 MB cache rewrite per build).
         stat: Dict[str, Tuple[float, int]] = {}
         unparsed: set = set()
-        partial, self._partial = self._partial, {}
         try:
             changed = self._walk_index(prior, disk, partial, edges, stat, unparsed)
         except BaseException:
-            # Cancelled, or a crash part-way: keep what was read for the next build (P35).
+            # Cancelled, or a crash part-way: keep what was read for the next build (P35), and the
+            # index it started from (so the next walk is still a stat per unchanged file).
             kept = dict(partial)
             kept.update({rel: (key, edges.get(rel)) for rel, key in stat.items()})
-            self._partial = kept
+            with self._build:
+                self._partial = kept
+                if prior is not None and self._edges is None and self._prior is None:
+                    self._prior = prior
             raise
         # A file that LEFT the repo is a change too (its entry must not survive in the cache).
         held_before = prior[1] if prior is not None else disk
         if not changed and len(held_before) != len(stat):
             changed = True
-        self._finish_index(edges, stat, changed)
+        self._finish_index(edges, stat, changed, start)
 
     def _walk_index(self, prior, disk, partial, edges, stat, unparsed) -> bool:
         changed = False
@@ -558,10 +618,13 @@ class AstBackend(GraphBackend):
             edges[rel] = fe
         return changed
 
-    def _finish_index(self, edges, stat, changed: bool) -> None:
-        self._edges, self._stat = edges, stat
-        self._generation += 1
-        self._build_reverse()
+    def _finish_index(self, edges, stat, changed: bool, start: Optional[int] = None) -> None:
+        with self._build:                         # one step: no reader sees a torn index
+            self._build_reverse()
+            self._stat = stat
+            self._generation += 1
+            self._built_epoch = self._epoch if start is None else start
+            self._edges = edges
         # 0.0.25 K — write ONLY WHEN SOMETHING CHANGED, and once. A cold reconcile used to rebuild
         # twice (cold walk → invalidate → rebuild) and rewrite the full ~30 MB cache both times,
         # ~28 s on the scale repo, the second time with byte-identical content.
@@ -582,7 +645,8 @@ class AstBackend(GraphBackend):
         """0.0.25 K — one reverse index (`callee` / `scope` / `def` / `base` / `import`), built in
         ONE pass over the edges in the SAME order the linear scans walked them (files in index
         order, edges in file order), so every answer is element-for-element the scan's answer."""
-        m = self._rev_maps.get(which)
+        maps = self._rev_maps                     # captured BEFORE the edges: a map built from
+        m = maps.get(which)                       # an older index lands in the older dict only
         if m is not None:
             return m
         m = {}
@@ -612,7 +676,7 @@ class AstBackend(GraphBackend):
                     bucket = m[k] = []
                 bucket.append(rel)
                 bucket.append(e)
-        self._rev_maps[which] = m
+        maps[which] = m
         return m
 
     def _hits(self, which: str, key: str):
@@ -849,19 +913,27 @@ class OverlayAstBackend(AstBackend):
         self._snap: Any = None
 
     def _ensure_index(self) -> None:
+        # 0.0.29 E — the main index is loaded OUTSIDE this backend's lock (its own single flight
+        # waits there, cancellably); its (edges, generation) pair is read in one step under the
+        # main's lock, and only the compare-and-merge runs under this one.
         self.main._ensure_index()
+        with self.main._build:
+            base, gen = self.main._edges or {}, self.main._generation
         snap = self.overlay.current()
-        key = (self.main._generation, snap.version)
-        if self._edges is not None and self._key == key:
-            return
-        self._snap, self._key = snap, key
-        self._edges = _MergedEdges(self.main._edges or {}, snap.changed, snap.edges)
-        self._generation += 1
-        self._build_reverse()
+        key = (gen, snap.version)
+        with self._build:
+            if self._edges is not None and self._key == key:
+                return
+            self._build_reverse()
+            self._snap, self._key = snap, key
+            self._generation += 1
+            self._edges = _MergedEdges(base, snap.changed, snap.edges)
 
     def invalidate(self) -> None:
         self.main.invalidate()
-        self._edges, self._key = None, None
+        with self._build:
+            self._epoch += 1
+            self._edges, self._key = None, None
 
     def _hits(self, which: str, key: str):
         snap = self._snap

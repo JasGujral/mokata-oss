@@ -153,6 +153,14 @@ def cmd_init(args: argparse.Namespace) -> int:
         print(f"\n{result.message}", file=sys.stderr)
         return 1
     _wire_or_disclose(args, args.profile)
+    if args.profile == "full":
+        mode = "full"     # the one profile whose plan wires dependencies (PROFILE_SETTINGS)
+        # 0.0.29 C1 verify M1 — `init --profile full` is a door #86 names: it ENDS in one of the
+        # two shapes (everything wired, or the one install line), after the harness lines, so
+        # "Restart Claude Code" is never the close of a repo still missing its packages. It
+        # fetches nothing (H1): the same no-fetch wiring as `init --mode full`.
+        outcome = _mode_dependencies(args, mode, fetch=False)
+        print(render_quickstart(mode, outcome))
     return 0
 
 
@@ -219,17 +227,26 @@ def _init_with_mode(args: argparse.Namespace, mode: str, profile: str) -> int:
         print(f"\n{result.message}", file=sys.stderr)
         return 1
 
-    outcome = _mode_dependencies(args, mode)
     # A2/F8 — `--mode` NEVER routes through the wizard (see this function's docstring), so it is
     # one of the paths that reached `init_repo` and wired nothing. It owes the same two halves as
     # the plain route, and it owes them BEFORE the quickstart: a quickstart that tells you to run
     # the pipeline, printed under a repo whose gate is off, is the seatbelt claim #28 is about.
     _wire_or_disclose(args, profile)
+    # 0.0.29 C1 verify — the #86 closing block is LAST (M1), and init fetches nothing (H1: the
+    # plan said "init downloads nothing"; the model and the indexes wait for first use or for
+    # `setup --mode`, the separate explicit yes).
+    outcome = _mode_dependencies(args, mode, fetch=False)
     print(render_quickstart(mode, outcome))
     return 0
 
 
-def _mode_dependencies(args: argparse.Namespace, mode: str):
+def _mode_plan_text(args: argparse.Namespace, mode: str) -> str:
+    """What `_mode_dependencies(args, mode)` will do on this yes, for the plan (0.0.29 C1 M3)."""
+    from ..adoption_modes import plan_mode, render_mode_plan
+    return render_mode_plan(mode, plan_mode(args.path, mode))
+
+
+def _mode_dependencies(args: argparse.Namespace, mode: str, *, fetch: bool = True):
     """The mode's optional dependencies: detect, wire, warm — then the outcome table. Shared by
     `init --mode` and `setup <harness> --mode` so the two routes cannot drift.
 
@@ -240,7 +257,7 @@ def _mode_dependencies(args: argparse.Namespace, mode: str):
     if getattr(args, "plugin", False):
         from ..adoption_modes import plugin_setup_command
         rerun = plugin_setup_command(mode)
-    outcome = wire_mode(args.path, mode, rerun=rerun)
+    outcome = wire_mode(args.path, mode, rerun=rerun, fetch=fetch)
     table = render_outcome(outcome)
     if table:
         print(table)
@@ -298,6 +315,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
             ide_bridge=getattr(args, "ide_bridge", False),
             http_gates=getattr(args, "http_gates", False),
             skills_only=getattr(args, "skills_only", False),
+            # 0.0.29 C1 re-verify M3 — the plan the human approves states the mode's actions too:
+            # the embedder setting, the CRG pin, the ~30 MB model download and the index builds.
+            extra_plan=_mode_plan_text(args, mode) if mode else "",
         )
     except SetupError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -331,6 +351,15 @@ def _setup_plugin_route(args: argparse.Namespace, mode: Optional[str], profile: 
             return 1
     if not _plugin_worktree_settings(args):
         return 1
+    # 0.0.29 C1 re-verify M3 — the mode's own actions (a model download among them) are shown and
+    # approved before they run: a yes to the worktree rows was not a yes to a download.
+    text = _mode_plan_text(args, mode)
+    if text:
+        print(text)
+        from ..harness_setup import _default_confirm
+        if not args.yes and not _default_confirm("\nGo ahead? [y/N] "):
+            print("mode wiring NOT run (declined).", file=sys.stderr)
+            return 1
     outcome = _mode_dependencies(args, mode)
     print(render_quickstart(mode, outcome))
     return 0

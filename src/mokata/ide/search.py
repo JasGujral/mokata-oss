@@ -187,6 +187,11 @@ def _rg(root: str, q: str, mode: str, case: bool, allowed: set,
         return False
     cmd = [exe, "--json", "--no-ignore", "--no-config", "--sort", "path",
            "--max-columns", str(MAX_LINE_CHARS * 2), "--max-columns-preview"]
+    if pg.offset == 0:
+        # 0.0.29 E (`IDE-TS-SEARCH-FIRST-HIT-2P2S`): rg block-buffers a pipe, so a hit it found
+        # early reached us at EOF (1.9 s on 136k files). Line-buffered, the first page's first hit
+        # arrives when rg writes it. A deeper page skips hits first: nothing to show early there.
+        cmd.append("--line-buffered")
     cmd.append("--case-sensitive" if case else "--ignore-case")
     if mode != "regex":
         cmd.append("--fixed-strings")
@@ -244,12 +249,16 @@ def _rg(root: str, q: str, mode: str, case: bool, allowed: set,
                 spans = [[s["start"], s["end"]] for s in d.get("submatches", [])]
                 if pat is not None:                   # rg spans are BYTE offsets; re-derive chars
                     spans = _spans(pat, line) or spans
+                had = pg.kept
                 if not pg.add(rel, {"line": d.get("line_number") or 0,
                                     "text": line[:MAX_LINE_CHARS],
                                     "spans": [s for s in spans if s[0] < MAX_LINE_CHARS]}):
                     stopped = True
                     break                             # page full + one more seen: stop rg
-                if pg.kept and time.monotonic() - last_batch >= PARTIAL_EVERY_S:
+                # 0.0.29 E: the page's FIRST hit is published the moment it is kept (no timer
+                # gates it); after that, every PARTIAL_EVERY_S.
+                first = pg.kept and not had
+                if first or (pg.kept and time.monotonic() - last_batch >= PARTIAL_EVERY_S):
                     last_batch = time.monotonic()
                     report(done=pg.offset + pg.kept, unit="hits",
                            note=f"{pg.offset + pg.kept} hit(s) so far",
@@ -385,8 +394,7 @@ def _model_dir(allow_network: bool) -> str:
     the `HF_HUB_OFFLINE` variable: huggingface_hub reads that once, at import, so setting it for
     the first (offline) load made the user's later "fetch" silently offline too — measured, not
     guessed, when this path was first run against the real extra."""
-    from ..memory.embed import (MODEL2VEC_MODEL, MODEL_FETCH_TIMEOUT_S, ModelUnavailable,
-                                cached_model_dir)
+    from ..memory.embed import MODEL2VEC_MODEL, ModelUnavailable, cached_model_dir
     local = cached_model_dir(MODEL2VEC_MODEL)
     if local:                     # the files model2vec reads are here: never a network call
         return local
@@ -394,17 +402,10 @@ def _model_dir(allow_network: bool) -> str:
         raise ModelUnavailable(f"model2vec model '{MODEL2VEC_MODEL}' could not be found on this "
                                "machine (loaded offline): its model files are not in the "
                                "Hugging Face cache")
-    try:
-        from huggingface_hub import snapshot_download
-    except ImportError as exc:
-        raise ModelUnavailable(f"model2vec's model fetcher is not installed ({exc})") from exc
-    try:
-        return snapshot_download(MODEL2VEC_MODEL, local_files_only=not allow_network,
-                                 etag_timeout=MODEL_FETCH_TIMEOUT_S)
-    except Exception as exc:  # noqa: BLE001 — the hub's error tree is optional-extra territory
-        how = "fetched" if allow_network else "found on this machine (loaded offline)"
-        raise ModelUnavailable(f"model2vec model '{MODEL2VEC_MODEL}' could not be {how}: "
-                               f"{type(exc).__name__}: {str(exc)[:200]}") from exc
+    # 0.0.29 C1 re-verify M2: the network goes through memory's ONE door; `allow_network` is the
+    # user's explicit fetch click (`fetch_model`), the consent that door asks for.
+    from ..memory.embed import download_model
+    return download_model(MODEL2VEC_MODEL, consent=True)
 
 
 def _load_embedder(allow_network: bool = False) -> Any:

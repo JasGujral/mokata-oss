@@ -55,7 +55,12 @@ _CTX = mp.get_context("spawn")
 #: more. v0.0.26 measured 150-320 on Linux (real primitive) and never acquired in the model.
 WRITER_CYCLES_BOUND = 2
 #: Real processes on a shared CI runner: scheduling noise, not policy, can add a cycle or two.
-REAL_WRITER_CYCLES_BOUND = 5
+#: `fcntl` (Linux/macOS, measured): 5. `msvcrt` (Windows) is DERIVED, not typed (0.0.29 D5, ruling
+#: D-Q3): 30 runs x 10 proposals on the mirror's windows-latest (probe run 43413469846,
+#: `0029-evidence/D/windows-writer-bound-x30.txt`) sat out 1 write 294 times, 2 three times, and
+#: 25 / 38 / 47 once each — observed max 47, bound = max x 2 = 94. v0.0.26's starvation was 140+
+#: (Linux 150-320, Windows ~20 s), so the firing control still discriminates.
+REAL_WRITER_CYCLES_BOUND = 94 if os.name == "nt" else 5
 
 
 class _NoQueuePrimitive:

@@ -47,7 +47,7 @@ from __future__ import annotations
 
 from .degrade import FAILURE_UNREACHABLE
 
-__all__ = ["ControlSignal", "MokataError", "DegradedCapability", "failure_class_of"]
+__all__ = ["ControlSignal", "MokataError", "DegradedCapability", "RecordRefused", "failure_class_of"]
 
 
 class ControlSignal(Exception):
@@ -87,6 +87,30 @@ class MokataError(Exception):
     """
 
     failure_class: str = ""
+
+
+class CmdLineRefused(MokataError, OSError):
+    """The Windows cmd guard refused a command line (`quiet_spawn.win_shell_line`). An `OSError`, so every
+    door caller's "could not start" path still holds; its own type so a caller that must never
+    be silent about it (the wrapped statusLine, `mokata doctor` — ruling D16) can tell it apart
+    from an ordinary failure to start. A HARD error (`MokataError`, `failure_class` ""): a refusal
+    by name, not a degrade — nothing falls back, the line simply does not run."""
+
+
+class RecordRefused(MokataError):
+    """A private-set record EXISTS but mokata refuses it (0.0.29 H4, `PRIVATE-READ-ABSENT-VS-REFUSED`):
+    owned by someone else, readable or writable by others, or not a regular file this user can open.
+    `winacl.read_private` raises it so "no record" (None) and "a record mokata refuses" are different
+    answers. A HARD error (`failure_class` ""): nothing falls back to the refused bytes. `line()` is
+    what a surface says: the file, the reason, and the command that repairs it."""
+
+    def __init__(self, path: str, reason: str) -> None:
+        super().__init__(f"{path} refused ({reason})")
+        self.path = path
+        self.reason = reason
+
+    def line(self) -> str:
+        return f"{self.path} refused ({self.reason}) — run `mokata doctor --fix`"
 
 
 class DegradedCapability(MokataError):

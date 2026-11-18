@@ -213,7 +213,12 @@
   function observe(node) {
     if (typeof IntersectionObserver === "undefined") { onSeen(node); return; }
     if (!seen) seen = new IntersectionObserver((entries) => {
-      for (const e of entries) if (e.isIntersecting) onSeen(e.target);
+      for (const e of entries) {
+        // a block re-armed after a cancelled ask (`_rearm`) is asked again only once it has LEFT
+        // the view and come back — never by the observer's first report while it is still shown
+        if (!e.isIntersecting) { e.target._rearm = false; continue; }
+        if (!e.target._rearm) onSeen(e.target);
+      }
     }, { rootMargin: "600px 0px" });
     seen.observe(node);
   }
@@ -315,6 +320,20 @@
     if (strip && r && !r.error) strip.done();
     if (!r || r.error || !Array.isArray(r.pairs)) {
       if (strip && r && r.cancelled) strip.done();
+      if (r && r.cancelled) {
+        // 0.0.29 E (IDE-DIFF-CONTEXT-LOWS): a cancelled batch is asked again when its blocks next
+        // come into view — the blocks that showed one of its pairs are no longer "asked"
+        const mine = new Set(pairs.flat());
+        for (const tb of t.querySelectorAll("tbody")) {
+          if (!tb._asked || !tb._rows) continue;
+          for (let q = tb._from; q < tb._to; q++) {
+            const row = tb._rows[q];
+            if ([row.u, row.l, row.r].some((x) => x !== undefined && x !== null && mine.has(x))) {
+              tb._asked = false; tb._rearm = true; observe(tb); break;
+            }
+          }
+        }
+      }
       if (r && r.error && !r.cancelled && t.isConnected) {
         MK.regionSay(jobsBox(t), "error", MK.whyFailed(r, "mark the changed words"), { replace: true });
       }
@@ -569,6 +588,36 @@
     announce(ok ? `Copied ${text} (${side === "old" ? "before" : "after"} the change)` : `Could not copy ${text}`);
     dv.lastCite = text;
   }
+  // 0.0.29 E (DIFF-UNIFIED-CITE-O-ROWS): the rows of `t` a selection's ranges run over, walked from
+  // each range's first row to its last — O(selected rows), never every row of a 100k-row table.
+  function rowOf(node, t) {
+    const e = node && (node.nodeType === 1 ? node : node.parentElement);
+    const tr = e && e.closest ? e.closest("tr") : null;
+    return tr && t.contains(tr) ? tr : null;
+  }
+  function nextRow(tr, t) {
+    if (tr.nextElementSibling) return tr.nextElementSibling;
+    for (let b = tr.parentElement.nextElementSibling; b; b = b.nextElementSibling) {
+      if (b.firstElementChild && t.contains(b)) return b.firstElementChild;
+    }
+    return null;
+  }
+  function rowsOfRanges(t, ranges) {
+    const out = new Set();
+    for (const r of ranges) {
+      let tr = rowOf(r.startContainer, t) || t.querySelector("tr");
+      const end = rowOf(r.endContainer, t);
+      while (tr) {
+        out.add(tr);
+        dv.visits++;                 // counted as the Split copy's walk is (`test_diff_copy_scale`)
+        if (tr === end) break;
+        tr = nextRow(tr, t);
+      }
+    }
+    return out;
+  }
+  dv.rowsOfRanges = rowsOfRanges;
+
   // The selection's cite: its side, and the first..last line numbers of that side it covers.
   function selectionCite() {
     const s = window.getSelection && window.getSelection();
@@ -594,7 +643,7 @@
     const nums = [];
     const ranges = [];
     for (let i = 0; i < s.rangeCount; i++) ranges.push(s.getRangeAt(i));
-    for (const tr of t.querySelectorAll("tr")) {
+    for (const tr of rowsOfRanges(t, ranges)) {
       if (!s.containsNode(tr, true)) continue;
       // A browser snaps a selection that ends on text it will not select (the other side of a Split
       // view) to the START of the next row: that row is touched, not selected - its line is not cited.

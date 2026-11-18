@@ -121,6 +121,57 @@ def is_git(root: str) -> bool:
     return code == 0 and out.strip() == "true"
 
 
+_C_ESCAPES = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13, '"': 34, "\\": 92}
+
+
+def _unquote_c(s: str) -> str:
+    """0.0.29 E (`IDE-DIFF-CONTEXT-LOWS`) — a path as git prints it, made the real path. git
+    C-quotes a path holding a byte outside printable ASCII, `"`, `\\` or a control character:
+    `"a/\\303\\251.txt"` is `a/é.txt` (octal escapes are the UTF-8 BYTES). Unquoted: as is."""
+    if len(s) < 2 or not (s.startswith('"') and s.endswith('"')):
+        return s
+    body, out, i = s[1:-1], bytearray(), 0
+    while i < len(body):
+        ch = body[i]
+        if ch != "\\" or i + 1 >= len(body):
+            out += ch.encode("utf-8")
+            i += 1
+            continue
+        nxt = body[i + 1]
+        if nxt in "01234567" and i + 4 <= len(body) and all(c in "01234567"
+                                                          for c in body[i + 1:i + 4]):
+            out.append(int(body[i + 1:i + 4], 8) & 0xFF)
+            i += 4
+        elif nxt in _C_ESCAPES:
+            out.append(_C_ESCAPES[nxt])
+            i += 2
+        else:
+            out += ("\\" + nxt).encode("utf-8")
+            i += 2
+    return out.decode("utf-8", errors="replace")
+
+
+def _header_paths(rest: str) -> Optional[tuple]:
+    """`a/<old> b/<new>` after `diff --git `, either side possibly C-quoted."""
+    if rest.startswith('"'):
+        end = 1
+        while end < len(rest):
+            if rest[end] == "\\":
+                end += 2
+                continue
+            if rest[end] == '"':
+                break
+            end += 1
+        old, tail = rest[:end + 1], rest[end + 2:]
+        return _unquote_c(old), _unquote_c(tail)
+    if rest.endswith('"'):
+        at = rest.rfind(' "')
+        if at > 0:
+            return rest[:at], _unquote_c(rest[at + 1:])
+    m = re.match(r"(a/.*) (b/.*)$", rest)
+    return (m.group(1), m.group(2)) if m else None
+
+
 def parse_unified(text: str) -> List[FileDiff]:
     """`git diff` output → FileDiffs. Tolerant: an unexpected line is skipped, never raised on.
 
@@ -136,8 +187,8 @@ def parse_unified(text: str) -> List[FileDiff]:
         raws.pop()
     for raw in raws:
         if raw.startswith("diff --git "):
-            m = re.match(r"diff --git a/(.*) b/(.*)$", raw)
-            path = m.group(2) if m else raw[11:]
+            got = _header_paths(raw[11:])
+            path = got[1][2:] if got and got[1].startswith("b/") else raw[11:]
             cur = FileDiff(path=path, status="modified")
             files.append(cur)
             hunk = None
@@ -149,7 +200,7 @@ def parse_unified(text: str) -> List[FileDiff]:
         elif raw.startswith("deleted file mode"):
             cur.status = "deleted"
         elif raw.startswith("rename from "):
-            cur.old_path, cur.status = raw[12:], "renamed"
+            cur.old_path, cur.status = _unquote_c(raw[12:]), "renamed"
         elif raw.startswith("Binary files ") or raw.startswith("GIT binary patch"):
             cur.binary = True
         elif raw.startswith("@@"):
@@ -241,35 +292,43 @@ def text_diff(path: str, old: Optional[str], new: Optional[str], status: str = "
 
 
 def open_contained(root: str, rel: str):
-    """Open the file as it is now — CONTAINED: resolved through `snapshots.rel_path` (a symlink out
-    of the repo is outside, and is not read), opened without following a final symlink and without
-    blocking (a FIFO swapped in never hangs the reader), confirmed a regular file on the OPEN
-    descriptor, and re-checked inside the repo after opening (a path swapped between check and open
-    is caught). Returns `(binary file object, stat)` — the caller closes it — or None when not
-    readable, or "" when gone. Shared by `_read_text` and the windowed highlighter (0.0.26 P1)."""
-    import stat as _stat
-    from ..repo_paths import path_of
+    """Open the file as it is now — CONTAINED (0.0.29 H2; round 2: one pin, no second sampling). The FIRST
+    thing done is `fs_identity.pin_root`: the private stores' identities (`.git` stat-ed first), the root's
+    identity and the root's DESCRIPTOR, held to the end. The decision is then made ONCE, on one resolved name:
+    `pin.rel` finds the repo-relative name of `realpath(native)` under the PINNED root identity (outside,
+    dangling, the root itself -> None), and the private rule (`is_private_name` + `aliases_private`) is asked
+    of that name. The bytes come only from `fs_identity.open_beneath(..., pin=pin)`, which walks from the
+    pinned descriptor without following a link and judges every directory and the file against the PINNED
+    stores — so a `.git` renamed to another name after the pin, a directory, file, hard link or root swapped
+    in after the decision, is never read, and a FIFO never blocks. Returns `(binary file object, stat)` — the
+    caller closes it — or None when not readable, or "" when gone. Shared by `_read_text` and the windowed
+    highlighter (0.0.26 P1)."""
+    from .. import fs_identity as FI
+    from ..repo_paths import aliases_private, path_of
     native = path_of(root, rel)
-    if not os.path.lexists(native):
-        return ""                                   # gone: the "now" side of a delete
-    if S.rel_path(root, rel) is None:
-        return None
-    ab = os.path.realpath(native)
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) \
-        | getattr(os, "O_BINARY", 0)
-    try:
-        fd = os.open(ab, flags)
-    except OSError:
+    pin = FI.pin_root(root)
+    if pin is None:
+        return None if os.path.lexists(native) else ""
+    with pin:
+        if not os.path.lexists(native):
+            return ""                               # gone: the "now" side of a delete
+        try:
+            got = pin.rel(native)
+            if got is None:
+                return None
+            below, tail, _deepest = got
+            if tail or not below:
+                return None
+            name = "/".join(below)
+            if is_private_name(name) or aliases_private(pin.real_root, name):
+                return None
+        except (OSError, ValueError, TypeError):
+            return None                             # undecidable: fail closed
+        fd = FI.open_beneath(root, below, pin=pin)
+    if fd is None:
         return None
     try:
         st = os.fstat(fd)
-        if not _stat.S_ISREG(st.st_mode) or S.rel_path(root, ab) is None:
-            os.close(fd)
-            return None
-        now = os.stat(ab, follow_symlinks=False)
-        if (now.st_dev, now.st_ino) != (st.st_dev, st.st_ino):
-            os.close(fd)
-            return None                             # swapped after the open
         return os.fdopen(fd, "rb"), st
     except OSError:
         try:

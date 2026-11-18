@@ -162,6 +162,58 @@ class ModelUnavailable(DegradedCapability):
     failure_class = FAILURE_ENGINE
 
 
+class ModelNotCached(ModelUnavailable):
+    """0.0.29 C1 (re-verify M2): the extra is installed, the model is NOT on this machine, and the
+    caller did not pass fetch consent — so nothing was fetched. The message names the ONE command
+    that fetches it (`setup --mode full`, whose approved plan states the download)."""
+
+
+#: The model files' source, as the setup plan states it before the human approves the fetch.
+MODEL_SOURCE = "huggingface.co"
+MODEL_SIZE = "~30 MB"
+
+
+def not_cached_message(model_name: str = "") -> str:
+    model_name = model_name or MODEL2VEC_MODEL
+    return (f"the semantic model '{model_name}' is not downloaded on this machine — mokata never "
+            f"fetches it unasked; `{_setup_full()}` fetches it ({MODEL_SIZE} from {MODEL_SOURCE}) "
+            f"after you approve its plan. Recall uses keyword ranking meanwhile")
+
+
+def download_model(model_name: str, *, consent: bool) -> str:
+    """THE ONLY DOOR to the network for the semantic model (0.0.29 C1 re-verify M2). Returns the
+    local directory holding `model_name`'s files: from the cache when they are there (no network),
+    else fetched — ONLY with `consent=True`, which exactly two call sites pass, each after a human
+    yes (`setup --mode full`'s approved plan, and the IDE's explicit fetch click). Every other
+    caller gets `ModelNotCached`, and degrades. `tests/test_c1_verify_round.py` pins the set."""
+    local = cached_model_dir(model_name)
+    if local:
+        return local
+    if not consent:
+        raise ModelNotCached(not_cached_message(model_name))
+    return _hub_fetch(model_name)
+
+
+def _hub_fetch(model_name: str) -> str:
+    """The network call itself: model2vec's files from the Hugging Face hub, BOUNDED, into the
+    hub's own cache. Only `download_model(consent=True)` reaches this."""
+    try:
+        from huggingface_hub import hf_hub_download  # type: ignore
+    except ImportError as exc:
+        raise ModelUnavailable(f"model2vec's model fetcher is not installed ({exc})") from exc
+    dirs = set()
+    try:
+        for name in MODEL_FILES:
+            dirs.add(os.path.dirname(hf_hub_download(model_name, name,
+                                                     etag_timeout=MODEL_FETCH_TIMEOUT_S)))
+    except Exception as exc:  # noqa: BLE001 — the hub's error tree is optional-extra territory
+        raise ModelUnavailable(f"model2vec model '{model_name}' could not be fetched: "
+                               f"{type(exc).__name__}: {str(exc)[:200]}") from exc
+    if len(dirs) != 1:
+        raise ModelUnavailable(f"model2vec model '{model_name}' fetched into {len(dirs)} directories")
+    return dirs.pop()
+
+
 class Model2VecEmbedder:
     """The blessed extra: model2vec STATIC embeddings (numpy-only, no torch, CPU-fast).
 
@@ -176,10 +228,12 @@ class Model2VecEmbedder:
 
     embedder_id = MODEL2VEC_ID
 
-    def __init__(self, model_name: str = MODEL2VEC_MODEL, model: object = None) -> None:
+    def __init__(self, model_name: str = MODEL2VEC_MODEL, model: object = None, *,
+                 fetch_consent: bool = False) -> None:
         self.model_name = model_name
         self.embedder_id = f"model2vec:{model_name}"
-        self._model = model if model is not None else _load_model2vec(model_name)
+        self._model = model if model is not None else _load_model2vec(
+            model_name, fetch_consent=fetch_consent)
         # The dim is the MODEL's, never a mokata constant: stamping a wrong dim is how a re-embed
         # migration would silently no-op. Probe it once, from a real encode.
         probe = self._encode_one("dimension probe")
@@ -212,7 +266,7 @@ class Model2VecEmbedder:
         return arr / norms
 
 
-def _load_model2vec(model_name: str):
+def _load_model2vec(model_name: str, *, fetch_consent: bool = False):
     """Import model2vec and load the static model, BOUNDED and offline-first.
 
     Two failures live here and they are different: the extra is not installed (ImportError — the
@@ -239,10 +293,11 @@ def _load_model2vec(model_name: str):
         # local cache is loaded from disk with no network call. Measured: with the model cached and
         # a proxy refusing huggingface.co, the online-first load failed and `setup --mode full`
         # reported the semantic tier BLOCKED on a machine that had everything it needed.
-        local = cached_model_dir(model_name)
-        if local:
-            return StaticModel.from_pretrained(local)
-        return StaticModel.from_pretrained(model_name)
+        # 0.0.29 C1 re-verify M2 — and NEVER a fetch without consent: the files come through the
+        # one door (`download_model`), and `from_pretrained` is only ever handed a LOCAL directory.
+        return StaticModel.from_pretrained(download_model(model_name, consent=fetch_consent))
+    except ModelUnavailable:
+        raise
     except Exception as exc:
         # DEGRADE_CLEAN, and deliberately broad with no narrow class to name: the raisables span
         # huggingface_hub's error tree, `requests`' transport errors, `safetensors`, and plain
@@ -383,8 +438,9 @@ def detect_embedder(*, degrade_out: Optional[Callable[[str], None]] = None
                 fallback="semantic recall is TOKEN-HASH (hashing) — the model could not be loaded",
                 # 0.0.26 L1: name WHY (offline / proxy / TLS / timeout) — the package is there,
                 # so reinstalling it is never the fix.
-                fix=(model_fetch_cause(str(exc)) + "; then re-run `" + _setup_full()
-                   + "` (it warms the model once)"),
+                fix=(str(exc) if isinstance(exc, ModelNotCached) else
+                     model_fetch_cause(str(exc)) + "; then re-run `" + _setup_full()
+                     + "` (it warms the model once)"),
                 detail=str(exc), out=degrade_out)
         return HashingEmbedder()
 

@@ -279,6 +279,30 @@ class TheTableViewWorks(H.IdeFlow):
             p.evaluate("() => { MK.api = window.__realApi; window.__tbFailed.destroy(); document.getElementById('tb-failed').remove(); }")
         self.assertIn("not counted: the count failed: the disk went away", meta)
 
+    def test_4c3_a_count_of_a_file_that_changed_while_it_was_counted_is_never_a_total(self):
+        """0.0.29 E (F8): the server re-stats the file after counting; a changed file answers
+        `complete: false` with `changed`, and the page says that — never a row total."""
+        p = self.page
+        p.evaluate("""() => {
+            const host = document.createElement("div"); host.id = "tb-changed"; host.style.height = "260px"; document.body.append(host);
+            window.__realApi = MK.api;
+            MK.api = async (u, b, o) => {
+              if (u.startsWith("/api/table/count")) return { state: "ok", rows: null, complete: false,
+                changed: "the file changed while it was counted — count it again" };
+              const d = await window.__realApi(u, b, o);
+              if (u.startsWith("/api/table/info")) { d.complete = false; d.rows = null; d.estimate = 5000; }
+              if (u.startsWith("/api/table/rows")) { d.total = null; d.complete = false; }
+              return d;
+            };
+            window.__tbChanged = MK.table.mount(host, "data/people.csv");
+        }""")
+        try:
+            meta = self.text_until("#tb-changed .tb-meta", "not counted", "the count's outcome")
+        finally:
+            p.evaluate("() => { MK.api = window.__realApi; window.__tbChanged.destroy(); document.getElementById('tb-changed').remove(); }")
+        self.assertIn("not counted: the file changed while it was counted — count it again", meta)
+        self.assertNotIn("null rows", meta)
+
     def test_4e_a_real_count_cancelled_says_so_and_the_drawers_retry_counts_it_into_this_table(self):
         """D-Q2 end to end: Cancel a real count, read its own words, press the drawer's Retry (the
         control the words name), and the OPEN table - no reopen, no new button - says the count."""

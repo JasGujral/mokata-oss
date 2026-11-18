@@ -28,6 +28,7 @@ Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """
 
 from __future__ import annotations
+from ..plugin_runtime import localize_commands
 
 import os
 import re
@@ -165,10 +166,10 @@ def tests_panel(root: str, run_id: str, *, page: Any = "", per: Any = "", ac: st
             "last_suite": suite, "rerun_note": RERUN_NOTE}
     if malformed:
         from ..engine.spec_gate import SPEC_MALFORMED_MESSAGE
-        return {**base, "state": "malformed", "note": SPEC_MALFORMED_MESSAGE}
+        return {**base, "state": "malformed", "note": localize_commands(SPEC_MALFORMED_MESSAGE, root)}
     if spec is None:
         from ..cli_commands.spec import NO_SPEC_RECOVERY
-        return {**base, "state": "no-spec", "note": NO_SPEC_RECOVERY}
+        return {**base, "state": "no-spec", "note": localize_commands(NO_SPEC_RECOVERY, root)}
 
     def tests_of(acid: str) -> List[Tuple[str, str]]:
         planned = set(rec["planned"].get(acid, ()))
@@ -777,7 +778,7 @@ def spec_diff(root: str, run_id: str, a: Any = "", b: Any = "") -> Dict[str, Any
     cur = SH.current_version(store)
     if not cur:
         from ..cli_commands.spec import NO_SPEC_RECOVERY
-        return {"sample": False, "run": rid, "state": "no-spec", "note": NO_SPEC_RECOVERY,
+        return {"sample": False, "run": rid, "state": "no-spec", "note": localize_commands(NO_SPEC_RECOVERY, root),
                 "current_version": 0}
     vb = _page_arg(b, "b", cur)
     va = _page_arg(a, "a", max(1, vb - 1))

@@ -34,13 +34,13 @@ class RealSource:
         if not sid:
             return out
         from .. import session_worktrees as SW
+        from ..fs_identity import same_entry
         b = SW.binding(self.root, sid)
         path = str(b.get("path") or "") if b else ""
         if not path:
             return out
         top = worktree_toplevel(path) if os.path.isdir(path) else None
-        if top is None or os.path.realpath(canonical_repo_root(top)) != \
-                os.path.realpath(canonical_repo_root(self.root)):
+        if top is None or not same_entry(canonical_repo_root(top), canonical_repo_root(self.root)):
             out["note"] = (f"session {sid[:8]}'s worktree {path} no longer exists — the code views "
                            "read the main checkout")
             return out

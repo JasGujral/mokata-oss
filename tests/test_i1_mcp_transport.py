@@ -402,7 +402,7 @@ class TestI1_StderrSilentPerRequest(unittest.TestCase):
     `log_level` INFO — one "Processing request" line per call."""
 
     WRITES = (("remember", {"subject": "s", "value": "v"}),
-              ("config_set", {"key": "settings.mcp.test_timeout_seconds", "value": "90"}),
+              ("config_set", {"key": "settings.baseline.silence_seconds", "value": "900"}),
               ("spec_emit", {"title": "t", "criteria": [{"id": "AC1", "text": "x"}],
                              "tests": [{"name": "test_x", "ac_ids": ["AC1"]}],
                              "tasks": [{"id": "T1", "title": "x", "ac_ids": ["AC1"],
@@ -630,6 +630,69 @@ class TestI1_ParityWithCliTwin(unittest.TestCase):
         cli_doc = self._cli(repo, "doctor", "--path", repo)
         self.assertEqual(cli_doc.returncode == 0, bool(doctor.get("ok")),
                          f"MCP doctor ok={doctor.get('ok')} but CLI exited {cli_doc.returncode}")
+
+
+class TestB29_WindowsPromptEnv(unittest.TestCase):
+    """0.0.29 lane B, cell #46 (inj on every OS; the git marker run is the Windows probe): on
+    Windows a child git can still open a GUI prompt — Git Credential Manager, or an `SSH_ASKPASS`
+    program — so the server turns GCM's off and drops `SSH_ASKPASS` (`GIT_ASKPASS=` cannot be
+    represented there: an empty value reaches the child as unset)."""
+
+    def test_windows_children_get_no_askpass_and_no_gcm_prompt(self):
+        from unittest import mock
+        from mokata.mcp import server as MS
+        with mock.patch.dict(os.environ, {"SSH_ASKPASS": "/x/askpass-marker"}, clear=False):
+            MS._disable_child_prompts(nt=True)
+            self.assertNotIn("SSH_ASKPASS", os.environ)
+            self.assertEqual("never", os.environ.get("GCM_INTERACTIVE"))
+            self.assertEqual("0", os.environ.get("GIT_TERMINAL_PROMPT"))
+
+    def test_posix_keeps_its_askpass_rules(self):
+        from unittest import mock
+        from mokata.mcp import server as MS
+        with mock.patch.dict(os.environ, {"SSH_ASKPASS": "/x/askpass-marker"}, clear=False):
+            os.environ.pop("GCM_INTERACTIVE", None)
+            MS._disable_child_prompts(nt=False)
+            self.assertEqual("/x/askpass-marker", os.environ.get("SSH_ASKPASS"))
+            self.assertEqual("never", os.environ.get("SSH_ASKPASS_REQUIRE"))
+            self.assertNotIn("GCM_INTERACTIVE", os.environ)
+
+
+_FD0_CLOSED = r"""
+import os, sys
+sys.path.insert(0, {src!r})
+os.close(0)
+from mokata.mcp import server as MS
+
+def fake_run(server, rpc_in=None, rpc_out=None):
+    print("POLLUTE-print")
+    os.write(1, b"POLLUTE-fd\n")
+    if rpc_out is not None:
+        os.write(rpc_out, b"PARKED\n")
+    else:
+        os.write(1, b"UNPARKED\n")
+
+MS._run_stdio = fake_run
+MS._public_module().build_server = lambda: None
+sys.exit(MS.main(["--path", {repo!r}]))
+"""
+
+
+@_mcp_sdk.requires_mcp_sdk
+class TestB29_ClosedStdinStillParksStdout(unittest.TestCase):
+    """0.0.29 lane B, cell #48 (attack M1): a server started with fd 0 CLOSED still parks fd 1 —
+    a stray write is stderr noise, never JSON-RPC garbage."""
+
+    def test_fd1_is_parked_when_fd0_is_closed(self):
+        repo = tempfile.mkdtemp(prefix="b29-fd0-")
+        self.addCleanup(_rm, repo)
+        src = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
+        r = subprocess.run([sys.executable, "-c", _FD0_CLOSED.format(src=src, repo=repo)],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600)
+        self.assertEqual(0, r.returncode, r.stderr.decode("utf-8", "replace"))
+        self.assertEqual(b"PARKED\n", r.stdout, r.stderr.decode("utf-8", "replace"))
+        self.assertIn(b"POLLUTE-print", r.stderr)
+        self.assertIn(b"POLLUTE-fd", r.stderr)
 
 
 if __name__ == "__main__":

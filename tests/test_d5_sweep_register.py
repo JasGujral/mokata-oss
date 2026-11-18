@@ -245,6 +245,11 @@ _register("memory/embed.py", {
     "cached_model_dir": (SUPPRESS_OK,
         "0.0.26 cut — a per-file cache LOOKUP in an optional extra's error tree; any fault reads "
         "\"not cached\" and the caller fetches (or says it is offline), never a wrong model."),
+    "_hub_fetch": (DEGRADES_LOUD,
+        "0.0.29 C1 re-verify — the ONE network call for the semantic model (reached only with fetch "
+        "consent): the hub's error tree is optional-extra territory, so any fault is re-raised as "
+        "`ModelUnavailable` with its cause, which setup's row and the IDE's Meaning pane both show "
+        "with the fix. Nothing is swallowed."),
     "_load_model2vec": (DEGRADE_CLEAN,
         "The blessed extra's model load. BROAD by necessity — the raisables span huggingface_hub's "
         "error tree, `requests`' transport errors, `safetensors`, and plain OSError on a corrupt "
@@ -443,6 +448,15 @@ _register("govern/gate.py", {
         "a failure here loses a counts-only row and changes no verdict."),
 })
 _register("mcp/server.py", {
+    "_offloop.handler": (SUPPRESS_OK,
+        "0.0.29 lane B round 5 (round-4 verifier M2) — `except BaseException: <drop the receipt>; "
+        "ticket.undelivered(); raise`: a request that was cancelled or failed before its response "
+        "was written leaves its finished write's result for the next identical call, then "
+        "RE-RAISES unchanged. Cleanup-then-re-raise; nothing is swallowed."),
+    "_delivering._send_response": (SUPPRESS_OK,
+        "0.0.29 lane B round 5 (M2) — the SDK's response write, wrapped: if the write raises, the "
+        "request's result was not delivered (`ticket.undelivered()`), and the exception is "
+        "RE-RAISED unchanged. Cleanup-then-re-raise."),
     "_emit_tool_call": (SUPPRESS_OK,
         "one derived event per served MCP dispatch. It runs after the tool's outcome is decided "
         "and returns nothing to the caller, so it cannot change what the agent is told. The "
@@ -614,6 +628,10 @@ _register("hook_cli.py", {
         "here, the badge is disabled, or the engine is unavailable. Never raises.' The harness "
         "re-runs the statusline on every state change, so a notice from here would be the noisiest "
         "line in mokata, and nothing a user relies on for correctness is lost."),
+    "statusline_refused_text": (DEGRADE_CLEAN,
+        "0.0.29 D16 — the visible refusal marker's `/doctor` command is spelled for the repo the "
+        "statusLine payload names; an unparsable payload falls back to no root, and the marker "
+        "still shows (with the plugin-route spelling). Never a blank."),
     "_run_wrapped": (SUPPRESS_OK,
         "Best-effort composition of the USER's OWN pre-existing statusLine command. Documented: any "
         "failure/timeout degrades to '' so mokata's badge still renders and the harness never "
@@ -1450,6 +1468,27 @@ _register("knowledge/crg_build.py", {
         "repo would read as 'building' until the stale-lock reaper noticed."),
 })
 
+_register("ide/lsp.py", {
+    "Server._watch_exit": (DEGRADES_LOUD,
+        "0.0.29 A (verify-A r3 R3-4; re-classified at verify-A r4 R4-1, which found the round-4 "
+        "DEGRADE_CLEAN claim wrong: the inner handler `continue`d for ever, unlogged and unpublished). "
+        "Rebuilt at verify-A r5 against the whole matrix. Every handler SAYS the failure with its "
+        "exception TYPE in the printed line (`_watch_say`, keyed per kind and per server, so the "
+        "give-up and a second server's failure print too). The OS wait failing (anything) falls back "
+        "to the poll; the poll retries an OSError at most WATCH_POLL_MISSES times and anything else "
+        "not at all; a raising publish is said. The PUBLISH is a `finally` (no BaseException "
+        "handler): the end is published exactly once with `exit_unknown` (exit_code None, never our "
+        "-9) whatever is in flight, and a BaseException then propagates. Forced row by row: "
+        "`test_g_lsp_call_hierarchy.WatcherPublishes` + `GoneOnce`."),
+    "_watch_say": (SUPPRESS_OK,
+        "0.0.29 A (verify-A r5 R5-1) — the exit watcher's notice is BEST-EFFORT by design: a notice "
+        "that raises (a closed stderr under an IDE whose reader went away) must never decide whether "
+        "the end is published, so it is dropped here. The failure is not secret: the published end "
+        "carries the same type and message in its reason (`exit code unknown: …`), in `status()` "
+        "and the `crashed` event. A KeyboardInterrupt is not caught: the watcher's finally "
+        "publishes first. Forced: `WatcherPublishes.test_a_raising_notice_*`."),
+})
+
 _register("ide/nav.py", {
     "_Symbols._build": (DEGRADES_LOUD,
         "0.0.26 P35 — the ⌘P symbol build records ANY failure as the index's `error` (⌘P then says "
@@ -1459,10 +1498,10 @@ _register("ide/nav.py", {
 })
 
 _register("knowledge/ast_backend.py", {
-    "AstBackend._ensure_index": (SUPPRESS_OK,
+    "AstBackend._build_index": (SUPPRESS_OK,
         "0.0.26 P35 — cleanup-then-re-raise: a build that was CANCELLED (or died) part-way keeps the "
         "files it already parsed in memory (`_partial`) so the next build resumes instead of "
-        "re-parsing from zero (audit A #4), then re-raises unchanged. BaseException because the "
+        "re-parsing from zero (audit A #4), then re-raises unchanged. 0.0.29 E: moved from `_ensure_index` to `_build_index` (single flight: only the owner builds). BaseException because the "
         "job's Cancel is a ControlSignal, which is exactly the case to keep the work for."),
 })
 
@@ -1661,10 +1700,6 @@ _register("ide/features/tabs.py", {
         "`live.notes` instead of reading as 'nothing waiting'."),
 })
 _register("ide/search.py", {
-    "_model_dir": (DEGRADES_LOUD,
-        "0.0.23 C2 — the embeddings model cannot be found offline or fetched: re-raised as "
-        "`ModelUnavailable`, which the Meaning pane shows as `semantic unavailable` with the reason "
-        "and the fix. Never a silent fall to word search or to the hashing embedder."),
     "_load_embedder": (DEGRADES_LOUD,
         "0.0.23 C2 — a local model that will not load is re-raised as `ModelUnavailable`, shown the "
         "same way; nothing is cached, so the next request tries again."),
@@ -2633,15 +2668,42 @@ _register("winacl.py", {
         "0.0.28 C1 — a private directory that could not be verified (or a Ctrl-C) is removed, then the "
         "exception is re-raised unchanged."),
 })
-_register("baseline.py", {
-    "mcp_test_timeout": (DEGRADE_CLEAN,
-        "0.0.24 (OSS #82) — an unreadable `settings.mcp.test_timeout_seconds` falls back to the "
-        "documented default budget; the setting is an optional raise, never a reason to fail."),
+_register("prompt.py", {
+    "_console_answers": (DEGRADE_CLEAN,
+        "0.0.29 H-a xplat — deliberate fail-CLOSED on Windows: a stream whose console cannot be asked "
+        "(no kernel32, no handle, GetConsoleMode refused) is NOT a terminal, so the caller refuses "
+        "with its own named message (`doctor --fix` says it needs an answer typed at a terminal)."),
 })
-_register("mcp/server.py", {
-    "_manifest_or_none": (DEGRADE_CLEAN,
-        "0.0.24 — reading the repo's budget setting before the call: an unloadable repo gets the "
-        "default budget, and the tool body itself then reports the real problem in-band."),
+# 0.0.29 lane G — `mcp_test_timeout` (baseline.py) and `_manifest_or_none` (mcp/server.py) were
+# DELETED with the MCP baseline's wall clock (#82-1b); their rows went with them. The five below are
+# the lane's new broad handlers.
+_register("baseline.py", {
+    "silence_seconds": (DEGRADE_CLEAN,
+        "0.0.29 lane G — an unreadable `settings.baseline.silence_seconds` is the documented default "
+        "(600 s); a knob is an optional change, never a reason a baseline cannot run."),
+})
+_register("govern/doctor.py", {
+    "unused_settings_findings": (SUPPRESS_OK,
+        "0.0.29 lane G (G-Q1) — informational: a manifest that cannot be read is reported by "
+        "doctor's own manifest checks; this finding only names a left-over key, so it says nothing."),
+})
+_register("merge_gate.py", {
+    "_spec_leg": (DEGRADE_CLEAN,
+        "0.0.29 lane G — the decision store cannot be fingerprinted at judge time: the block says "
+        "the spec legs' validity is UNKNOWN (with the exception's TYPE), which never passes. Broad "
+        "because a store read can fail in any backend's way; every failure BLOCKS."),
+})
+_register("merge_spec.py", {
+    "run_spec_leg": (DEGRADE_CLEAN,
+        "0.0.29 lane G — the decision store cannot be fingerprinted before the leg: re-raised as "
+        "`SpecLegError` naming the exception's TYPE; nothing is recorded, so the merge blocks."),
+})
+_register("session_save.py", {
+    "save_session": (DEGRADES_LOUD,
+        "0.0.29 lane G (#83) — each write (approach, progress, checkpoint) and the read-back is "
+        "attempted on its own; a failure is RECORDED in `SaveResult.failed`, never swallowed: the "
+        "reply is `ok:false`, `status:degraded`, names what is not on record and its remedy, and "
+        "`SessionFlow` warns once. Broad so one failed write cannot abort the approval's."),
 })
 _register("brainstorm_impact.py", {
     "compute_impact": (DEGRADE_CLEAN,
@@ -3136,7 +3198,17 @@ _register("quiet_spawn.py", {
         "built after the process exists (a kqueue at EMFILE, a Ctrl+C), the door ends what it started "
         "(closes the job, kills the group/process through signal_group/signal_pid, reaps it) and "
         "re-raises unchanged. BaseException because an interrupt there must not leave an orphan "
-        "either. Nothing is swallowed."),
+        "either. Nothing is swallowed. 0.0.29 lane B: the Popen→registration window is also a "
+        "critical window — a second Ctrl-C delivered as it closes ends the tree just registered "
+        "(`tree.close()`) and re-raises."),
+    "_hold": (SUPPRESS_OK,
+        "0.0.29 lane B (moved out of `spawn_jobbed`, same rule): cleanup-then-re-raise — a start "
+        "the lifeline shim refused, a Jobbed that cannot be built, a Job Object Windows refuses: "
+        "the door ends and reaps what it started, then re-raises unchanged. Nothing is swallowed."),
+    "end_all": (SUPPRESS_OK,
+        "0.0.29 lane B R-B6 — the MCP server's exit path ends every door tree it still holds. One "
+        "tree's close failing (`close` itself never raises; this is the backstop) must not leave "
+        "the next tree running: an exit path ends what it can."),
 })
 
 class TestTheSweepIsComplete(unittest.TestCase):

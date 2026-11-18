@@ -40,6 +40,7 @@ import subprocess
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+from .fs_identity import refuse_if_inside, same_entry
 from .repo_identity import canonical_repo_root, worktree_toplevel
 
 POLICY_ALWAYS = "always"
@@ -286,7 +287,7 @@ def bind(root: str, session_id: Optional[str], cwd: Optional[str],
         ts = time.time() if now is None else float(now)
         real = os.path.realpath(tree)
         cur = binding(root, session_id)
-        if cur and os.path.realpath(str(cur.get("path", ""))) == real:
+        if cur and same_entry(str(cur.get("path", "")), real):
             if ts - float(cur.get("last_seen") or 0) < SEEN_REFRESH_SECS:
                 return cur
             cur = dict(cur, last_seen=ts)
@@ -323,14 +324,6 @@ def carry_binding(root: str, session_id: str, from_session: str) -> bool:
 
 
 # ================================================================================ the gate
-def _inside(path: str, top: str) -> bool:
-    try:
-        rp, rt = os.path.normcase(os.path.realpath(path)), os.path.normcase(os.path.realpath(top))
-    except (OSError, ValueError):
-        return False
-    return rp == rt or rp.startswith(rt.rstrip(os.sep) + os.sep)
-
-
 def _session_run(root: str, session_id: Optional[str]) -> Optional[str]:
     try:
         from .run_intent import CLAIM_BOUND, session_claim
@@ -370,7 +363,8 @@ def entry_refusal(root: str, cwd: str, session_id: Optional[str], targets: List[
         hit = None
         for t in targets:
             ab = t if os.path.isabs(t) else os.path.join(cwd, t)
-            if _inside(ab, main) and worktree_toplevel(os.path.dirname(ab) or ab) is None:
+            # REFUSE side (the gate): inside the main checkout on disk OR by any fold-equal spelling.
+            if refuse_if_inside(ab, main) and worktree_toplevel(os.path.dirname(ab) or ab) is None:
                 hit = ab
                 break
         if hit is None:

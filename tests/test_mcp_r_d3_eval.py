@@ -237,8 +237,8 @@ def q01_annotations(fx: Fixture, specs: List[Tuple[str, str, Callable[..., Any]]
 
 # `baseline` is the ONE response_format tool the eval does not measure here: it SHELLS OUT to the
 # project's test suite (doc 88 root cause 1), which is neither deterministic nor free. Its
-# concise/detailed split is guarded by the D1b suite and its bound by D0's `BASELINE_MCP_TIMEOUT_
-# SECONDS` pin — this eval measures the seven whose measurement costs nothing.
+# concise/detailed split is guarded by the D1b suite and its reply budget by `test_g_mcp_long_suite`
+# (0.0.29 lane G) — this eval measures the seven whose measurement costs nothing.
 _RF_EXCLUDED = {"baseline"}
 
 
@@ -729,12 +729,11 @@ class TestExitCriteriaSweep(unittest.TestCase):
             elif t.kind == "read":
                 self.assertFalse(ann["readOnlyHint"], t.name)
 
-    def test_exit_baseline_never_blocks_stdio_past_120s(self):
-        from mokata.baseline import BASELINE_MCP_TIMEOUT_SECONDS
-        self.assertLessEqual(BASELINE_MCP_TIMEOUT_SECONDS, 120)
-        self.assertEqual(MS._mcp_timeout_for("baseline"), BASELINE_MCP_TIMEOUT_SECONDS)
-        self.assertLess(MS._mcp_timeout_for("baseline"), 600,
-                        "the terminal bound must not be what the MCP surface waits on")
+    def test_exit_baseline_never_blocks_stdio_past_the_reply_budget(self):
+        # 0.0.29 lane G (#82-1b): `baseline` answers within the ONE reply budget every tool has
+        # (a longer suite answers `running` and runs on); it has no budget of its own.
+        self.assertEqual(MS._mcp_timeout_for("baseline"), MS.MCP_SURFACE_TIMEOUT_SECONDS)
+        self.assertLessEqual(MS._mcp_timeout_for("baseline"), 120)
 
     def test_exit_list_tools_have_bounded_defaults(self):
         """No list tool may DEFAULT to unbounded — the `audit limit=0` default was the bug."""

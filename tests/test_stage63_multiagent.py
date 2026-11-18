@@ -252,7 +252,7 @@ class TestClaudeByteCompatible(unittest.TestCase):
         # MARKER expanded to the one canonical block — so it equals expand_grounding(template),
         # not a raw byte-copy. (A template without the marker is unchanged, so this still catches
         # any other drift.)
-        from mokata.harness_setup import _templates_dir
+        from mokata.harness_setup import _localized, _templates_dir
         from mokata.skills import expand_grounding
         d = tempfile.mkdtemp()
         setup_harness("claude", root=d, with_hooks=False, assume_yes=True, out=silent)
@@ -261,7 +261,8 @@ class TestClaudeByteCompatible(unittest.TestCase):
         for name in ("brainstorm.md", "ship.md", "spec.md"):
             with open(os.path.join(cdir, name), encoding="utf-8") as a, \
                     open(os.path.join(tdir, name), encoding="utf-8") as b:
-                self.assertEqual(a.read(), expand_grounding(b.read()),
+                # 0.0.29 C1: then localized to the commands this install writes.
+                self.assertEqual(a.read(), _localized("claude", expand_grounding(b.read())),
                                  f"claude {name} drifted from its (expanded) template")
 
     def test_claude_still_wires_hooks_and_mcp(self):

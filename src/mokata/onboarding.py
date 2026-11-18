@@ -42,6 +42,7 @@ from .profiles import (
 )
 from .notify import announce_prompt
 from .prompt import read_yes_no
+from .plugin_runtime import localize_commands, slash_command
 
 # The OPT-IN integrations the wizard asks about — the external/MCP providers beyond the
 # always-on local floors (grep / ripgrep / sqlite). Each maps to a capability; a present one is
@@ -81,7 +82,7 @@ def _fresh_next_step() -> Optional[str]:
     sug = suggest(SuggestionContext(starting_fresh=True))
     if not sug:
         return None
-    return f"`/mokata:{sug[0].skill}` — {sug[0].reason}"
+    return localize_commands(f"`/mokata:{sug[0].skill}` — {sug[0].reason}", None)
 
 
 def unknown_command_message(token: str, *, known: Any, initialized: bool) -> str:
@@ -530,8 +531,8 @@ def run_reconfigure(root: str = ".", *, ask: Optional[Callable] = None,
     detector = detector or Detector()
 
     if not Surface.is_initialized(root):
-        emit("mokata reconfigure: this repo isn't initialized yet — run `mokata init` "
-             "(or `/mokata:setup`) first.")
+        emit(localize_commands("mokata reconfigure: this repo isn't initialized yet — run `mokata init` "
+             "(or `/mokata:setup`) first.", root))
         return ReconfigureResult(initialized=False, changed=False, profile="",
                                  aborted=True, message="not initialized")
 
@@ -598,6 +599,13 @@ def run_reconfigure(root: str = ".", *, ask: Optional[Callable] = None,
         harness_action=plan.harness_action, message="ok")
 
 
+def _plugin_is_installed(home: Optional[str]) -> bool:
+    """Is the mokata plugin present? A detection that fails answers False, so the wizard asks as
+    it always did: never silently wires, never silently skips."""
+    from .plugin_runtime import plugin_installed     # never raises: a failure reads False
+    return plugin_installed(home=home)
+
+
 def run_wizard(root: str = ".", *, ask: Optional[Callable] = None,
                confirm: Optional[Callable[[str], bool]] = None,
                out: Optional[Callable[[str], None]] = None,
@@ -647,7 +655,15 @@ def run_wizard(root: str = ".", *, ask: Optional[Callable] = None,
                 recommended.append(INSTALL_HINTS[tid])
 
     # 3. wire the harness? (commands + MCP + hooks)
-    if wire_harness is None:
+    if wire_harness is None and _plugin_is_installed(home):
+        # WIZARD-WIRES-BESIDE-PLUGIN: the plugin already supplies the commands, MCP server and
+        # hooks; wiring the project too would run every hook twice. Not asked, said once. An
+        # explicit `wire_harness=True` is an explicit request and skips this branch.
+        wire_harness = False
+        emit("mokata plugin is installed — it already supplies the slash commands, MCP server "
+             "and hooks; wiring the project too would run every hook twice. "
+             "(Use `mokata setup claude` to wire anyway.)")
+    elif wire_harness is None:
         wire_harness = (not assume_yes) and gate(
             f"Wire mokata into {harness} (slash commands + MCP + hooks)?")
 
@@ -718,7 +734,7 @@ def _wizard_next_step() -> str:
     """The single next step after setup — the front of the pipeline (compose.suggest, L6)."""
     sug = suggest(SuggestionContext(starting_fresh=True))
     skill = sug[0].skill if sug else "brainstorm"
-    return f"/mokata:{skill}"
+    return slash_command(skill)
 
 
 # ----------------------------------------------------------------- "here's what I just did"
@@ -813,6 +829,6 @@ def build_tour(*, ascii_only: bool = False) -> str:
             "(read-only; nothing here touches your repo)\n")
     body = "\n\n".join([_tour_graph_demo(ascii_only), _tour_memory_demo(ascii_only),
                         _tour_gate_demo(ascii_only)])
-    tail = ("\n\nThat's it. Next: `mokata init` (or `/mokata:setup`) to wire mokata into THIS "
-            "repo, then `/mokata:brainstorm` your first change.")
+    tail = (localize_commands("\n\nThat's it. Next: `mokata init` (or `/mokata:setup`) to wire mokata into THIS "
+            "repo, then `/mokata:brainstorm` your first change.", None))
     return head + "\n" + body + tail

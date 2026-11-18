@@ -171,14 +171,17 @@ class StdioMcpClient:
                  timeout: float = 60.0) -> None:
         self.argv, self.cwd, self.env, self.timeout = list(argv), cwd, env, timeout
         self.proc: Optional[subprocess.Popen] = None
+        self.tree: Any = None                               # 0.0.29: a process-door tree
         self._q: "queue.Queue[Optional[bytes]]" = queue.Queue()
         self._id = 0
         self.server_info: Dict[str, Any] = {}
 
     def start(self) -> Dict[str, Any]:
-        self.proc = subprocess.Popen(self.argv, cwd=self.cwd, env=self.env,
-                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=subprocess.PIPE)
+        from .quiet_spawn import spawn_jobbed
+        self.tree = spawn_jobbed(self.argv, cwd=self.cwd, env=self.env,
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE)
+        self.proc = self.tree.proc
         threading.Thread(target=self._pump, daemon=True).start()
         threading.Thread(target=self._drain_stderr, daemon=True).start()
         res = self.request("initialize", {
@@ -268,16 +271,16 @@ class StdioMcpClient:
             raise McpClientError(f"tool {name} answered non-JSON: {_text(res)[:200]}")
 
     def close(self) -> None:
-        if self.proc is None:
+        if self.proc is None or self.tree is None:
             return
         try:
             if self.proc.stdin:
-                self.proc.stdin.close()
-            self.proc.wait(timeout=10)
+                self.proc.stdin.close()            # EOF: the server's own orderly exit
+            self.tree.wait_exit(10)
         except (OSError, subprocess.TimeoutExpired):
-            self.proc.kill()
-            self.proc.wait(timeout=10)
+            pass
         finally:
+            self.tree.close()                      # ends what is left of the tree, reaps once
             for s in (self.proc.stdout, self.proc.stderr):
                 try:
                     if s:
@@ -328,10 +331,10 @@ def default_approver(env: Optional[Dict[str, str]] = None) -> Callable[[str, str
     SEPARATE process the MCP session does not drive. In the contract suite this stands in for the
     human — it shows the server needs a mint it cannot make itself, not that a human was there."""
     def _approve(root: str, proposal_id: str) -> bool:
-        cp = subprocess.run([sys.executable, "-m", "mokata", "approve", proposal_id, "--yes",
-                             "--path", root], cwd=root, env=env, capture_output=True,
-                            text=True, timeout=120)
-        return cp.returncode == 0
+        from .quiet_spawn import run_jobbed
+        rc, _out, _err = run_jobbed([sys.executable, "-m", "mokata", "approve", proposal_id,
+                                     "--yes", "--path", root], cwd=root, env=env, timeout=120)
+        return rc == 0
     return _approve
 
 

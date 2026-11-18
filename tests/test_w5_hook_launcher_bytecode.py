@@ -166,6 +166,25 @@ class TheHookLauncherCachesBytecodeInMokatasUserCache(_CopiedPlugin):
         self._run(_support.bash_argv(self.launcher, *CLEAN), env)
 
 
+@unittest.skipUnless(_support.BASH, _support.NO_BASH)
+class TheCliLauncherFollowsTheSameRule(_CopiedPlugin):
+    """0.0.29 F (W5-MCP-LAUNCHER-BYTECODE, the CLI half) — `mokata-launch`, the plugin's CLI shim
+    (slash commands run the CLI through it), had no cache rule: every call recompiled
+    (`python -m mokata --version` 261 ms vs 74 cached). force: before, nothing under the prefix."""
+
+    def test_one_cli_run_leaves_bytecode_under_the_prefix_and_none_beside(self):
+        cli = os.path.join(self.src, "mokata", "hooks", "mokata-launch")
+        _home, env = self._env("cli", rung="pinned", XDG_CACHE_HOME=os.path.join(self.t, "cli-xdg"))
+        res = subprocess.run(_support.bash_argv(cli, "--version"), env=env, cwd=self.t,
+                             stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                             timeout=120, **hidden())
+        self.assertEqual(0, res.returncode, res.stderr)
+        self.assertIn(mokata.__version__, res.stdout)
+        pyc = _pyc(os.path.join(self.t, "cli-xdg", "mokata", "pycache"))
+        self.assertTrue(any(p.split(os.sep)[-2:] == ["mokata", "__init__.cpython-%d%d.pyc"
+                                                     % sys.version_info[:2]] for p in pyc), pyc[:5])
+
+
 @unittest.skipUnless(os.name == "nt", "the .cmd launcher runs on Windows only")
 class TheCmdLauncherCachesBytecodeInMokatasUserCache(_CopiedPlugin):
     """`mokata-hook-launch.cmd` — the same contract for anyone who runs it from cmd.exe."""

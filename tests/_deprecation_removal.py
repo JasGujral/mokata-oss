@@ -578,6 +578,11 @@ SRC_RELEASE_EXEMPT = {
     # in the same note does not.
     # 0.0.23 E3 — the parity.py exemption (`FR-WT-2/3 (`clean`/`remove`, 0.0.17)`) is GONE, not
     # re-pointed: WT.S3 shipped clean/remove and the note no longer names a release.
+    #
+    # 0.0.29 C1 (D15) — a THIRD-PARTY pin, not a mokata release: code-review-graph is pinned to
+    # the release proven on mokata's mcp<2 (`test_c_crg_holds_mcp` holds it equal to pyproject's
+    # `full` extra). The module is in scope only because it talks about deprecation elsewhere.
+    "mokata/knowledge/graph_adopt.py": frozenset({"code-review-graph==2.4.0"}),
 }
 
 # The modules this function does NOT own, each because something else grades it STRICTLY MORE than

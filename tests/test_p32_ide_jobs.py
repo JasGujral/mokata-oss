@@ -224,17 +224,35 @@ class ThePageHearsWhileItRunsAndNothingAtIdle(_Reg):
         self.assertIsNone(self.reg._ticker, "the ticker outlived the last job")
 
     def test_the_event_carries_the_contract_fields(self):
-        job = self.reg.start("index.meaning", {"root": "/r"}, lambda: (
-            C.report(done=3, total=10, unit="files", note="embedding"), time.sleep(0.6))[1],
-            label="meaning index", scope="r")
-        job.finished.wait(5)
+        # 0.0.29 D5 `CI-TIMING-LOWS-0028`: the ETA is read from a job HELD running at n/N (an event
+        # the test controls), not from whichever event a 0.6 s sleep happened to leave first — on a
+        # slow runner that was the FINAL event, where `eta` is None by rule (`jobs.py` computes it
+        # only while RUNNING/PARTIAL). Both halves of the rule are graded; no sleep decides it.
+        reported, release = threading.Event(), threading.Event()
+
+        def body():
+            C.report(done=3, total=10, unit="files", note="embedding")
+            reported.set()
+            release.wait()
+
+        job = self.reg.start("index.meaning", {"root": "/r"}, body, label="meaning index", scope="r")
+        self.addCleanup(release.set)
+        self.assertTrue(reported.wait(120), "the job never reported progress")
+        held = job.snapshot()
+        self.assertEqual("running", held["state"])
+        self.assertEqual((3, 10, "files"), (held["done"], held["total"], held["unit"]))
+        self.assertIsNotNone(held["eta"], "n/N known while running: an ETA is given")
+        release.set()
+        self.assertTrue(job.finished.wait(120), "the released job never finished")
         seen = [e for _t, e in self.events if e["id"] == job.id]
         mid = next(e for e in seen if e.get("done") == 3)
         for k in ("id", "kind", "state", "done", "total", "unit", "elapsed", "partial_ref",
                   "note", "error", "eta", "label", "scope"):
             self.assertIn(k, mid)
         self.assertEqual((3, 10, "files"), (mid["done"], mid["total"], mid["unit"]))
-        self.assertIsNotNone(mid["eta"], "n/N known: an ETA is given")
+        final = job.snapshot()
+        self.assertEqual("done", final["state"])
+        self.assertIsNone(final["eta"], "a finished job has no ETA")
 
 
 class PartialAnswers(_Reg):
