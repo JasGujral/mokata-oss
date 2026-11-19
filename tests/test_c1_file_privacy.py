@@ -8,8 +8,8 @@ Business rules (note C §3a, the rule page `0028-evidence/C/C.rule.md`):
     verified on its open handle before any content is written; nothing is created and then restricted;
   * a volume that cannot hold privacy degrades plainly: the write succeeds, `doctor` names it;
   * readers accept a record only when it is ours and still private (or the volume cannot hold it);
-  * `doctor --fix` re-protects OUR weak file keeping its bytes (the gate keeps authenticating), and never
-    touches a file someone else owns;
+  * `doctor --fix` never touches a file someone else owns (0.0.29 H4: a weak file of OURS is no longer
+    re-protected with its bytes — the token is rotated; `test_h4_fix_is_gated_and_rotates`);
   * nothing outside the set becomes private, and no doc calls anything outside it owner-only.
 
 "Private" is judged by `_privacy_oracle` (os.stat / `ls -le` / `icacls`), never by `winacl` itself.
@@ -38,6 +38,8 @@ import _support  # noqa: F401  (puts src/ on the path)
 
 import _privacy_oracle as O
 
+from mokata.errors import RecordRefused
+
 SRC = Path(__file__).resolve().parents[1] / "src"
 DOCS = Path(__file__).resolve().parents[1] / "docs"
 SENTINEL = "SENTINELtokenC1xyzzy0123456789abcdefABCDEF"
@@ -51,6 +53,16 @@ def _tool(name: str) -> str:
 
 def _silent(*_a, **_k):
     pass
+
+
+def _fix_lines(root):
+    """What `mokata doctor --fix` prints after a typed yes (0.0.29 H4: the plan, then the applied lines)."""
+    from mokata.cli_commands.diagnostics import apply_fix, fix_plan, plan_lines, privacy_lines
+    out = privacy_lines(root)
+    steps = fix_plan(root)
+    out += plan_lines(steps)
+    apply_fix(root, steps, out=out.append)
+    return out
 
 
 class _Home(unittest.TestCase):
@@ -402,18 +414,29 @@ class BornNotSet(_Home):
                                                         else name))
             return real_create(name, *a, **k)
         forbidden = []
+        modes = []
+
+        def fchmod(fd, mode):
+            modes.append(mode)
         with mock.patch.object(winacl, "create_private_file", side_effect=create), \
                 mock.patch("os.chmod", side_effect=lambda *a, **k: forbidden.append(("chmod", a))), \
-                mock.patch("os.fchmod", side_effect=lambda *a, **k: forbidden.append(("fchmod", a)),
-                           create=True), \
+                mock.patch("os.fchmod", side_effect=fchmod, create=True), \
                 mock.patch("subprocess.run", side_effect=lambda *a, **k: forbidden.append(("run", a))):
             atomicfile.atomic_write_text(os.path.join(self.root, "s.json"), "x", private=True)
         self.assertEqual([True], absent_at_create)
         self.assertEqual([], forbidden)
+        # 0.0.29 H4: the ONE mode call left sets the fresh handle to exactly 0600 (a umask may have
+        # narrowed the create to 0400) — owner bits only, never group/other: it restricts nothing.
+        self.assertTrue(all(m & 0o077 == 0 for m in modes), [oct(m) for m in modes])
         src = (SRC / "mokata" / "winacl.py").read_text(encoding="utf-8")
         for name in ("SetNamedSecurityInfo", "SetSecurityInfo", "SetFileSecurity", "icacls",
-                     "os.chmod", "fchmod"):
+                     "os.chmod"):
             self.assertNotIn(name, src, f"winacl must never restrict after the fact ({name})")
+        tree = ast.parse(src)
+        users = sorted({f.name for f in ast.walk(tree) if isinstance(f, ast.FunctionDef)
+                        for n in ast.walk(f) if isinstance(n, ast.Attribute) and n.attr == "fchmod"})
+        self.assertEqual(["_exact_mode", "_probe"], users,
+                         "fchmod only on a fresh handle: the probe's scratch files, the exact mode")
 
 
 # =============================================================== nothing left behind
@@ -596,54 +619,9 @@ class TokenFlow(_Home):
             self.assertPrivate(p)
 
 
-class FixKeepsToken(_Home):
-    """`doctor --fix` re-protects OUR weak files with their exact bytes: the token, the port and the
-    trust decision survive, so the baked gate header still equals the bridge token."""
-
-    def test_fix_reprotects_and_the_gate_still_authenticates(self):
-        from mokata import harness_setup as HS
-        from mokata.cli_commands.diagnostics import privacy_lines
-        from mokata.ide import bus as B
-        from mokata.ide import trust as T
-        plan = HS.plan_setup("claude", root=self.root, home=self.home, http_gates=True)
-        HS.apply_setup(plan, assume_yes=True, out=_silent)
-        T.decide(self.root, True, "cli")
-        rec = B.read_bridge(self.root)
-        local = os.path.join(self.root, ".claude", "settings.local.json")
-        weak = [B.bridge_path(self.root), local, T.record_path(self.root)]
-        before = {p: Path(p).read_bytes() for p in weak}
-        for p in weak:
-            O.grant_others_read(p)
-        self.assertIsNone(B.read_bridge(self.root), "a weak bridge record must be refused")
-        self.assertFalse(T.status(self.root)["trusted"], "a weak trust record must be refused")
-        text = "\n".join(privacy_lines(self.root))
-        for p in weak:
-            self.assertIn(f"{p}: WEAK", text)
-        text = "\n".join(privacy_lines(self.root, fix=True))
-        for p in weak:
-            self.assertPrivate(p)
-            self.assertEqual(before[p], Path(p).read_bytes(), f"--fix changed the bytes of {p}")
-        self.assertEqual(rec, B.read_bridge(self.root))
-        self.assertTrue(T.status(self.root)["trusted"])
-        gate = json.loads(Path(local).read_text(encoding="utf-8"))
-        headers = [h.get("headers", {}) for groups in gate["hooks"].values() for g in groups
-                   for h in g["hooks"]]
-        self.assertIn({"X-Mokata-Hook": rec["token"]}, headers)
-
-    def test_a_worktree_copy_claude_code_made_is_named_and_fixed(self):
-        from mokata import harness_setup as HS
-        from mokata.cli_commands.diagnostics import privacy_lines
-        plan = HS.plan_setup("claude", root=self.root, home=self.home, http_gates=True)
-        HS.apply_setup(plan, assume_yes=True, out=_silent)
-        src = os.path.join(self.root, ".claude", "settings.local.json")
-        copy = os.path.join(self.root, ".claude", "worktrees", "w1", ".claude",
-                            "settings.local.json")
-        os.makedirs(os.path.dirname(copy))
-        shutil.copyfile(src, copy)                           # what Claude Code's copy does
-        O.grant_others_read(copy)
-        self.assertIn(f"{copy}: WEAK", "\n".join(privacy_lines(self.root)))
-        privacy_lines(self.root, fix=True)
-        self.assertPrivate(copy)
+# 0.0.29 H4: `FixKeepsToken` is DELETED. `doctor --fix` no longer keeps a weak file's bytes: it rotates
+# the hook token and re-bakes it, stops an exposed IDE, resets weak trust — gated and ledgered
+# (`test_h4_fix_is_gated_and_rotates`).
 
 
 # =============================================================== planted records
@@ -663,14 +641,16 @@ class Planted(_Home):
         from mokata.ide import server as S
         self._plant(S.record_path(self.root), {"port": 4444, "pid": os.getpid(), "token": "evil",
                                                "root": self.root})
-        self.assertIsNone(S.read_record(self.root))
+        with self.assertRaises(RecordRefused):
+            S.read_record(self.root)
         self.assertIsNone(BC.live_ide(self.root))
 
     def test_a_weak_bridge_record_is_refused_and_replaced(self):
         from mokata.ide import bridge_client as BC
         from mokata.ide import bus as B
         self._plant(B.bridge_path(self.root), {"port": 24444, "token": "evil"})
-        self.assertIsNone(B.read_bridge(self.root))
+        with self.assertRaises(RecordRefused):
+            B.read_bridge(self.root)
         self.assertEqual("", BC._hook_token(self.root))
         rec = B.ensure_bridge(self.root)
         self.assertNotEqual("evil", rec["token"])
@@ -690,7 +670,12 @@ class Planted(_Home):
         fifo = S.record_path(self.root)
         os.mkfifo(fifo, 0o600)
         got = []
-        reader = threading.Thread(target=lambda: got.append(S.read_record(self.root)), daemon=True)
+        def read():
+            try:
+                got.append(S.read_record(self.root))
+            except RecordRefused as exc:         # 0.0.29 H4: a FIFO is a refused record, not absent
+                got.append(type(exc).__name__)
+        reader = threading.Thread(target=read, daemon=True)
         reader.start()
         reader.join(120)                 # generous: a non-blocking open answers in microseconds
         hung = reader.is_alive()
@@ -699,7 +684,7 @@ class Planted(_Home):
             os.close(fd)
             reader.join(120)
         self.assertFalse(hung, "the reader BLOCKED opening a FIFO at the record path")
-        self.assertEqual([None], got)
+        self.assertEqual(["RecordRefused"], got)
 
     @unittest.skipUnless(sys.platform == "darwin", "a macOS ACL entry on the file itself")
     def test_a_record_with_an_acl_entry_is_refused(self):
@@ -708,7 +693,8 @@ class Planted(_Home):
         subprocess.run(["/bin/chmod", "+a", "group:everyone allow read", B.bridge_path(self.root)],
                        check=True, capture_output=True)
         self.assertEqual(0o600, os.stat(B.bridge_path(self.root)).st_mode & 0o777)
-        self.assertIsNone(B.read_bridge(self.root), rec)
+        with self.assertRaises(RecordRefused, msg=str(rec)):
+            B.read_bridge(self.root)
 
     @unittest.skipIf(os.name == "nt", "the uid seam is POSIX (Windows: owner SID, admin runner)")
     def test_a_record_another_uid_owns_is_refused_and_never_fixed_seam(self):
@@ -721,8 +707,9 @@ class Planted(_Home):
         before = Path(path).read_bytes()
         mtime = os.stat(path).st_mtime_ns
         with mock.patch("os.geteuid", return_value=os.geteuid() + 4242):
-            self.assertIsNone(B.read_bridge(self.root))
-            text = "\n".join(privacy_lines(self.root, fix=True))
+            with self.assertRaises(RecordRefused):
+                B.read_bridge(self.root)
+            text = "\n".join(_fix_lines(self.root))
         self.assertIn(f"{path}: FOREIGN", text)
         self.assertNotIn("re-protected", text)
         self.assertEqual(before, Path(path).read_bytes())
@@ -736,9 +723,10 @@ class Planted(_Home):
         self._plant(B.bridge_path(self.root), {"port": 24444, "token": "evil"})
         os.chmod(B.bridge_path(self.root), 0o600)
         os.chown(B.bridge_path(self.root), 4242, 4242)
-        self.assertIsNone(B.read_bridge(self.root))
+        with self.assertRaises(RecordRefused):
+            B.read_bridge(self.root)
         before = Path(B.bridge_path(self.root)).read_bytes()
-        text = "\n".join(privacy_lines(self.root, fix=True))
+        text = "\n".join(_fix_lines(self.root))
         self.assertIn("FOREIGN", text)
         self.assertEqual(before, Path(B.bridge_path(self.root)).read_bytes())
         self.assertEqual(4242, os.stat(B.bridge_path(self.root)).st_uid)
@@ -754,9 +742,10 @@ class Planted(_Home):
         p = subprocess.run([icacls, path, "/setowner", "*S-1-5-18"], capture_output=True, text=True)
         if p.returncode != 0:
             self.skipTest(f"NOT RUN: setting another owner needs SeRestorePrivilege ({p.stdout.strip()[:120]})")
-        self.assertIsNone(B.read_bridge(self.root))
+        with self.assertRaises(RecordRefused):
+            B.read_bridge(self.root)
         before = Path(path).read_bytes()
-        text = "\n".join(privacy_lines(self.root, fix=True))
+        text = "\n".join(_fix_lines(self.root))
         self.assertIn("FOREIGN", text)
         self.assertEqual(before, Path(path).read_bytes())
 
@@ -786,7 +775,6 @@ class OneHandle(_Home):
 
     def test_a_swap_after_the_verdict_is_not_laundered(self):
         from mokata import winacl
-        from mokata.cli_commands.diagnostics import privacy_lines
         from mokata.ide import bus as B
         rec = B.ensure_bridge(self.root)
         path = B.bridge_path(self.root)
@@ -809,11 +797,12 @@ class OneHandle(_Home):
                     os.remove(planted)
             return v
         with mock.patch.object(winacl, seam, side_effect=swap):
-            privacy_lines(self.root, fix=True)
+            _fix_lines(self.root)
         self.assertIn("verdict", fired)
         got = B.read_bridge(self.root)
         self.assertNotEqual("EVIL", (got or {}).get("token"), "planted bytes became a trusted record")
-        self.assertEqual(rec, got, "the record re-protected must be the one that was verified")
+        # 0.0.29 H4: a weak record is never re-protected at all — the token is ROTATED
+        self.assertNotEqual(rec["token"], (got or {}).get("token"), "a weak token was kept")
 
     def test_the_old_profile_record_is_read_through_the_verifying_reader(self):
         """The sweep: `firstrun._move_record` read the user-profile record by a plain open. A weak one
@@ -849,9 +838,10 @@ class FifoInTheSet(_Home):
         os.makedirs(os.path.dirname(fifo), exist_ok=True)
         os.mkfifo(fifo, 0o600)
         for fix in (False, True):
-            text = "\n".join(_released(self, fifo, lambda: privacy_lines(self.root, fix=fix)) or [])
+            text = "\n".join(_released(self, fifo, lambda: (_fix_lines(self.root) if fix else
+                                                             privacy_lines(self.root))) or [])
             self.assertNotIn(f"{fifo}: private", text)
-            self.assertNotIn("re-protected", text)
+            self.assertNotIn(f"{fifo}: re-baked", text)
 
     def test_a_fifo_at_settings_local_json(self):
         self._doctor(os.path.join(self.root, ".claude", "settings.local.json"))
@@ -908,11 +898,11 @@ class ModelessMount(_Home):
         with self._mount(0o755):
             rec = B.ensure_bridge(self.root)
             self.assertEqual(rec, B.read_bridge(self.root), "the IDE must still start on this mount")
-            text = "\n".join(privacy_lines(self.root, fix=True))
+            text = "\n".join(_fix_lines(self.root))
         path = B.bridge_path(self.root)
         self.assertIn(f"{path}: NOT private — this volume has no access control", text)
         self.assertNotIn(f"{path}: private", text)
-        self.assertNotIn("re-protected", text)
+        self.assertNotIn("ROTATE", text, "a modeless mount is said, never \"fixed\"")
 
     def test_a_file_already_there_is_read_on_such_a_mount(self):
         from mokata import winacl
@@ -938,7 +928,8 @@ class ModelessMount(_Home):
         with open(y, "wb") as fh:
             fh.write(b"planted")
         with self._mount(0o755, uid=os.geteuid() + 4242):
-            self.assertIsNone(winacl.read_private(y))
+            with self.assertRaises(RecordRefused):
+                winacl.read_private(y)
 
     def test_a_volume_that_holds_modes_is_learnt_as_holding(self):
         """The real volume under the test: the probe sees the mode stick, so a weak own file is refused."""
@@ -947,7 +938,8 @@ class ModelessMount(_Home):
         with open(y, "wb") as fh:
             fh.write(b"weak")
         os.chmod(y, 0o644)
-        self.assertIsNone(winacl.read_private(y))
+        with self.assertRaises(RecordRefused):
+            winacl.read_private(y)
         self.assertEqual([], [n for n in os.listdir(self.root) if n.startswith(".mkprobe-")],
                          "the probe left a file behind")
 
@@ -963,7 +955,8 @@ class WritableByOthers(_Home):
         for mode in (0o602, 0o620):
             B.ensure_bridge(self.root)
             os.chmod(path, mode)
-            self.assertIsNone(B.read_bridge(self.root), oct(mode))
+            with self.assertRaises(RecordRefused, msg=oct(mode)):
+                B.read_bridge(self.root)
             self.assertFalse(winacl.verify_private(path).private, oct(mode))
 
 

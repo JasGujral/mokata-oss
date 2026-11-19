@@ -377,10 +377,16 @@ def cmd_session(args: argparse.Namespace) -> int:
         # SS.S0 — snapshot this session's in-flight state (UNGATED: local, transient, the user's
         # own state — the gate is at `push`/share, not here). The CLI is the use-anywhere surface;
         # with no in-flight objects to pass it re-affirms + reports the on-disk resumable state.
-        from ..session_save import save_session
+        from ..session_save import loss_message, save_session
         surface = _load_surface(root)
         res = save_session(surface)
         d = res.to_dict()
+        if res.failed:
+            # 0.0.29 G round 2 (M-2): a save that did not land — or whose read-back failed, so
+            # whether anything is in flight is UNKNOWN — is said with its cause and is not rc 0.
+            print("session: the save did not fully land — "
+                  + loss_message(res, "Run `mokata session save` again"), file=sys.stderr)
+            return 1
         if res.empty:
             print("session: nothing in-flight to save yet — start a brainstorm/run first "
                   "(a save snapshots the current session so it's recoverable).")

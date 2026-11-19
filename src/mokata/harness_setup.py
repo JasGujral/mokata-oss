@@ -368,6 +368,159 @@ def _merge_ide_bridge(path: Path, wiring: Dict[str, List[Dict[str, Any]]]) -> No
     _write_json(path, data)
 
 
+def baked_tokens(path: Path) -> List[str]:
+    """The hook tokens mokata baked into `path` (its `--ide-bridge` http groups and its `--http-gates`
+    group), in file order, each once. Empty for a file with none, or one that cannot be read as JSON.
+    Read by `mokata doctor --fix` (0.0.29 H4) to tell a stale bake from a current one."""
+    try:                    # one non-blocking read of a regular file: a FIFO never hangs the plan
+        data = json.loads(_read_regular(path).decode("utf-8")) if path.exists() else {}
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    hooks = data.get("hooks")
+    out: List[str] = []
+    for entries in (hooks.values() if isinstance(hooks, dict) else []):
+        for e in entries if isinstance(entries, list) else []:
+            if not (isinstance(e, dict) and (_is_mokata_http_hook(e) or _is_mokata_gate_hook(e))):
+                continue
+            for h in e.get("hooks", []):
+                headers = h.get("headers") if isinstance(h, dict) else None
+                tok = headers.get(IDE_BRIDGE_HEADER) if isinstance(headers, dict) else None
+                if isinstance(tok, str) and tok not in out:
+                    out.append(tok)
+    return out
+
+
+def foreign_hooks(path: Path) -> List[str]:
+    """Every hook entry in `path` that is NOT mokata's, as `<event>: <type> <command or url>` — what a
+    `mokata doctor --fix` plan names before it rewrites a file others could have written (0.0.29 H4).
+    Control characters are replaced and each line is cut at 200 characters: the plan prints it as
+    text, never as anything a terminal would interpret."""
+    try:                    # one non-blocking read of a regular file: a FIFO never hangs the plan
+        data = json.loads(_read_regular(path).decode("utf-8")) if path.exists() else {}
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    hooks = data.get("hooks")
+    out: List[str] = []
+    for event, entries in (hooks.items() if isinstance(hooks, dict) else []):
+        for e in entries if isinstance(entries, list) else []:
+            if not isinstance(e, dict):
+                continue
+            ours = _is_mokata_http_hook(e) or _is_mokata_gate_hook(e)
+            for h in e.get("hooks", []) if isinstance(e.get("hooks"), list) else []:
+                # Judged PER HOOK: a group counts as mokata's when ANY hook in it is, so an entry
+                # appended inside mokata's group is still named (the re-bake drops that whole group).
+                if not isinstance(h, dict) or _is_mokata_http_hook({"hooks": [h]}) \
+                        or _is_mokata_gate_hook({"hooks": [h]}):
+                    continue
+                what = h.get("command") if h.get("type") == "command" else h.get("url")
+                args = h.get("args") if isinstance(h.get("args"), list) else []
+                text = " ".join(str(x) for x in [what or ""] + args).strip()
+                line = f"{event}: {h.get('type')} {text}"
+                line = "".join(c if c.isprintable() else "?" for c in line)[:200]
+                out.append(line + (" (inside mokata's group: the re-bake drops it)" if ours else ""))
+    return out
+
+
+def _read_regular(path) -> bytes:
+    """`path`'s bytes, from ONE handle opened without blocking (`O_NONBLOCK`: a FIFO swapped in at the
+    path never hangs the reader) and fstat-checked: anything but a regular file raises `OSError`."""
+    import stat as _stat
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
+    try:
+        if not _stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(f"{path} is not a regular file")
+        chunks = []
+        while True:
+            chunk = os.read(fd, 1 << 16)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+    finally:
+        os.close(fd)
+
+
+def file_digest(path) -> Optional[str]:
+    """sha256 of `path`'s bytes, or None when it is absent, unreadable or not a regular file (0.0.29 H-a
+    round 3: a FIFO never blocks it). What a `mokata doctor --fix` plan records for every file it will
+    act on, so the apply acts only on what the human was shown."""
+    import hashlib
+    try:
+        return hashlib.sha256(_read_regular(path)).hexdigest()
+    except OSError:
+        return None
+
+
+def rebake_token(path: Path, rec: Dict[str, Any], root: str, expect: Optional[str] = None) -> bool:
+    """Re-bake bridge record `rec` (`port`, `token`) into `path` — ONLY where mokata's groups already
+    are (its `--ide-bridge` groups, its `--http-gates` group); nothing is added to a file that had
+    neither. The file is read ONCE; `expect` (the sha256 its plan recorded) must match those bytes or
+    `ChangedSincePlan` is raised and nothing is written — a hook planted after the plan was shown is
+    never kept on a yes that never saw it. The new content is built from those same bytes and written
+    once, through `_write_json` (private: temp + replace, so an old weak file, a hard link or a link at
+    the path is replaced, never written through). True when the file changed. Raises `SetupError` /
+    `OSError` for a file that cannot be parsed or written: `mokata doctor --fix` names it and goes on
+    with the rest (0.0.29 H4)."""
+    import hashlib
+    try:
+        raw: Optional[bytes] = _read_regular(path)
+    except FileNotFoundError:
+        raw = None
+    except OSError as exc:
+        if expect is not None:
+            raise ChangedSincePlan(f"{path} changed since the plan was shown ({exc}): not rewritten — "
+                                   f"re-run `mokata doctor --fix` and read the new plan") from exc
+        raise SetupError(f"{path} can't be read as a regular file ({exc}) — mokata won't overwrite "
+                         f"it. Fix or remove it, then re-run.") from exc
+    if expect is not None and (raw is None or hashlib.sha256(raw).hexdigest() != expect):
+        raise ChangedSincePlan(f"{path} changed since the plan was shown: not rewritten — re-run "
+                               f"`mokata doctor --fix` and read the new plan")
+    if raw is None:
+        return False
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise SetupError(f"{path} isn't valid UTF-8 JSON ({exc}) — mokata won't overwrite a config it "
+                         f"can't parse. Fix or remove the file, then re-run.") from exc
+    if not isinstance(data, dict):
+        raise SetupError(f"{path} isn't a JSON object (found {type(data).__name__}) — mokata won't "
+                         f"overwrite it. Fix or remove the file, then re-run.")
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict):
+        return False
+    bridge = gates = False
+    for entries in hooks.values():
+        for e in entries if isinstance(entries, list) else []:
+            if isinstance(e, dict):
+                bridge = bridge or _is_mokata_http_hook(e)
+                gates = gates or _is_mokata_gate_hook(e)
+    if not (bridge or gates):
+        return False
+    port, token = int(rec["port"]), str(rec["token"])
+    wiring: Dict[str, List[Dict[str, Any]]] = {}
+    if bridge:
+        from .ide.bus import bridge_url
+        for event, groups in ide_bridge_hooks(bridge_url(port), token, root=root).items():
+            wiring.setdefault(event, []).extend(groups)
+    if gates:
+        for event, groups in http_gate_hooks(http_gate_url(port), token).items():
+            wiring.setdefault(event, []).extend(groups)
+    for event in list(hooks):
+        entries = hooks.get(event)
+        if isinstance(entries, list):
+            hooks[event] = [e for e in entries if not (isinstance(e, dict) and (
+                (bridge and _is_mokata_http_hook(e)) or (gates and _is_mokata_gate_hook(e))))]
+    for event, groups in wiring.items():
+        entries = hooks.get(event)
+        hooks[event] = (entries if isinstance(entries, list) else []) + groups
+    data["hooks"] = {k: v for k, v in hooks.items() if v}
+    _write_json(path, data)
+    return True
+
+
 def _strip_ide_bridge(path: Path) -> bool:
     """Remove mokata's http hook groups from `path`; delete the file if nothing else is left."""
     if not path.exists():
@@ -448,6 +601,11 @@ def _hooks_dir() -> Path:
 
 class SetupError(MokataError):
     """Raised when the artifacts mokata needs to wire can't be found."""
+
+
+class ChangedSincePlan(SetupError):
+    """A file `mokata doctor --fix` was about to rewrite is not the file its plan showed (0.0.29 H4
+    round 2, verifier M3): nothing is written to it."""
 
 
 # --------------------------------------------------------------------------------------
@@ -1100,6 +1258,52 @@ def _load_json(path: Path) -> Dict:
     return data
 
 
+@dataclass(frozen=True)
+class _JsonStyle:
+    """How a JSON file the user owns is laid out, so a merge writes it back the same way."""
+    indent: Any = 2
+    separators: Any = None
+    ensure_ascii: bool = True
+    tail: str = "\n"
+
+    def render(self, data: Any) -> str:
+        return json.dumps(data, indent=self.indent, separators=self.separators,
+                          ensure_ascii=self.ensure_ascii) + self.tail
+
+
+_DEFAULT_JSON_STYLE = _JsonStyle()
+
+
+def _json_style(raw: bytes) -> _JsonStyle:
+    """0.0.29 C1 verify L3 — the style that reproduces `raw` exactly (line endings aside, which
+    `_write_json` keeps separately), or the default 2-space + final newline when none does (an
+    absent, empty, unparseable or hand-spaced file). DETECTED, never guessed: a candidate counts
+    only if dumping the parsed data with it gives back the user's own bytes."""
+    try:
+        text = raw.decode("utf-8").replace("\r\n", "\n")
+        data = json.loads(text)
+    except (UnicodeDecodeError, ValueError):
+        return _DEFAULT_JSON_STYLE
+    # The candidates are read off the text (a big `~/.claude.json` must not pay dozens of dumps):
+    # the second line's leading whitespace is the indent, and the final newline is there or not.
+    body = text[:-1] if text.endswith("\n") else text
+    tail = text[len(body):]
+    if "\n" in body:
+        lead = body.split("\n", 2)[1]
+        ws = lead[:len(lead) - len(lead.lstrip())]
+        indents: List[Any] = ["\t"] if ws and set(ws) == {"\t"} else [len(ws)]
+        seps_list: List[Any] = [None]
+    else:
+        indents, seps_list = [None], [None, (",", ":")]
+    for indent in indents:
+        for seps in seps_list:
+            for ascii_ in (True, False):
+                style = _JsonStyle(indent, seps, ascii_, tail)
+                if style.render(data) == text:
+                    return style
+    return _DEFAULT_JSON_STYLE
+
+
 def _write_json(path: Path, data: Dict) -> None:
     # HP.S4 (0.0.22 D5) — these config writes (`.mcp.json`, `settings.json`, `~/.claude.json`) used
     # to bypass the WriteGate entirely. They now pass its DESTINATION layers — SELF-PROTECT and
@@ -1116,13 +1320,22 @@ def _write_json(path: Path, data: Dict) -> None:
     # `--http-gates`), so it is written through the private door — born readable by this user only,
     # on every OS; `os.replace` carries that onto the file. Every other config keeps today's temp.
     from .atomicfile import _exclusive_temp
+    # 0.0.29 C1: the file's OWN line ending, never the platform's translation (Windows turned a
+    # Claude Code LF settings.json into CRLF, so unwire could not hand back the bytes it found).
+    # 0.0.29 C1 verify L3: and its own LAYOUT (indent, separators, escaping, final newline), so
+    # unwire hands back the user's bytes, not mokata's reformat of them.
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        raw = b""
+    eol = "\r\n" if b"\r\n" in raw else "\n"
+    style = _json_style(raw)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = _exclusive_temp(str(path.parent), f".{path.name}.", ".tmp",
                               private=path.name == LOCAL_SETTINGS)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, indent=2)
-            fh.write("\n")
+        with os.fdopen(fd, "w", encoding="utf-8", newline=eol) as fh:
+            fh.write(style.render(data))
         os.replace(tmp, path)
     except BaseException:
         # D5 — `BaseException` is CORRECT here and is deliberately NOT narrowed. This handler does
@@ -1180,29 +1393,28 @@ def is_windows_shim(path: str) -> bool:
     return str(path).lower().endswith(_WINDOWS_SHIM_EXTS)
 
 
-def resolved_console_script(name: str, *, windows: Optional[bool] = None) -> str:
+def resolved_console_script(name: str) -> str:
     """Resolve a mokata console entry point (`mokata-mcp`, `mokata-hook`) to an ABSOLUTE path
     so it survives the GUI-launched minimal PATH — the classic silent killer: a GUI-launched
     macOS app inherits a PATH WITHOUT the console-script dir, so a bare name never resolves and
     the server/hook silently never runs (the same failure class as the old `python3: command
-    not found`). Resolution order, SHARED so `mokata-mcp` and `mokata-hook` resolve identically:
-    (1) `shutil.which` on the current PATH; (2) a console-script sibling of the running
-    interpreter (`<sys.executable dir>/<name>[.exe]`) — this covers a venv/install whose bin
-    dir isn't on PATH, which is precisely the silent-killer case `which` can't see — or the
-    interpreter's scripts dir (`<prefix>\\Scripts` for a non-venv Windows Python such as
-    pyenv-win's); (3) the bare name as a last resort (e.g. `-e` source runs). The PLUGIN route
+    not found`). Resolution order, SHARED so `mokata-mcp` and `mokata-hook` resolve identically,
+    and ordered so what setup wires is the install that RAN setup (0.0.29
+    INIT-WIRES-FIRST-PATH-INSTALL: `which` used to go first, so a second `mokata-*` earlier on
+    PATH won over the venv executing this very command):
+    (1) a console-script sibling of the running interpreter (`<sys.executable dir>/<name>[.exe]`;
+    the interpreter is NOT `resolve()`d: a venv's python is a symlink into the base install, and
+    resolving it would leave the venv); (2) the interpreter's scripts dir (`sysconfig`; e.g.
+    `<prefix>\\Scripts` for a non-venv Windows Python such as pyenv-win's); (3) `shutil.which` on
+    the current PATH; (4) the bare name as a last resort (e.g. `-e` source runs). The PLUGIN route
     can't call this at all (its manifests are static), so it runs the SAME ladder at hook time
     via `hooks/mokata-hook-launch`, and `mokata doctor` reports any wired command that won't
     resolve (`govern.doctor.hook_resolution_findings`) — HOOK-RESOLVE.
 
-    0.0.25 `WIN-SHIM-WIRED`: on Windows a step-(1) hit that is a `.bat`/`.cmd` SHIM (pyenv-win's
-    `shims\\mokata-hook.bat`) is not taken while a real executable exists in step (2) — the shim
-    resolves, but every launch goes through `cmd.exe` and flashes a window. It is still the
-    answer of last resort, because a hook that flashes beats a hook that never runs."""
-    windows = (os.name == "nt") if windows is None else windows
-    found = shutil.which(name)
-    if found and not (windows and is_windows_shim(found)):
-        return found
+    0.0.25 `WIN-SHIM-WIRED`: on Windows a step-(3) hit that is a `.bat`/`.cmd` SHIM (pyenv-win's
+    `shims\\mokata-hook.bat`) is taken only after (1) and (2) found nothing real. It resolves,
+    but every launch goes through `cmd.exe` and flashes a window, so it is still the answer of
+    last resort: a hook that flashes beats a hook that never runs."""
     dirs = [Path(sys.executable).parent]
     scripts = sysconfig.get_path("scripts")
     if scripts and Path(scripts) not in dirs:
@@ -1211,7 +1423,7 @@ def resolved_console_script(name: str, *, windows: Optional[bool] = None) -> str
         for candidate in (bindir / name, bindir / f"{name}.exe"):
             if candidate.is_file():
                 return str(candidate)
-    return found or name
+    return shutil.which(name) or name
 
 
 def resolved_mcp_command() -> str:
@@ -1457,19 +1669,28 @@ def _statusline_setting_on(root: str) -> bool:
 # Command-file materialization (per-harness native format — Stage 63)
 # --------------------------------------------------------------------------------------
 
-#: Claude Code BUILT-IN slash commands that share a name with a mokata command template
-#: (0.0.23 B3, `COMMAND-NAMES-COLLIDE-WITH-CLAUDE-CODE-BUILTINS`). A project-scope command is
-#: written BARE (`.claude/commands/<name>.md`) and Claude Code's built-in wins, so `/review` in a
-#: `mokata init`-ed repo silently ran Claude Code's review, not mokata's. These are written as
-#: `mokata-<name>.md` instead. The plugin's namespaced `/mokata:<name>` is unaffected.
-#: `tests/test_b3_the_plugin_stands_alone.py` reds when a template collides and is not listed.
-CLAUDE_CODE_BUILTIN_COMMANDS = frozenset({
-    "add-dir", "agents", "bashes", "bug", "clear", "code-review", "compact", "config", "context",
-    "cost", "doctor", "exit", "export", "feedback", "help", "hooks", "ide", "init", "login",
-    "logout", "mcp", "memory", "model", "output-style", "permissions", "plugin", "pr-comments",
-    "release-notes", "resume", "review", "rewind", "security-review", "status", "statusline",
-    "terminal-setup", "todos", "upgrade", "usage", "vim",
-})
+#: 0.0.29 C1 — the built-in collision set, the command mark and the frontmatter reader live in
+#: `plugin_runtime` (stdlib-only, so `slash_command` imports nothing heavy from a hook); the
+#: writers here import them back.
+from .plugin_runtime import (CLAUDE_CODE_BUILTIN_COMMANDS, MOKATA_COMMAND_MARK,  # noqa: E402
+                             _frontmatter_description)
+
+
+def _command_names() -> List[str]:
+    """The command stems this mokata installs (one per template)."""
+    tdir = _templates_dir()
+    return sorted(p.stem for p in tdir.glob("*.md")) if tdir.is_dir() else []
+
+
+def _localized(harness: str, text: str) -> str:
+    """The CLI route's command/skill text names each command the way THIS install writes it
+    (`/spec`, `/mokata-review`), not the plugin's `/mokata:spec` the user does not have. Decided
+    from the set being installed, not the disk, so the expectation `vendored_files` computes is
+    the same bytes `apply_setup` writes (a re-run reads as no drift). Claude Code only."""
+    if harness != "claude":
+        return text
+    from .plugin_runtime import localize_commands
+    return localize_commands(text, installed=_command_names())
 
 
 def _command_target_name(harness: str, name: str) -> str:
@@ -1485,11 +1706,6 @@ def _command_target_name(harness: str, name: str) -> str:
     if fmt == "toml":
         return f"{stem}.toml"
     return name                          # "md" / "reference" keep the .md filename
-
-
-#: Every shipped command template opens with this description prefix — it is how a file in a
-#: harness's commands dir is recognised as MOKATA's (never a user's own `/review`).
-MOKATA_COMMAND_MARK = "mokata ·"
 
 
 def stale_command_files(harness: str, commands_dir: Path, command_files: List[str]) -> List[Path]:
@@ -1512,18 +1728,6 @@ def stale_command_files(harness: str, commands_dir: Path, command_files: List[st
     return out
 
 
-def _frontmatter_description(md: str) -> str:
-    """Best-effort pull of the `description:` line from a template's frontmatter."""
-    if md.startswith("---"):
-        end = md.find("\n---", 3)
-        block = md[3:end] if end != -1 else md
-        for line in block.splitlines():
-            s = line.strip()
-            if s.lower().startswith("description:"):
-                return s.split(":", 1)[1].strip()
-    return ""
-
-
 def _to_gemini_toml(md: str) -> str:
     """A Gemini CLI custom-command TOML from a markdown template: a `description` + the full
     prompt as a multi-line LITERAL string. Deterministic; never escapes wrongly (templates
@@ -1543,7 +1747,7 @@ def _write_command_file(harness: str, src: Path, commands_dir: Path, name: str) 
     # SK.S2 single-source: expand the grounding MARKER the template carries into the one canonical
     # block at write time, so the materialized command never ships a marker and every command
     # surface derives from `skills.GROUNDING_DISCIPLINE` (no per-template copy to drift).
-    content = expand_grounding(src.read_text(encoding="utf-8"))
+    content = _localized(harness, expand_grounding(src.read_text(encoding="utf-8")))
     if fmt == "toml":
         dst.write_text(_to_gemini_toml(content), encoding="utf-8")
     else:                                # md / prompt.md / reference all carry the md content
@@ -1622,7 +1826,9 @@ def apply_setup(plan: SetupPlan, *, assume_yes: bool = False, force: bool = Fals
     if plan.skill_names and t.skills_dir is not None:
         from .agent_skills import (copy_skill_references, generate_skill_files,
                                    write_skill_files)
-        files = generate_skill_files(_templates_dir(), names=tuple(plan.skill_names))
+        # 0.0.29 C1 — localized at write (the plugin's own skills/ tree stays verbatim).
+        files = {n: _localized(plan.harness, text) for n, text in
+                 generate_skill_files(_templates_dir(), names=tuple(plan.skill_names)).items()}
         for p in write_skill_files(t.skills_dir, files):
             touched.append(str(p))
         # SK.S2 — deliver each skill's progressive-disclosure references/ from the shipped tree,
@@ -1757,13 +1963,18 @@ def setup_harness(
     ide_bridge: bool = False,
     http_gates: bool = False,
     skills_only: bool = False,
+    extra_plan: str = "",
 ) -> SetupResult:
-    """Plan + human-gate + apply the harness wiring end to end."""
+    """Plan + human-gate + apply the harness wiring end to end. `extra_plan` is what the caller
+    will do AFTER the wiring on the same yes (`setup --mode`: the mode's settings, model fetch and
+    index builds — 0.0.29 C1 M3), shown in the plan before the human approves."""
     emit = out or print
     plan = plan_setup(harness, root, scope, profile, with_hooks, home, grant=grant,
                       ide_bridge=ide_bridge, http_gates=http_gates, skills_only=skills_only)
 
     emit(render_setup_plan(plan))
+    if extra_plan:
+        emit(extra_plan)
     # 0.0.23 B4 — INSTALL-ISOLATED-BY-DEFAULT: name an in-project or shadowed install BEFORE the
     # user confirms, since the hooks about to be wired bind to this install. Silent when healthy.
     from .install_isolation import warnings as _install_warnings
@@ -1845,14 +2056,14 @@ def vendored_files(harness: str, targets: Targets) -> Dict[Path, bytes]:
     tdir = _templates_dir()
     fmt = _HARNESS_COMMAND_FORMAT[harness]
     for src in sorted(tdir.glob("*.md")):
-        text = expand_grounding(src.read_text(encoding="utf-8"))
+        text = _localized(harness, expand_grounding(src.read_text(encoding="utf-8")))
         if fmt == "toml":
             text = _to_gemini_toml(text)
         out[targets.commands_dir / _command_target_name(harness, src.name)] = text.encode("utf-8")
     if targets.skills_dir is None:
         return out
     for name, text in generate_skill_files(tdir, names=tuple(CURATED_SKILLS)).items():
-        out[targets.skills_dir / name / "SKILL.md"] = text.encode("utf-8")
+        out[targets.skills_dir / name / "SKILL.md"] = _localized(harness, text).encode("utf-8")
     src_skills = tdir.parent.parent / "skills"
     trees = [(n, src_skills / n / "references") for n in CURATED_SKILLS]
     trees += [(n, src_skills / n) for n in shipped_domain_skills()
@@ -1945,6 +2156,8 @@ class UnsetupPlan:
     targets: Targets
     command_files: List[str]
     has_skills: bool = False          # an Agent Skills surface to remove (claude)
+    root: str = "."                   # the project root (where session-worktree rows were written)
+    worktree_files: List[str] = field(default_factory=list)   # marked rows unsetup will strip
 
 
 def plan_unsetup(harness: str, root: str = ".", scope: str = "project",
@@ -1954,9 +2167,14 @@ def plan_unsetup(harness: str, root: str = ".", scope: str = "project",
     targets = resolve_targets(scope, root, home, harness)
     tdir = _templates_dir()
     command_files = sorted(p.name for p in tdir.glob("*.md")) if tdir.is_dir() else []
+    worktree_files: List[str] = []
+    if harness == "claude" and scope == "project":
+        from .worktree_setup import strip_rows
+        worktree_files = strip_rows(root, apply=False)
     return UnsetupPlan(harness=harness, scope=scope, targets=targets,
                        command_files=command_files,
-                       has_skills=targets.skills_dir is not None)
+                       has_skills=targets.skills_dir is not None,
+                       root=root, worktree_files=worktree_files)
 
 
 def render_unsetup_plan(plan: UnsetupPlan) -> str:
@@ -1977,6 +2195,12 @@ def render_unsetup_plan(plan: UnsetupPlan) -> str:
                      f"(enabledMcpjsonServers / permissions.allow; your own entries kept)")
         lines.append(f"  the IDE live-bridge http hooks in {t.settings_path.parent / LOCAL_SETTINGS}"
                      f" (if wired; your own entries kept)")
+    for wf in plan.worktree_files:
+        lines.append(f"  the session-worktree lines mokata marked in {wf} (the file goes too if "
+                     f"nothing of yours is in it; unmarked lines are never touched)")
+    if plan.scope == "project":
+        lines.append(f"  the emptied {t.commands_dir} and {t.commands_dir.parent} directories "
+                     f"(only when nothing of yours is left in them)")
     lines.append("")
     lines.append("Your .mokata/ config is left untouched (use `mokata reset` for that).")
     return "\n".join(lines)
@@ -2057,8 +2281,8 @@ def apply_unsetup(plan: UnsetupPlan) -> List[str]:
         if _strip_grant(data):
             changed = True
 
-        # 0.0.26 P31 — the session-worktree base ref setup writes (`.worktreeinclude` and the
-        # `.gitignore` line are left: they name the user's own files and are harmless alone).
+        # 0.0.26 P31 — the session-worktree base ref setup writes (the marked `.worktreeinclude`
+        # and `.gitignore` rows are stripped below, by their marks).
         from .worktree_setup import strip_base_ref
         if strip_base_ref(data):
             changed = True
@@ -2074,6 +2298,22 @@ def apply_unsetup(plan: UnsetupPlan) -> List[str]:
             removed.append(str(local))
         if _set_http_gates(local, None) and str(local) not in removed:
             removed.append(str(local))
+
+    # 5. UNWIRE-HARNESS-LEAVES-RESIDUE — what wire wrote outside the harness files, by its marks
+    # (project scope only: that is where wire writes them), then the directories that removal
+    # emptied. `os.rmdir` never `rmtree`: a directory with ANY content of the user's stays.
+    if plan.scope == "project":
+        if plan.harness == "claude":
+            from .worktree_setup import strip_rows
+            removed.extend(strip_rows(plan.root))
+            # claude only: another harness's commands_dir parent is a directory the user owns
+            # (copilot's is `.github`), never one wire created.
+            for d in (t.commands_dir, t.commands_dir.parent):
+                try:
+                    os.rmdir(d)
+                except OSError:
+                    continue            # absent, or not empty: not ours to remove
+                removed.append(str(d))
 
     return removed
 

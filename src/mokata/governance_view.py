@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Any, List, Optional
 
 from . import TEMP_LOCAL_DIRNAME
+from .plugin_runtime import localize_commands
 
 GOVERN_DASHBOARD_FILENAME = "govern.html"
 
@@ -80,7 +81,8 @@ def build_governance_view(surface: Any) -> GovernanceView:
     try:
         from .memory import MemoryStore
         from .memory.brain import group_by_kind
-        store = MemoryStore.from_surface(surface)
+        # load_model=False: a read-only dashboard never loads (or fetches) the model (0.0.29 C1 M2)
+        store = MemoryStore.from_surface(surface, load_model=False)
         enabled = bool(store.enabled_types)
         # Snapshot the adoption stats FIRST, then read via the NON-counting path: the
         # dashboard is read-only and must mutate no durable state (no _bump_read, so two
@@ -233,9 +235,9 @@ def render_governance_html(view: GovernanceView, refresh_secs: Optional[int] = N
         mem_block = ("<h2>memory by kind</h2><div class='empty'>memory is disabled for this "
                      "profile — nothing is captured or honoured.</div>")
     elif not view.groups:
-        mem_block = ("<h2>memory by kind</h2><div class='empty'>no captured memory yet — run "
+        mem_block = (localize_commands("<h2>memory by kind</h2><div class='empty'>no captured memory yet — run "
                      "<code>/mokata:onboard</code> to capture rules, guardrails, conventions, "
-                     "and domain context.</div>")
+                     "and domain context.</div>", None))
     else:
         sections = []
         for kind, items in view.groups.items():

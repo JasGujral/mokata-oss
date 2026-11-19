@@ -89,29 +89,55 @@ def harness_path_kind(path: str, home: Optional[str] = None) -> Optional[str]:
     """Which host-harness capability's storage does ``path`` sit in — or None.
 
     ``path`` must already be absolute and resolved (``selfprotect`` passes a realpath); the
-    comparison is on path COMPONENTS, so it is decided by shape and answers for a file that
-    does not exist yet. Total: never raises, never touches the filesystem beyond resolving
-    the home directory."""
+    comparison is on path COMPONENTS, so it answers for a file that does not exist yet. 0.0.29
+    H3: inside is decided by the DISK (`fs_identity.require_inside`: `~/.CLAUDE/x` on a folding
+    volume is `~/.claude/x`), and the components below are matched by `fold_component`. Total:
+    never raises."""
     try:
-        root = harness_state_root(home).resolve()
-        rel = Path(path).resolve().relative_to(root)
-    except (OSError, ValueError):
+        base = str(harness_state_root(home))
+    except (OSError, RuntimeError):
+        return None
+    parts = _parts_below(path, base)
+    if parts is None:
         return None                          # not under the harness root (or unresolvable)
-    parts = rel.parts
     if not parts:
         return HARNESS_STATE
-    if parts[0] == CLAUDE_PROJECTS_DIR:
+    if _is(parts[0], CLAUDE_PROJECTS_DIR):
         # `<slug>/memory/**` is the memory store; anything else under a slug is transcripts.
-        if len(parts) >= 3 and parts[2] == CLAUDE_MEMORY_DIR:
+        if len(parts) >= 3 and _is(parts[2], CLAUDE_MEMORY_DIR):
             return HARNESS_MEMORY
         return HARNESS_TRANSCRIPTS
-    if parts[0] in _SETTINGS_FILES:
+    if _is(parts[0], *_SETTINGS_FILES):
         return HARNESS_SETTINGS
-    if parts[0] == "plugins":
+    if _is(parts[0], "plugins"):
         return HARNESS_PLUGINS
-    if parts[0] == "hooks":
+    if _is(parts[0], "hooks"):
         return HARNESS_HOOKS
     return HARNESS_STATE
+
+
+def _parts_below(path: str, base: str) -> Optional[tuple]:
+    """The components of `path` below `base` when the DISK says it is inside (ALLOW side:
+    `require_inside`, identity, never the fold), spelled as the disk spells the existing ones
+    (`disk_rel`); None when outside or unresolvable."""
+    from .fs_identity import disk_rel, require_inside
+    try:
+        if not require_inside(path, base):
+            return None
+        got = disk_rel(base, path)
+    except (OSError, ValueError, TypeError, RuntimeError):
+        return None
+    return None if got is None else tuple(got[0] + got[1])
+
+
+def _is(part: str, *names: str) -> bool:
+    """`part` names one of `names` — by `fold_component` (case, Unicode, Windows trailing dots)."""
+    from mokata_emit import fold_component
+    try:
+        key = fold_component(part)
+        return any(key == fold_component(n) for n in names)
+    except (ValueError, TypeError):
+        return False
 
 
 #: HP.S4 (0.0.22 D5) — the user-level harness CONFIG a gated config write may land in from outside
@@ -127,18 +153,18 @@ def is_user_harness_config(path: str, home: Optional[str] = None) -> bool:
     """Is ``path`` one of the user-level harness config locations above? Decided by shape (the
     file need not exist); total — never raises."""
     try:
-        base = (Path(home) if home else Path.home()).resolve()
-        rel = Path(os.path.expanduser(str(path))).resolve().relative_to(base)
+        base = str(Path(home) if home else Path.home())
+        target = os.path.expanduser(str(path))
     except (OSError, ValueError, RuntimeError):
         return False
-    parts = rel.parts
+    parts = _parts_below(target, base)
     if not parts:
         return False
-    if len(parts) == 1 and parts[0] in _USER_CONFIG_FILES:
+    if len(parts) == 1 and _is(parts[0], *_USER_CONFIG_FILES):
         return True
-    if parts[0] == CLAUDE_DIR_NAME:
-        return len(parts) >= 2 and parts[1] in _USER_CLAUDE_LEAVES
-    return parts[0] in _USER_HARNESS_DIRS and len(parts) >= 2
+    if _is(parts[0], CLAUDE_DIR_NAME):
+        return len(parts) >= 2 and _is(parts[1], *_USER_CLAUDE_LEAVES)
+    return _is(parts[0], *_USER_HARNESS_DIRS) and len(parts) >= 2
 
 
 def harness_capability_label(kind: Optional[str]) -> Optional[str]:

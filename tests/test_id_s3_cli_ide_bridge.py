@@ -40,6 +40,7 @@ import urllib.request
 from pathlib import Path
 
 import _support  # noqa: F401  (puts src/ on the path)
+import _hermetic_git  # noqa: E402  (0.0.29 D1: the one hermetic git door)
 
 from mokata import harness_setup as HS
 from mokata import perf
@@ -473,9 +474,8 @@ class SetupWiresObserveOnlyHttpHooks(unittest.TestCase):
         # The developer's own global gitignore (core.excludesFile, ~/.config/git/ignore) often ignores
         # `.claude/settings.local.json` — that made this red on a maintainer's Mac. Grade the repo alone.
         from unittest import mock
-        env = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
-               "HOME": str(self.home), "USERPROFILE": str(self.home),
-               "XDG_CONFIG_HOME": str(self.home / ".config")}
+        env = _hermetic_git.git_env(HOME=str(self.home), USERPROFILE=str(self.home),
+                                    XDG_CONFIG_HOME=str(self.home / ".config"))
         with mock.patch.dict(os.environ, env):
             subprocess.run(["git", "init", "-q", str(self.root)], check=True, capture_output=True,
                            stdin=subprocess.DEVNULL)

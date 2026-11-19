@@ -284,30 +284,103 @@ def read_resume(root: str):
     if not (isinstance(entry, dict) and isinstance(entry.get("answer"), dict)
             and isinstance(entry.get("key"), dict) and isinstance(entry.get("inputs"), list)
             and isinstance(entry.get("listed"), list)
+            and isinstance(entry.get("pids"), list) and isinstance(entry.get("env"), dict)
+            and isinstance(entry.get("events"), list) and isinstance(entry.get("root"), str)
+            and (entry.get("own") is None or isinstance(entry.get("own"), str))
             and (entry.get("line") is None or isinstance(entry.get("line"), str))):
         return None
     return entry
 
 
-def resume_holds(entry: dict, session: str) -> bool:
-    """True when what `session` would read is what the stored answer was derived from."""
+#: The key value standing for the starting session's own index row: its liveness PROJECTION
+#: (`session_index.PROJECTION_KEYS`), not its stat signature — SessionStart rewrites the row before
+#: the briefing, so a signature never matched and every start re-derived (0.0.29 F §3e.3).
+LIVENESS = "liveness"
+
+
+def _own_fact(path: str, now: float) -> dict:
+    from .session_index import liveness_projection, read_path
+    return {LIVENESS: liveness_projection(read_path(path), now)}
+
+
+def resume_holds(entry: dict, session: str, now: "float | None" = None) -> bool:
+    """True when every fact the stored answer rested on is what `session` would read NOW (0.0.29 F
+    §3e): every file it read (stat signature / listing), the starting session's own row by its
+    liveness projection, the keyed environment (`MOKATA_SESSION_ID`), and every `pid_alive` result
+    the derivation obtained — re-probed, any flip a miss. Imports neither `hints` nor
+    `session_registry` unless a pid is in the basis."""
+    import os as _os
+    now = time.time() if now is None else float(now)
+    for name, value in entry["env"].items():
+        if _os.environ.get(name, "") != value:
+            return False
+    own = _fill(entry["own"], session) if entry.get("own") else None
     inputs = [_fill(p, session) for p in entry["inputs"]]
     listed = [_fill(p, session) for p in entry["listed"]]
     want = {_fill(k, session): v for k, v in entry["key"].items()}
-    return input_key(inputs, listed) == want
+    have = input_key([p for p in inputs if p != own], listed)
+    if own is not None and own in want:
+        have[own] = _own_fact(own, now)
+    if have != want:
+        return False
+    if entry["events"] and not _events_hold(entry, session):
+        return False
+    if entry["pids"]:
+        from .session_registry import pid_alive
+        for pid, alive in entry["pids"]:
+            if bool(pid_alive(pid)) != bool(alive):
+                return False
+    return True
 
 
-def store_resume(root: str, session: str, answer: dict, key: dict, line) -> None:
+def _events_hold(entry: dict, session: str) -> bool:
+    """Every event-store query the answer rested on gives the same answer now (`hints._EVENTS`):
+    the same rows by id, and the same reason when there are none. The chain's session is slotted,
+    as paths are, so another session's start re-asks for ITS events."""
+    try:
+        from .events.store import store_for_root
+        store = store_for_root(entry["root"])
+        for run, chain, typ, limit, said in entry["events"]:
+            r = store.read_run_readonly(run_id=run, session_ids=[_fill(c, session) for c in chain],
+                                        types=[typ], limit=limit)
+            now = {"ids": [str(e.event_id) for e in r.rows], "truncated": bool(r.truncated),
+                   "absent": bool(r.absent), "fault": bool(r.fault)}
+            if now != said:
+                return False
+    except (OSError, ValueError, TypeError, KeyError):
+        return False
+    return True
+
+
+def store_resume(root: str, session: str, answer: dict, key: dict, line,
+                 now: "float | None" = None) -> None:
     """Store `answer` (derived for `session`) and its rendered briefing `line` (None = silent),
-    keyed on `key` (its `input_key`), the session's own path components slotted out. The line is
-    stored so a hit renders nothing (it never imports `hints`: measured ~10 ms of a 150 ms hook)."""
+    keyed on `key` (its `input_key`), the session's own path components slotted out — the session's
+    own index row keyed by its liveness projection as of `now` (the derivation's moment), and the
+    answer's pid facts and environment (`basis.pids`, `basis.env`). The line is stored so a hit
+    renders nothing (it never imports `hints`: measured ~10 ms of a 150 ms hook)."""
     import json
     from .atomicfile import atomic_write_text
     basis = answer.get("basis") or {}
+    now = time.time() if now is None else float(now)
+    key = dict(key)
+    own = None
+    if session:
+        from .session_index import path_of
+        mine = os.path.realpath(path_of(root, session))
+        own = next((k for k in key if os.path.realpath(k) == mine), None)
+        if own is not None:
+            key[own] = _own_fact(own, now)
     entry = {"answer": answer, "line": line, "at": time.time(),
              "inputs": [_slot(p, session) for p in basis.get("inputs") or []],
              "listed": [_slot(p, session) for p in basis.get("listed") or []],
-             "key": {_slot(k, session): v for k, v in key.items()}}
+             "key": {_slot(k, session): v for k, v in key.items()},
+             "own": _slot(own, session) if own is not None else None,
+             "pids": [list(p) for p in basis.get("pids") or []],
+             "env": dict(basis.get("env") or {}),
+             "root": root,
+             "events": [[q[0], [_slot(c, session) for c in q[1]], *q[2:]]
+                        for q in basis.get("events") or []]}
     try:
         atomic_write_text(os.path.join(cache_dir(root), RESUME_FILENAME),
                           json.dumps({"v": CACHE_VERSION, "entry": entry}, sort_keys=True))
@@ -383,6 +456,18 @@ def compute(root: str, surface, route: str) -> dict:
                 _mode_dependencies_missing(root, route == "plugin")}
 
 
+def prune_bytecode() -> int:
+    """0.0.29 F (HOOK-PYCACHE-COLD-AND-STALE) — once per session, off every hook's clock: delete the
+    bytecode under this process's `PYTHONPYCACHEPREFIX` whose source is gone (a deleted checkout, an
+    old plugin version). The launcher handed the prefix down (`sys.pycache_prefix`); `pycache.prune`
+    acts only inside a resolved `…/mokata/pycache`, only on what it can prove, never on Windows."""
+    try:
+        from .pycache import prune
+        return prune(sys.pycache_prefix)          # never raises (its contract)
+    except ImportError:                           # a half-installed tree: a later prune
+        return 0
+
+
 def refresh_main(argv: list) -> int:
     """`<python> mokata_emit/__main__.py --refresh-briefing <root> <cli|plugin> <estimate|->
     <capture|-> <session|->`."""
@@ -421,6 +506,7 @@ def refresh_main(argv: list) -> int:
         if not structure_cache.is_fresh(root):
             from .knowledge.layer import graph_structure_line
             structure_cache.store(root, graph_structure_line(surface))
+        prune_bytecode()
         return 0
     except Exception:  # noqa: BLE001 — nobody to tell; the next briefing still says "checking"
         return 1

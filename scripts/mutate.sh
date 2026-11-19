@@ -289,12 +289,16 @@ LOCK_IMPL="${MUTATE_LOCK_IMPL:-auto}"          # auto | flock | pidfile
 
 # HOLE 6 (a): content identity. The hasher is chosen ONCE, here, so the teardown path never
 # depends on a tool lookup at the moment it is least able to cope with one failing.
+# 0.0.29 D3: every hasher reads the file on STDIN, in binary mode, never by name. `shasum` and
+# `sha256sum` ESCAPE their output (a leading `\` on the hash) when the file NAME holds a backslash
+# — every Windows path — so a hash taken by name never equalled the mutator's, and every Windows
+# run refused with "the source changed between the plan and the apply".
 if command -v shasum >/dev/null 2>&1; then
-    sha256_of() { shasum -a 256 "$1" | cut -d' ' -f1; }
+    sha256_of() { shasum -b -a 256 < "$1" | cut -d' ' -f1; }
 elif command -v sha256sum >/dev/null 2>&1; then
-    sha256_of() { sha256sum "$1" | cut -d' ' -f1; }
+    sha256_of() { sha256sum -b < "$1" | cut -d' ' -f1; }
 elif command -v openssl >/dev/null 2>&1; then
-    sha256_of() { openssl dgst -sha256 "$1" | awk '{print $NF}'; }
+    sha256_of() { openssl dgst -sha256 < "$1" | awk '{print $NF}'; }
 else
     sha256_of() { "$PYTHON" -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }
 fi
@@ -519,24 +523,41 @@ import hashlib
 import sys
 
 mode, path, old, new = sys.argv[1:5]
-source = open(path, encoding="utf-8").read()
+# 0.0.29 D3 `MUTATE-SH-WINDOWS-NEWLINE`: BYTES in, BYTES out. A text-mode read turned CRLF into LF
+# on EVERY OS and a text-mode write turned LF back into CRLF on Windows only, so the recorded hash
+# (of LF bytes) never matched the file on disk there (`TARGET CHANGED UNDER THE RUN`, rc 4), and a
+# CRLF target was silently rewritten LF everywhere else. Now every byte outside the replaced span is
+# the byte that was read, and every hash is over the exact bytes written or read.
+raw = open(path, "rb").read()
+try:
+    source = raw.decode("utf-8")
+except UnicodeDecodeError as exc:
+    print(f"MUTATION-BROKEN: the target is not UTF-8 ({exc}); mutate.sh never rewrites bytes it "
+          f"cannot read back exactly", file=sys.stderr)
+    sys.exit(3)
 found = source.count(old)
 if found != 1:
     # Not "> 0": a pattern matching twice mutates BOTH sites, and the verdict would then belong
     # to a mutant with two edits in it. Exactly one, or it is not the mutation that was described.
-    print(f"MUTATION-BROKEN: pattern occurs {found} times, expected exactly 1", file=sys.stderr)
+    why = ""
+    if found == 0 and "\n" in old and b"\r\n" in raw:
+        why = (" — the target has CRLF line endings and the pattern spans lines with LF; "
+               "mutate.sh never rewrites line endings, so give a single-line pattern")
+    print(f"MUTATION-BROKEN: pattern occurs {found} times, expected exactly 1{why}", file=sys.stderr)
     sys.exit(3)
-mutated = source.replace(old, new)
+mutated = source.replace(old, new).encode("utf-8")
 if mode == "plan":
-    print(hashlib.sha256(mutated.encode("utf-8")).hexdigest())
+    print(hashlib.sha256(mutated).hexdigest())
     sys.exit(0)
 # The plan and the apply are two reads of the same file, so the apply must prove it is mutating
 # what was planned. If the source moved in between, the planned hash describes bytes that no
-# longer exist and writing would put the target into a state this run never recorded.
-if hashlib.sha256(source.encode("utf-8")).hexdigest() != sys.argv[5]:
+# longer exist and writing would put the target into a state this run never recorded. Compared
+# over the BYTES READ — never a re-encode, which would hash a CRLF source as LF.
+if hashlib.sha256(raw).hexdigest() != sys.argv[5]:
     print("MUTATION-BROKEN: the source changed between the plan and the apply", file=sys.stderr)
     sys.exit(3)
-open(path, "w", encoding="utf-8").write(mutated)
+with open(path, "wb") as fh:
+    fh.write(mutated)
 PYEOF
 }
 

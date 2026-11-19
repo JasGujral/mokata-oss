@@ -411,9 +411,12 @@ class TheTagShardCeilingIsDerivedFromTheRecord(_Tree):
                           "an allowance for an UNMEASURED imbalance must say it is provisional")
 
     def test_a_record_the_ceiling_no_longer_clears_reds(self):
-        grown = dict(self.record, modules={m: t * 1.6 for m, t in self.record["modules"].items()})
+        # 0.0.29 D3 measured Linux at 0.382 of the Windows record (was a guessed 0.5), so a 60%
+        # growth now lands at 1257s x 1.2 < 26m and still CLEARS; doubling is past it at any
+        # factor this record has carried.
+        grown = dict(self.record, modules={m: t * 2.0 for m, t in self.record["modules"].items()})
         why = ceiling_fault(self.release_text, grown, self.modules)
-        self.assertIsNotNone(why, "the suite grew 60% and the tag ceiling still read CLEARS")
+        self.assertIsNotNone(why, "the suite doubled and the tag ceiling still read CLEARS")
         self.assertIn("does not clear", why)
 
     def test_an_inflated_ceiling_reds_too(self):

@@ -93,8 +93,9 @@ ADVICE = {R_INIT: "init", R_NO_RUN: "start", R_AMBIGUOUS: "pick-run", R_APPROVE:
           C_RERUN_UNSURE: "re-run", C_FAILING: "develop", C_REVIEW: "review",
           C_REVIEW_FAILED: "develop", C_SHIP: "ship", C_FINISHED: "done", R_GRAPH: "build-graph"}
 
-#: a session with no end marker and activity within this window is live (the IDE's own window)
-LIVE_SECS = 15 * 60
+#: a session with no end marker and activity within this window is live (the IDE's own window) —
+#: `session_index.LIVE_SECS`, so the cached resume key judges the window the same way (0.0.29 F)
+from .session_index import LIVE_SECS  # noqa: E402  (stdlib-only)
 #: one test id / text field longer than this is clipped when shown
 TEXT_MAX = 120
 #: gate decisions / tool calls read per run (newest) — see `_gate_facts` for why the gate answer
@@ -325,6 +326,9 @@ class _Run:
             from .events.store import store_for_root
             r = store_for_root(self.root).read_run_readonly(
                 run_id=self.run, session_ids=self.chain, types=[typ], limit=EVENT_ROWS)
+            box = _EVENTS.get()
+            if box is not None:          # 0.0.29 F: the query and what it answered, keyed
+                box.append([self.run, list(self.chain), typ, EVENT_ROWS, events_print(r)])
             self.rd.event_rows += len(r.rows)
             if r.fault:
                 raise _Unknown(f"{r.fault} — `mokata doctor`")
@@ -593,17 +597,15 @@ def _session_live(root: str, chain: Sequence[str], run: str, now: float
     from .run_resolver import live_runs
     from .session_registry import pid_alive
     for sid in list(chain)[:1]:
-        rec = SI.read(root, sid) or {}
-        segs = rec.get("segments") or []
-        if segs and isinstance(segs[-1], dict):
-            seg = segs[-1]
-            if seg.get("end"):
-                return False, "SessionEnd recorded", None
-            proc = seg.get("proc")
-            if isinstance(proc, list) and proc and not pid_alive(proc[0]):
-                return False, "its Claude Code process is gone", None
-        hb = float(rec.get("heartbeat") or 0.0)
-        if hb and now - hb <= LIVE_SECS:
+        # 0.0.29 F §3e.3 — the row is read ONLY through `liveness_read`: its projection is what the
+        # stored resume answer is keyed by (`briefing_cache.resume_holds`), so nothing here may
+        # branch on a field the projection does not carry.
+        proj, pid, hb = SI.liveness_read(SI.read(root, sid), now)
+        if proj["has_end"]:
+            return False, "SessionEnd recorded", None
+        if pid is not None and not pid_alive(pid):
+            return False, "its Claude Code process is gone", None
+        if proj["heartbeat_live"]:
             return True, f"activity {_ago(hb, now)}", hb + LIVE_SECS
     if run and live_runs(root, {run}):
         return True, "its run's MCP process is registered alive", None
@@ -649,9 +651,9 @@ def _bridge(root: str) -> Tuple[bool, str]:
         return False, type(exc).__name__
 
 
-def _unblock_command(gate: str) -> Tuple[str, str]:
-    from .legibility import GATE_UNBLOCK
-    line = GATE_UNBLOCK.get(gate or "", "")
+def _unblock_command(gate: str, root: Optional[str] = None) -> Tuple[str, str]:
+    from .legibility import unblock_hint
+    line = unblock_hint(gate, root) or ""
     cmd = ""
     if "`" in line:
         cmd = line.split("`")[1]
@@ -666,7 +668,7 @@ def _tier_b(r: _Run, tl: Dict[str, Any], live: bool, live_basis: str,
                     f"spec amendment v{am.from_version} → v{am.to_version} is open: development "
                     "writes are blocked until it closes" +
                     (f" ({_clip(am.reason, 80)})" if am.reason else ""),
-                    "/mokata:spec", (Cite("state", f"spec_amend__{r.run}"),), writes=True)
+                    slash_command("spec", r.root), (Cite("state", f"spec_amend__{r.run}"),), writes=True)
     block = _gate_facts(r, _latest_write(tl, r.run) if not tl["fault"] else None)
     if block is None:
         return None
@@ -686,7 +688,7 @@ def _tier_b(r: _Run, tl: Dict[str, Any], live: bool, live_basis: str,
                     f"({live_basis}) — resume the run to clear it",
                     "mokata resume", cite)
     secret = "secret" in gate.lower()
-    line, cmd = _unblock_command(gate)
+    line, cmd = _unblock_command(gate, r.root)
     if secret:
         text = (f"a write was blocked for a secret {_ago(at, r.now)}: remove it — a security "
                 "block cannot be approved away")
@@ -728,7 +730,7 @@ def _ladder(r: _Run, tl: Dict[str, Any], bridge: Tuple[bool, str], live: bool,
     spec = r.spec()
     if spec is None:
         return STATUS_HINTS, [Hint(C_SPEC, "the approach is approved; no spec has been emitted",
-                                   "/mokata:spec",
+                                   slash_command("spec", r.root),
                                    (Cite("state", f"approved_approach__{r.run}",
                                          _epoch(ap.get("at"))),
                                     Cite("state", f"emitted_spec__{r.run}: absent")),
@@ -743,14 +745,14 @@ def _ladder(r: _Run, tl: Dict[str, Any], bridge: Tuple[bool, str], live: bool,
     unmapped = [ac for ac in acs if not mapped[ac]]
     if unmapped:
         return STATUS_HINTS, [Hint(C_UNMAPPED, f"{len(unmapped)} acceptance criteria have no "
-                                   f"test: {_names(unmapped, 5)}", "/mokata:test",
+                                   f"test: {_names(unmapped, 5)}", slash_command("test", r.root),
                                    tuple(Cite("spec", f"{r.run}:{ac}") for ac in unmapped))], ""
     am = r.amend()
     if am.red_owed:
         owed = list(am.owed(r.red()))
         if owed:
             return STATUS_HINTS, [Hint(C_RED_OWED, f"the amended spec owes a failing run for "
-                                       f"{len(owed)} test(s): {_names(owed)}", "/mokata:test",
+                                       f"{len(owed)} test(s): {_names(owed)}", slash_command("test", r.root),
                                        (Cite("state", f"spec_amend__{r.run}.red_owed"),))], ""
     # one identity per test, whatever spelling recorded it
     alias = {}
@@ -822,26 +824,26 @@ def _ladder(r: _Run, tl: Dict[str, Any], bridge: Tuple[bool, str], live: bool,
     if red:
         return STATUS_HINTS, [Hint(C_FAILING, f"{len(red)} test(s) failing at the last run "
                                    f"{_ago(T, r.now)}: {_names([_label(c) for c in red])}{tail}",
-                                   "/mokata:develop",
+                                   slash_command("develop", r.root),
                                    tuple(Cite("test_record", _label(c), hist[c].get("last_at"))
                                          for c in red[:20]))], ""
     # ---- C8 / C9: the review
     ev = r.log.get("verdict")
     if ev is None:
         return STATUS_HINTS, [Hint(C_REVIEW, f"tests are green; no review is recorded{tail}",
-                                   "/mokata:review",
+                                   slash_command("review", r.root),
                                    (Cite("test_record", f"test_runs__{r.run}.last_suite", T),
                                     Cite("progress_log", f"review_verdict:{r.run}: absent")))], ""
     vt = _epoch(ev.get("ts"))
     vcite = Cite("progress_log", f"review_verdict:{ev.get('event_id', '')}", vt)
     if not ev["data"].get("passed"):
         return STATUS_HINTS, [Hint(C_REVIEW_FAILED, "review did not pass: address its findings, "
-                                   "then review again", "/mokata:develop", (vcite,))], ""
+                                   "then review again", slash_command("develop", r.root), (vcite,))], ""
     max_age = _max_age(r.root)
     if max_age > 0 and (not vt or (r.now - vt) / 3600.0 > max_age):
         return STATUS_HINTS, [Hint(C_REVIEW, f"the review is older than {max_age:g} h "
                                    f"(recorded {_ago(vt, r.now)}) — review again",
-                                   "/mokata:review", (vcite,))], ""
+                                   slash_command("review", r.root), (vcite,))], ""
     if max_age > 0:
         r.bounds.append(vt + max_age * 3600.0)        # past it, this rung becomes "review again"
     n_since, why_v = _writes_after(tl, r.run, vt)
@@ -851,13 +853,13 @@ def _ladder(r: _Run, tl: Dict[str, Any], bridge: Tuple[bool, str], live: bool,
         why_v = why_v or why_b2
     if n_since or bash_v:
         return STATUS_HINTS, [Hint(C_REVIEW, f"the code changed after the review "
-                                   f"({_ago(vt, r.now)}) — review again", "/mokata:review",
+                                   f"({_ago(vt, r.now)}) — review again", slash_command("review", r.root),
                                    (vcite, Cite("timeline", "writes after the verdict")))], ""
     if n_since is None or bash_v is None:
         return STATUS_HINTS, [Hint(C_REVIEW, f"cannot confirm nothing changed after the review "
-                                   f"({why_v}) — review again", "/mokata:review", (vcite,))], ""
+                                   f"({why_v}) — review again", slash_command("review", r.root), (vcite,))], ""
     return STATUS_HINTS, [Hint(C_SHIP, f"reviewed {_ago(vt, r.now)}, tests green and current — "
-                               f"ready to land{tail}", "/mokata:ship", (vcite,))], ""
+                               f"ready to land{tail}", slash_command("ship", r.root), (vcite,))], ""
 
 
 def _stale_stamps(root: str, hs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -975,7 +977,7 @@ def _resolve(root: str, s: Subject) -> Tuple[Optional[str], str, Optional[Hint],
             break
     if s.own_only and (res is None or res.basis != "bound"):
         return None, "none", Hint(R_NO_RUN, "this session has no tracked run — start one",
-                                  "/mokata:brainstorm",
+                                  slash_command("brainstorm", root),
                                   (Cite("run_resolver", f"session {s.session[:12]}: no run "
                                                         "bound"),)), ""
     if res is None or res.basis != "bound":
@@ -987,7 +989,7 @@ def _resolve(root: str, s: Subject) -> Tuple[Optional[str], str, Optional[Hint],
                 "mokata sessions", (Cite("run_resolver", "ambiguous: " +
                                          _names(list(res.candidates), 4)),)), ""
         return None, res.basis, Hint(R_NO_RUN, "no tracked run in this repository — start one",
-                                     "/mokata:brainstorm",
+                                     slash_command("brainstorm", root),
                                      (Cite("run_resolver", "no run state"),)), ""
     if res.basis not in ATTACHED_BASES:
         live = live_runs(root, set(run_ids(_state_dir(root))))
@@ -1037,6 +1039,60 @@ def _audit(event: str, args: Tuple[Any, ...]) -> None:
             box[0].update((db, db + "-wal"))
 
 
+#: 0.0.29 F §3e.1 — every `session_registry.pid_alive` result the derivation obtains, ANYWHERE
+#: (`_session_live`, `run_resolver.live_runs` on the LIVE rung, `_resolve`'s ambiguity check): the
+#: box `derive_batch` arms while it runs. A stored answer that rested on a process being alive is
+#: re-probed against exactly these pairs (`briefing_cache.resume_holds`) — captured where the pids
+#: are probed, never a list someone remembered.
+_PIDS: "ContextVar[Optional[List[List[Any]]]]" = ContextVar("mokata_hints_pids", default=None)
+#: The environment variables `derive` reads — keyed by value: `run_resolver.PIN_ENV` (the run pin)
+#: and what `plugin_runtime.slash_command` renders every command from (the route, and the home whose
+#: user-scope commands it looks for). `EveryReadIsKeyed` (tests) runs `derive` under a recording
+#: environ over every rung and reds on any name not here. The home is `os.path.expanduser`'s, so it
+#: is keyed under every name it reads: `HOME` (POSIX), `USERPROFILE` and its `HOMEDRIVE`+`HOMEPATH`
+#: fallback (Windows) — a moved Windows home re-renders the command line as a moved `HOME` does.
+KEYED_ENV = ("MOKATA_SESSION_ID", "CLAUDE_PLUGIN_ROOT", "MOKATA_VIA_PLUGIN", "HOME",
+             "USERPROFILE", "HOMEDRIVE", "HOMEPATH")
+
+
+#: 0.0.29 F — every event-store query the derivation made, with what it answered
+#: (`[run, chain, type, limit, events_print(answer)]`). The store is keyed by THESE, not by the
+#: database file's stat signature: every SessionStart appends its own event to that file before the
+#: briefing, so a signature never matched and every start re-derived (measured on the real hook).
+#: `briefing_cache.resume_holds` re-runs each query and misses on any different answer.
+_EVENTS: "ContextVar[Optional[List[List[Any]]]]" = ContextVar("mokata_hints_events", default=None)
+
+
+def events_print(r: Any) -> Dict[str, Any]:
+    """What a `read_run_readonly` answer says, comparably: the rows' ids, and why there are none."""
+    return {"ids": [str(e.event_id) for e in r.rows], "truncated": bool(r.truncated),
+            "absent": bool(r.absent), "fault": bool(r.fault)}
+
+
+def _arm_pid_recorder() -> None:
+    """Wrap `session_registry.pid_alive` (once — re-wrapped if something replaced it, e.g. a test's
+    patch) with a recorder that is a pass-through unless THIS context is inside `derive_batch`.
+    Every caller imports it at call time (`from .session_registry import pid_alive` inside the
+    function — pinned by a test), so the wrapper is what each probe calls."""
+    from . import session_registry as SR
+    cur = SR.pid_alive
+    if getattr(cur, "_mokata_pid_recorder", False):
+        return
+
+    def pid_alive(pid: Any) -> bool:
+        alive = cur(pid)
+        box = _PIDS.get()
+        if box is not None:
+            fact = [pid if isinstance(pid, (int, str)) else None, bool(alive)]
+            if fact not in box:
+                box.append(fact)
+        return alive
+    pid_alive._mokata_pid_recorder = True        # type: ignore[attr-defined]
+    pid_alive.__wrapped__ = cur                  # type: ignore[attr-defined]
+    pid_alive.__doc__ = cur.__doc__
+    SR.pid_alive = pid_alive
+
+
 def _inputs(root: str, files: set, dirs: set) -> Tuple[List[str], List[str]]:
     """The captured paths that are the REPO's (this tree or its main checkout): never the
     interpreter's, never a bytecode cache."""
@@ -1069,16 +1125,32 @@ def derive_batch(root: str, subjects: Sequence[Subject], *, now: Optional[float]
     if not _AUDIT_INSTALLED[0]:
         _AUDIT_INSTALLED[0] = True
         sys.addaudithook(_audit)
+    _arm_pid_recorder()
     box: Tuple[set, set] = (set(), set())
+    pids: List[List[Any]] = []
+    events: List[List[Any]] = []
     token = _CAPTURE.set(box)
+    ptoken = _PIDS.set(pids)
+    etoken = _EVENTS.set(events)
     try:
         out = _derive_batch(root, subjects, now=now, rules=rules)
     finally:
+        _EVENTS.reset(etoken)
+        _PIDS.reset(ptoken)
         _CAPTURE.reset(token)
+    if events:                       # the event store is keyed by its queries' answers instead
+        from .events.store import store_for_root
+        db = os.path.realpath(store_for_root(root).path)
+        box[0].difference_update({p for p in box[0]
+                                  if os.path.realpath(p) in (db, db + "-wal", db + "-shm")})
     inputs, listed = _inputs(root, *box)
+    env = {k: os.environ.get(k, "") for k in KEYED_ENV}
     for a in out:
         a["basis"]["inputs"] = inputs
         a["basis"]["listed"] = listed
+        a["basis"]["pids"] = [list(p) for p in pids]      # 0.0.29 F: every pid fact it rested on
+        a["basis"]["env"] = dict(env)                      # 0.0.29 F: every variable it read
+        a["basis"]["events"] = [list(q) for q in events]   # 0.0.29 F: every event query it made
     return out
 
 

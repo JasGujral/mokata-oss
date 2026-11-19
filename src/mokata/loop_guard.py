@@ -50,6 +50,7 @@ import os
 
 from .state import StateStore
 from .tdd_state import state_dir
+from .plugin_runtime import localize_commands
 
 #: The ledger kind for a breaker ruling (a trip, a review-loop refusal).
 LEDGER_KIND = "loop_breaker"
@@ -187,11 +188,11 @@ def tripped_failures(root: str, run_id: Optional[str]) -> List[Tuple[str, int]]:
 def breaker_message(tripped: List[Tuple[str, int]]) -> str:
     sig, n = tripped[0]
     more = f" (and {len(tripped) - 1} more)" if len(tripped) > 1 else ""
-    return (f"{GATE_FIX_BREAKER}: {n} fix attempts at the same failure have failed — "
+    return (localize_commands(f"{GATE_FIX_BREAKER}: {n} fix attempts at the same failure have failed — "
             f"\"{sig}\"{more}. A fourth blind fix is blocked: three failures say the APPROACH is "
             f"wrong. {ESCALATE}, then get a NEW approach approved (/mokata:brainstorm — the "
             f"approach-approval gate); that clears the breaker. Or the human overrides: mokata "
-            f"gate override {GATE_FIX_BREAKER} --reason \"<why>\"")
+            f"gate override {GATE_FIX_BREAKER} --reason \"<why>\"", None))
 
 
 # ------------------------------------------------------------------------------- the review loop

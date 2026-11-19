@@ -22,6 +22,7 @@ absent. Everything else runs under unittest with the IDE app in-process.
 
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """
+import importlib.util
 import json
 import os
 import re
@@ -317,9 +318,11 @@ def _why_no_browser():
 SKIP = _why_no_browser()
 
 
-def _crg():
-    from mokata.detect import find_command
-    return bool(find_command("code-review-graph"))
+#: 0.0.29 D4 `REAL-CRG-CLASSES-NEVER-RUN`: gated on the PACKAGE (`find_command` honours the hermetic
+#: `MOKATA_CRG=off`, so the graph test skipped everywhere). `real-crg.yml` runs it live, weekly, with
+#: `MOKATA_REQUIRE_REAL_CRG=1` (a skip there is a red).
+_HAS_CRG = importlib.util.find_spec("code_review_graph") is not None
+_REQUIRE_REAL_CRG = os.environ.get("MOKATA_REQUIRE_REAL_CRG") == "1"
 
 
 class _Browser(unittest.TestCase):
@@ -356,6 +359,9 @@ class InTheBrowser_RealIde(_Browser):
         os.makedirs(cls.home)
         P29.stranger_repo(cls.repo)
         env = dict(os.environ, PYTHONPATH=SRC, HOME=cls.home, USERPROFILE=cls.home)
+        # The server is the user's `mokata ide`: the env's real code-review-graph, never the
+        # hermetic `MOKATA_CRG=off` — popped from the COPY it is launched with (the process keeps it).
+        env.pop("MOKATA_CRG", None)
         cls.port = 28000 + os.getpid() % 1500
         cls.proc = subprocess.Popen([sys.executable, "-m", "mokata.cli", "ide", "--path", cls.repo,
                                      "--no-browser", "--foreground", "--port", str(cls.port)],
@@ -397,7 +403,8 @@ class InTheBrowser_RealIde(_Browser):
         return subprocess.run(["git", "-C", self.repo, "status", "--porcelain", "--ignored"],
                               capture_output=True, text=True, check=True).stdout
 
-    @unittest.skipUnless(_crg(), "code-review-graph is not installed in this interpreter")
+    @unittest.skipUnless(_HAS_CRG or _REQUIRE_REAL_CRG,
+                         "code-review-graph is not installed in this interpreter")
     def test_1_R34_welcome_first_then_set_up_then_build_the_graph_then_impact_turns_structural(self):
         pg = self.page()
         # UX-SIMPLIFY §6 P1: a first run never takes the window — it lands on Review, whose empty

@@ -21,6 +21,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
 import _support  # noqa: F401
 
@@ -311,6 +312,34 @@ class TestSeveralCommittedSpecs(unittest.TestCase):
         _write(repo.path, "tests/test_other.py", "def test_x():\n    'AC-1'\n")
         sd = spec_drift(repo.path)
         self.assertEqual([f.section.split(" · ")[0] for f in sd.findings], ["two"], sd.findings)
+
+    def test_L9_spec_drift_walks_the_tests_once_for_every_spec(self):
+        """0.0.29 E (`G3-L9-LOWS`): 50 committed specs -> the tree's tests are read ONCE, not once
+        per spec; the findings are what fifty per-spec walks would give."""
+        from mokata import docsync
+        from mokata.engine import acmapper
+        specs = [(f"s{i}", f"s{i}", ["AC-1", "AC-2"], ["AC-1", "AC-2"],
+                  ["AC-1"] if i % 10 == 3 else ["AC-1", "AC-2"]) for i in range(50)]
+        repo = self._repo(specs)
+        real, calls = acmapper.scan_tests, []
+
+        def counted(root, ids):
+            calls.append(list(ids))
+            return real(root, ids)
+        with mock.patch.object(acmapper, "scan_tests", counted):
+            sd = docsync.spec_drift(repo.path)
+        self.assertEqual(len(calls), 1, [len(c) for c in calls])
+        self.assertEqual(sorted(f.section for f in sd.findings),
+                         sorted(f"s{i} · AC-2" for i in range(50) if i % 10 == 3))
+
+    def test_L9_a_same_titled_twin_committed_spec_is_checked_not_dropped(self):
+        """Two committed files, one title: the second (whose AC-1 test is gone) still blocks."""
+        from mokata.docsync import BLOCKING, spec_drift
+        repo = self._repo([("a", "twin", ["AC-1"], ["AC-1"], ["AC-1"]),
+                           ("b", "twin", ["AC-1"], ["AC-1"], [])])
+        sd = spec_drift(repo.path)
+        self.assertEqual([f.section for f in sd.findings], ["twin · AC-1"], sd.findings)
+        self.assertEqual(sd.findings[0].severity, BLOCKING)
 
     def test_L9_the_emit_records_the_specs_own_test_map_in_the_committed_file(self):
         with _FreshRepo() as repo:

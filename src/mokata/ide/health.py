@@ -482,22 +482,37 @@ def _rebuild_search(root: str) -> Dict[str, Any]:
 def _stream(argv: List[str], label: str, buf: List[str]) -> int:
     """Run one command, its output streamed into the running job for the page to poll."""
     import subprocess
-    from ..quiet_spawn import hidden
+    from ..quiet_spawn import spawn_jobbed
     buf.append(f"$ {label}")
     report(note=label)
     try:
-        proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                stdin=subprocess.DEVNULL, text=True, encoding="utf-8",
-                                errors="replace", **hidden())
+        # 0.0.29 R-B9: a door tree — Cancel ends pip/uv AND everything they started (a build
+        # backend, a uv worker), not just the leader, and the stream then reaches EOF.
+        tree = spawn_jobbed(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            stdin=subprocess.DEVNULL, text=True, encoding="utf-8",
+                            errors="replace")
     except OSError as exc:
         buf.append(f"could not start: {exc}")
         return 127
-    with kill_on_cancel(proc):
-        for line in proc.stdout or ():
-            buf.append(line.rstrip("\n"))
-            report(note=buf[-1][-300:], partial={"output": "\n".join(buf)[-8000:]})
-    checkpoint()
-    return proc.wait()
+    try:
+        with kill_on_cancel(_TreeEnder(tree)):
+            for line in tree.proc.stdout or ():
+                buf.append(line.rstrip("\n"))
+                report(note=buf[-1][-300:], partial={"output": "\n".join(buf)[-8000:]})
+        checkpoint()
+        return tree.wait_exit()
+    finally:
+        tree.close()
+
+
+class _TreeEnder:
+    """What `kill_on_cancel` calls `kill()` on: the door tree's own end (the whole tree)."""
+
+    def __init__(self, tree: object) -> None:
+        self._tree = tree
+
+    def kill(self) -> None:
+        self._tree.end()  # type: ignore[attr-defined]
 
 
 def _exit_soon(delay: float = 2.0) -> None:

@@ -242,16 +242,18 @@ def _predecessor(transcript_path: Optional[str], session_id: str) -> str:
 
 
 def on_prompt(root: str, session_id: Optional[str], prompt: str,
-              t: Optional[float] = None) -> bool:
+              t: Optional[float] = None, lookup: Any = None) -> bool:
     """UserPromptSubmit: the FIRST prompt labels the row; every later one only beats the heart.
-    A prompt with no SessionStart before it (a hook wired mid-session) opens the row itself."""
+    A prompt with no SessionStart before it (a hook wired mid-session) opens the row itself.
+    `lookup`: the hook's one process-table snapshot (`claude_process`), shared with the ancestry
+    write — 0.0.29 F: one snapshot per hook."""
     t = hook_time() if t is None else float(t)
 
     def change(rec: Dict[str, Any]) -> Optional[bool]:
         wrote = False
         if not rec.get("segments"):
             rec["segments"] = [{"start": t, "source": "unknown", "cwd": "", "branch": "",
-                                "proc": claude_process(t), "end": None, "end_reason": "",
+                                "proc": claude_process(t, lookup), "end": None, "end_reason": "",
                                 "note": "first seen at a prompt (no SessionStart recorded)"}]
             wrote = True
         if not rec.get("prompt"):
@@ -297,13 +299,56 @@ def heartbeat(root: str, session_id: Optional[str], t: Optional[float] = None) -
 # ------------------------------------------------------------------------------------- read
 
 def read(root: str, session_id: str) -> Optional[Dict[str, Any]]:
-    rec = _read_file(path_of(root, session_id))
+    return read_path(path_of(root, session_id))
+
+
+def read_path(path: str) -> Optional[Dict[str, Any]]:
+    """One row by its file path, with `heartbeat` (the file's mtime) — what `read` returns."""
+    rec = _read_file(path)
     if rec is not None:
         try:
-            rec["heartbeat"] = os.path.getmtime(path_of(root, session_id))
+            rec["heartbeat"] = os.path.getmtime(path)
         except OSError:
             rec["heartbeat"] = 0.0
     return rec
+
+
+#: A session with no end marker and activity within this window is live (the IDE's own window;
+#: `hints.LIVE_SECS` is this value — one constant, so the cached resume key and the derivation
+#: judge "heartbeat live" by the same window).
+LIVE_SECS = 15 * 60
+
+#: The facts of a session row the next-step derivation decides liveness from (0.0.29 F §3e.3,
+#: RESUME-RUN-ANSWER-ALWAYS-DERIVED-AT-START): the stored resume answer is keyed by THESE, not by the
+#: row file's stat signature, which every SessionStart rewrites. `proc_pid` is kept (deviation from
+#: the note's H2d, stated in the 0.0.29 F report): the derivation probes THAT pid, so a row naming a
+#: different Claude process is a different fact; inside one Claude process (`/clear`, `/compact`)
+#: it is unchanged, so no hit the cache exists for is lost.
+PROJECTION_KEYS = ("has_end", "heartbeat_live", "proc_pid")
+
+
+def liveness_read(rec: Optional[Dict[str, Any]], now: float
+                  ) -> Tuple[Dict[str, Any], Optional[Any], float]:
+    """`(projection, proc pid, heartbeat)` of one session row — the ONLY way `hints._session_live`
+    reads a row. The projection (`PROJECTION_KEYS`) is everything its answer branches on; the
+    heartbeat value only dates the line ("activity 3 min ago") and bounds `valid_until`."""
+    rec = rec if isinstance(rec, dict) else {}
+    segs = rec.get("segments") or []
+    seg = segs[-1] if segs and isinstance(segs[-1], dict) else None
+    has_end = bool(seg is not None and seg.get("end"))
+    proc = seg.get("proc") if seg is not None and not has_end else None
+    pid = proc[0] if isinstance(proc, list) and proc else None
+    try:
+        hb = float(rec.get("heartbeat") or 0.0)
+    except (TypeError, ValueError):
+        hb = 0.0
+    live = bool(hb) and float(now) - hb <= LIVE_SECS
+    return {"has_end": has_end, "heartbeat_live": live, "proc_pid": pid}, pid, hb
+
+
+def liveness_projection(rec: Optional[Dict[str, Any]], now: float) -> Dict[str, Any]:
+    """The keyed facts of one row (`liveness_read`'s projection)."""
+    return liveness_read(rec, now)[0]
 
 
 _CACHE: Dict[str, Tuple[int, float, Dict[str, Any]]] = {}
@@ -343,4 +388,5 @@ def read_all(root: str) -> Iterator[Dict[str, Any]]:
 
 __all__ = ["SCHEMA", "DIRNAME", "LABEL_CHARS", "WITHHELD", "HOOK_TIME_ENV", "index_dir",
            "path_of", "safe_sid", "hook_time", "label_of", "branch_of", "claude_process",
-           "process_alive", "on_start", "on_prompt", "on_end", "heartbeat", "read", "read_all"]
+           "process_alive", "on_start", "on_prompt", "on_end", "heartbeat", "read", "read_all",
+           "LIVE_SECS", "PROJECTION_KEYS", "liveness_read", "liveness_projection"]

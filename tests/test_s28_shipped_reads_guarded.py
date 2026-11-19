@@ -51,6 +51,7 @@ import unittest
 from unittest import mock
 
 from _support import sample_manifest_data  # noqa: F401  (path-fix side-effect)
+import _hermetic_git  # noqa: E402  (0.0.29 D1: the one hermetic git door)
 
 import _mirror_bookkeeping as mb
 import _shipped_reads as sr
@@ -552,7 +553,7 @@ class TestTheIndexReaderIsNotADiskProbe(unittest.TestCase):
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write("x\n")
-        env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull)
+        env = _hermetic_git.git_env()
         subprocess.run(["git", "init", "-q", d], check=True, env=env)
         if tracked:
             subprocess.run(["git", "-C", d, "add"] + list(tracked), check=True, env=env)

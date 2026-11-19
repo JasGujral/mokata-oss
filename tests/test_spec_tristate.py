@@ -253,7 +253,8 @@ class TestNoChangeSetIsNeverAGreenTick(unittest.TestCase):
         _git(repo.path, "commit", "-qm", "base")
         code, out = repo.cli("ci-check", "--base", "HEAD")
         self.assertEqual(0, code, out)
-        self.assertIn("no changed files supplied", out)
+        # 0.0.29 C1: the base RESOLVED, so the line says so (it used to ask for a base it had).
+        self.assertIn("no files differ from HEAD", out)
         self.assertIn("PARTIAL", out)
         self._not_a_pass(out, "cli")
 

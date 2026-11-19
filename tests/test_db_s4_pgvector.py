@@ -304,19 +304,22 @@ class TestEmbedderAutodetect(unittest.TestCase):
     def test_db_s4_model_fetch_is_bounded_no_hang(self):
         # A cold cache on a black-holed network must not hang a recall. The fetch is bounded by
         # the env vars huggingface_hub actually reads, set only for the load and restored after.
+        # 0.0.29 C1 re-verify: the network is `embed._hub_fetch` (only with fetch consent), so the
+        # bound is asserted where the fetch now happens — the hub download itself.
+        import types
         captured = {}
 
-        class _Boom:
-            @staticmethod
-            def from_pretrained(name):
-                captured.update({k: os.environ.get(k) for k in
-                                 ("HF_HUB_ETAG_TIMEOUT", "HF_HUB_DOWNLOAD_TIMEOUT")})
-                raise OSError("connection timed out")
+        def hf_hub_download(repo, filename, **_kw):
+            captured.update({k: os.environ.get(k) for k in
+                             ("HF_HUB_ETAG_TIMEOUT", "HF_HUB_DOWNLOAD_TIMEOUT")})
+            raise OSError("connection timed out")
+        hub = types.ModuleType("huggingface_hub")
+        hub.hf_hub_download = hf_hub_download
 
         before = os.environ.get("HF_HUB_ETAG_TIMEOUT")
-        with mock.patch.dict("sys.modules", {"model2vec": mock.Mock(StaticModel=_Boom)}):
+        with mock.patch.dict("sys.modules", {"model2vec": mock.Mock(), "huggingface_hub": hub}):
             with self.assertRaises(ModelUnavailable):
-                embed._load_model2vec("some/model")
+                embed._load_model2vec("some/model", fetch_consent=True)
         self.assertEqual(str(int(embed.MODEL_FETCH_TIMEOUT_S)), captured["HF_HUB_ETAG_TIMEOUT"],
                          "the fetch runs under a finite timeout — the D0 discipline")
         self.assertEqual(before, os.environ.get("HF_HUB_ETAG_TIMEOUT"),
@@ -506,9 +509,11 @@ class TestConsentInstall(unittest.TestCase):
             # 0.0.25 I-01: the route follows the installer that owns this env (install_route);
             # under pip it is THIS interpreter, and the extra's own requirements (never
             # `mokata[...]`, which would make pip re-resolve mokata itself).
-            from mokata.install_route import PIP, detect_installer, extra_requirements
+            # 0.0.29 C1 (D15): plus mokata's own `mcp` requirement, which every non-joint install
+            # carries so no resolver can move mcp past mokata's ceiling.
+            from mokata.install_route import PIP, _with_held, detect_installer, extra_requirements
             if detect_installer() == PIP:
-                self.assertEqual(["-m", "pip", "install", *extra_requirements("embeddings")],
+                self.assertEqual(["-m", "pip", "install", *_with_held(extra_requirements("embeddings"))],
                                  cmd[1:], "installs into THIS interpreter, not whatever `pip` "
                                           "is on PATH")
             self.assertIn("timeout", kw, "the ONE subprocess is bounded (the D0 discipline)")

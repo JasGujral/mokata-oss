@@ -18,6 +18,7 @@ from .brainstorm import BRAINSTORM_AUTO_TRIGGER, BRAINSTORM_PROTOCOL
 from .onboard import ONBOARD_PROTOCOL
 from .refine import REFINE_PROTOCOL
 from .errors import MokataError
+from .plugin_runtime import localize_commands
 
 
 class SkillNotFound(MokataError, KeyError):
@@ -1164,8 +1165,9 @@ def get_skill(name: str) -> Skill:
         )
 
 
-def render_skill(skill: Skill, grounding=None) -> str:
-    """Standalone launch text for a skill (CLI `mokata run`)."""
+def render_skill(skill: Skill, grounding=None, root: Optional[str] = None) -> str:
+    """Standalone launch text for a skill (CLI `mokata run`). The skill tables carry ONE command
+    form (`/mokata:<name>`); it is rendered here, once, for the route `root` was installed on."""
     lines = [
         f"# mokata · /{skill.name} (standalone)",
         "",
@@ -1195,7 +1197,7 @@ def render_skill(skill: Skill, grounding=None) -> str:
         lines += ["", "## Record verdict", RECORD_VERDICT_INSTRUCTION]
     if grounding is not None:
         lines += ["", "## Grounding (resolved now)", grounding.summary_line()]
-    return "\n".join(lines) + "\n"
+    return localize_commands("\n".join(lines) + "\n", root)
 
 
 def command_markdown(skill: Skill) -> str:

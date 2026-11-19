@@ -56,9 +56,15 @@ def _ide_dir(root: str) -> str:
 def _read_json(path: str) -> Optional[Dict[str, Any]]:
     """A record, only if it is OURS and still private (0.0.28 C1): a planted `server.json` must not
     send a hook's written content, with the hook token, to whatever port it names. One open, no link
-    followed, no blocking on a FIFO (`winacl.read_private`, stdlib-only)."""
+    followed, no blocking on a FIFO (`winacl.read_private`, stdlib-only). A REFUSED record (0.0.29 H4:
+    `errors.RecordRefused`) reads as absent here, silently: a hook never prints, and `mokata doctor`
+    names the file."""
+    from ..errors import RecordRefused
     from ..winacl import read_private
-    raw = read_private(path)
+    try:
+        raw = read_private(path)
+    except RecordRefused:
+        return None
     if raw is None:
         return None
     try:

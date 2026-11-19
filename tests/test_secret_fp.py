@@ -286,6 +286,20 @@ class TestLowercaseSlugsKeepTheirExemption(unittest.TestCase):
         joined by `_`/`-` were exempt on 0.0.15 purely for lacking a capital letter."""
         self.assertTrue(_entropy_blocks(ADVERSARIAL_TRUE_POSITIVES["hex-chunks-underscored"]))
 
+    def test_a_project_tag_piece_keeps_the_slug_exempt(self):
+        """0.0.29 H1: one or two short upper-case tags between lower-case word pieces
+        (`AC10`, `B5`, `I`) are the project's own naming style, not a key."""
+        for slug in ("-".join(("0028", "I", "mcp", "reliability")),
+                     "_".join(("test", "AC10", "a", "round", "trip", "of", "it"))):
+            with self.subTest(slug=slug):
+                self.assertFalse(has_secrets(scan(text=slug)), slug)
+
+    def test_the_tag_allowance_is_not_a_mixed_case_escape(self):
+        """A mixed-case piece after a tag, or tags with only hex pieces, still block."""
+        self.assertTrue(_entropy_blocks("_".join(("R18", "A" + "Pathological", "thing", "x12"))))
+        self.assertTrue(_entropy_blocks(
+            "-".join(("B5", "9f3c" + "e1a7d2", "I", "b8e0" + "4c6f19", "a3d7" + "c0"))))
+
 
 class TestAdversarialRowsStillBlock(unittest.TestCase):
     """The false-negative bar. A widened exemption that lets any of these through is an

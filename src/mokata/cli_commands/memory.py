@@ -13,6 +13,7 @@ from ._common import (
     _review_scope,
     _backend_projects,
 )
+from ..plugin_runtime import localize_commands
 
 
 def _warn_if_degraded(store) -> None:
@@ -254,8 +255,8 @@ def _memory_edit(store, args) -> int:
         return 2
     existing = store.recall(subject)
     if not existing:
-        print(f"error: no active memory item with subject '{subject}' to edit "
-              f"(use /mokata:onboard to capture it)", file=sys.stderr)
+        print(localize_commands(f"error: no active memory item with subject '{subject}' to edit "
+              f"(use /mokata:onboard to capture it)", None), file=sys.stderr)
         return 1
     old = existing[0]
     new_kind = (normalize_kind(args.kind) or args.kind) if getattr(args, "kind", None) else old.kind

@@ -773,13 +773,15 @@ def unclassified(sources, register, counts=None):
     many call sites in its function as `TREELESS_SITES` says (default 1): a second spawn added to
     a registered function is a red, not a free ride (round 2, verifier M2)."""
     counts = Q.TREELESS_SITES if counts is None else counts
-    door = ("mokata/quiet_spawn.py", "spawn_jobbed")
+    # The door's own two sites: its one Popen, and the POSIX lifeline shim (0.0.29 R-B6), which
+    # runs the door's command as its child inside the same tree.
+    doors = {("mokata/quiet_spawn.py", "spawn_jobbed"), ("mokata/_lifeline.py", "main")}
     seen = {}
     bad = []
     for site in spawn_sites(sources):
         key = (site[0], site[1])
         seen[key] = seen.get(key, 0) + 1
-        allowed = 1 if key == door else (counts.get(key, 1) if key in register else 0)
+        allowed = 1 if key in doors else (counts.get(key, 1) if key in register else 0)
         if seen[key] > allowed:
             bad.append(site)
     return bad
@@ -827,7 +829,7 @@ class EverySpawnIsClassified(unittest.TestCase):
 
     def test_the_register_has_no_stale_row_and_every_row_says_why(self):
         live = {(s[0], s[1]) for s in spawn_sites(_src_sources())}
-        kinds = {Q.SINGLE, Q.OUTLIVES, Q.OWN_TREE, Q.FILED}
+        kinds = set(Q.KINDS)
         for key, (kind, program, why) in Q.TREELESS.items():
             self.assertIn(key, live, f"stale TREELESS row {key}: no spawn there any more")
             self.assertIn(kind, kinds, key)
@@ -875,6 +877,56 @@ def _calls_named(tree, names):
         or (isinstance(n.func, ast.Name) and n.func.id in names))]
 
 
+def _mentions(tree, names):
+    """Every reference to one of `names` — called, aliased, imported `as`, or spelled as a string
+    (`getattr(os, "kill")`) — not only a call by that name (0.0.29 PROCESS-DOOR-LOWS d)."""
+    hits = []
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Name) and n.id in names:
+            hits.append(n)
+        elif isinstance(n, ast.Attribute) and n.attr in names:
+            hits.append(n)
+        elif isinstance(n, ast.alias) and (n.name.split(".")[-1] in names):
+            hits.append(n)
+        elif isinstance(n, ast.Constant) and isinstance(n.value, str) and n.value in names:
+            hits.append(n)
+    return hits
+
+
+#: (c) The reap calls. Outside the door a reap of a door process frees its group id for reuse
+#: (`Jobbed`'s docstring): only `quiet_spawn.py` may reap, and only a registered non-door launcher
+#: (a `TREELESS` row's module) may `.wait()`/`.poll()` a `.proc` of its own.
+_REAPS = ("wait", "waitpid", "waitid", "wait3", "wait4")
+_PROC_REAPS = ("wait", "poll", "kill", "terminate", "send_signal", "communicate")
+
+
+def reaps_outside_the_door(sources, register=None):
+    """Pure (0.0.29 PROCESS-DOOR-LOWS c): `os.wait*` anywhere outside `quiet_spawn.py`, and
+    `<x>.proc.<wait|poll|kill|…>()` in a module that holds no registered non-door spawn."""
+    register = Q.TREELESS if register is None else register
+    own = {k[0] for k in register}
+    bad = []
+    for rel, src in sources.items():
+        if rel.endswith("quiet_spawn.py"):
+            continue
+        for n in ast.walk(ast.parse(src)):
+            if not isinstance(n, ast.Call) or not isinstance(n.func, ast.Attribute):
+                continue
+            f = n.func
+            if f.attr in _REAPS and isinstance(f.value, ast.Name) and f.value.id == "os":
+                bad.append(f"{rel}:{n.lineno} os.{f.attr}")
+            elif f.attr in _PROC_REAPS and isinstance(f.value, ast.Attribute) \
+                    and f.value.attr == "proc" and rel not in own:
+                bad.append(f"{rel}:{n.lineno} .proc.{f.attr}")
+    return bad
+
+
+def bad_kinds(register):
+    """Rows whose kind is not one of `Q.KINDS` (0.0.29 PROCESS-DOOR-LOWS e: `own-tree` and `filed`
+    are gone — a launcher with the door's hang shape IS the door)."""
+    return sorted(k for k, row in register.items() if row[0] not in Q.KINDS)
+
+
 def second_doors(sources):
     """Pure: identifiers and non-docstring string constants naming a tree-kill primitive, and every
     `shell=` other than `False` on a subprocess spawn, outside `quiet_spawn.py`."""
@@ -883,7 +935,9 @@ def second_doors(sources):
         if rel.endswith("quiet_spawn.py"):
             continue
         tree = ast.parse(src)
-        walker_ok = rel in _READ_ONLY_WALKERS and not _calls_named(tree, _KILLS)
+        # 0.0.29 (d): admitted only while it MENTIONS no kill primitive at all — a called name was
+        # the old test, and `k = os.kill; k(pid, 9)` or `getattr(os, "kill")` walked past it.
+        walker_ok = rel in _READ_ONLY_WALKERS and not _mentions(tree, _KILLS)
         docs = set()
         for n in ast.walk(tree):
             if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) \
@@ -941,6 +995,51 @@ class NoSecondTreeDoor(unittest.TestCase):
                                               walk + "def g(p):\n    p.kill()\n"})),
                          "a walker that can also kill is the pid-reuse class back again")
         self.assertEqual(1, len(second_doors({"mokata/other.py": walk})))
+
+    def test_a_walker_that_holds_a_kill_by_alias_is_not_admitted(self):
+        """0.0.29 (d), cell #38: the kill reached by another name is still a kill."""
+        walk = "def f(k):\n    return k.CreateToolhelp32Snapshot(2, 0)\n"
+        for alias in ("import os\ndef g(p):\n    k = os.kill\n    k(p, 9)\n",
+                      "import os\ndef g(p):\n    getattr(os, 'kill')(p, 9)\n",
+                      "from os import kill as k\ndef g(p):\n    k(p, 9)\n",
+                      "def g(h):\n    end = h.TerminateProcess\n    end(1)\n"):
+            self.assertEqual(1, len(second_doors({"mokata/session_ancestry.py": walk + alias})),
+                             alias)
+
+
+class NoReapOutsideTheDoor(unittest.TestCase):
+    """0.0.29 (c), cell #38: nothing outside `quiet_spawn.py` reaps (macOS has no `waitid`, so a
+    stray reap is the one way a door group id is freed while `end` still means to signal it)."""
+
+    def test_nothing_in_src_reaps_outside_the_door(self):
+        self.assertEqual([], reaps_outside_the_door(_src_sources()))
+
+    def test_each_reap_spelling_reds(self):
+        for src in ("import os\ndef f(p):\n    os.waitpid(p, 0)\n",
+                    "import os\ndef f(p):\n    os.waitid(os.P_PID, p, os.WEXITED)\n",
+                    "import os\ndef f():\n    os.wait()\n",
+                    "def f(tree):\n    tree.proc.wait()\n",
+                    "def f(tree):\n    tree.proc.poll()\n",
+                    "def f(tree):\n    tree.proc.kill()\n"):
+            self.assertEqual(1, len(reaps_outside_the_door({"mokata/x.py": src}, {})), src)
+        self.assertEqual([], reaps_outside_the_door(
+            {"mokata/x.py": "def f(tree):\n    tree.wait_exit(1)\n    tree.end()\n"}, {}))
+        self.assertEqual([], reaps_outside_the_door(
+            {"mokata/quiet_spawn.py": "import os\ndef f(p):\n    os.waitpid(p, 0)\n"}, {}))
+
+
+class TheRegisterHasFourKinds(unittest.TestCase):
+    """0.0.29 (e), cell #38: `own-tree` and `filed` are deleted kinds; a row naming one reds."""
+
+    def test_every_row_has_one_of_the_four_kinds(self):
+        self.assertEqual((Q.SINGLE, Q.OUTLIVES, Q.INTERACTIVE, Q.STANDALONE), Q.KINDS)
+        self.assertEqual([], bad_kinds(Q.TREELESS))
+        self.assertFalse(hasattr(Q, "OWN_TREE") or hasattr(Q, "FILED"))
+
+    def test_a_deleted_kind_reds(self):
+        for kind in ("own-tree", "filed"):
+            self.assertEqual([("mokata/x.py", "f")],
+                             bad_kinds({("mokata/x.py", "f"): (kind, "x", "why")}), kind)
 
 
 # ============================================================================ row 10 · one door
@@ -1012,10 +1111,25 @@ class _MergeSpy(_Merge):
 
 
 # ============================================================ rows 12-16 · baseline is bounded
+def _silent_at_once(after=None):
+    """0.0.29 lane G: `baseline` has no wall clock; a stalled suite ends on SILENCE. This injected
+    clock reads 0 until `after` exists (the suite's own event: its tree is up), then 10^6 s, so the
+    next progress check finds the silence bound passed — the ending is decided by the clock and an
+    event the test controls, never by a wait."""
+    first = [True]
+
+    def clock():
+        if first[0]:                      # the run's start
+            first[0] = False
+            return 0.0
+        return 1e6 if after is None or os.path.exists(after) else 0.0
+    return clock
+
+
 class BaselineIsBounded(unittest.TestCase):
-    """Row 12. A suite whose grandchild holds stdout and outlives the timeout: `baseline` returns
-    within its bound + slack, says NOT_RUN "timed out after N s", and the grandchild is dead. On
-    Windows this is THE hang (`subprocess.run` then `communicate()`d with no bound)."""
+    """Row 12. A suite whose grandchild holds stdout and writes nothing: `baseline` ends it as
+    stalled (0.0.29 lane G: silence, not a wall clock), says NOT_RUN naming the knob, and the
+    grandchild is dead. On Windows this was THE hang (`subprocess.run` then `communicate()`d)."""
 
     def test_a_timeout_with_a_grandchild_holding_stdout_is_not_run_and_ends_the_tree(self):
         from mokata import baseline as B
@@ -1024,11 +1138,12 @@ class BaselineIsBounded(unittest.TestCase):
         pidfile = os.path.join(d, "pids")
         cmd = f'"{sys.executable}" "{launcher}" "{pidfile}" 600 sleep'
         t0 = time.monotonic()
-        res = B.baseline_status(cmd, cwd=d, timeout=3)
+        res = B.baseline_status(cmd, cwd=d, clock=_silent_at_once(after=pidfile))
         self.assertLess(time.monotonic() - t0, 3 + GONE_S)
         self.assertEqual(B.NOT_RUN, res.state)
-        self.assertIn("timed out after 3 s", res.detail)
-        self.assertTrue(_gone(*_read_pids(pidfile)), "the baseline's tree outlived its timeout")
+        self.assertEqual("silent", res.ending)
+        self.assertIn("settings.baseline.silence_seconds", res.detail)
+        self.assertTrue(_gone(*_read_pids(pidfile)), "the baseline's tree outlived its ending")
 
 
 class BaselineNotRun(unittest.TestCase):
@@ -1044,9 +1159,9 @@ class BaselineNotRun(unittest.TestCase):
             refused = B.baseline_status("echo hi", cwd=d)
         launch = B.baseline_status("echo hi", cwd=os.path.join(d, "no-such-dir"))
         timed = B.baseline_status(f'"{sys.executable}" -c "import time; time.sleep(60)"', cwd=d,
-                                  timeout=1)
+                                  clock=_silent_at_once())
         for res, words in ((refused, Q.NO_JOB), (launch, "could not run"),
-                           (timed, "timed out after 1 s")):
+                           (timed, "settings.baseline.silence_seconds")):
             self.assertEqual(B.NOT_RUN, res.state, res)
             self.assertFalse(res.ok)
             self.assertIn(words, res.render())
@@ -1654,7 +1769,8 @@ class ShimOnlyServer(unittest.TestCase):
 
 class GlobalStores(unittest.TestCase):
     """Row 39. pnpm (`<PNPM_HOME>/global/<n>/node_modules`) and yarn v1 (`…/Yarn/bin` ->
-    `…/Yarn/Data/global/node_modules`) global installs are found through PATH, as npm's are."""
+    `…/Yarn/Data/global/node_modules`) global installs are found: yarn's through PATH, as npm's
+    are; pnpm's in its global dir DERIVED from PNPM_HOME, never from a PATH entry (0.0.29 A)."""
 
     def _pkg(self, modules, pkg, binname):
         d = os.path.join(modules, pkg)
@@ -1675,7 +1791,9 @@ class GlobalStores(unittest.TestCase):
         os.makedirs(yarn_bin)
         pr = self._pkg(os.path.join(base, "Yarn", "Data", "global", "node_modules"),
                        "pyright", "pyright-langserver")
-        env = {"PATH": os.pathsep.join([pnpm_home, yarn_bin, node_dir])}
+        # pnpm's global dir is DERIVED from PNPM_HOME as pnpm derives it, never guessed from a PATH
+        # entry (0.0.29 A round 3, verify-B2 M3).
+        env = {"PATH": os.pathsep.join([pnpm_home, yarn_bin, node_dir]), "PNPM_HOME": pnpm_home}
         head, why = L._global_node_package_bin(root, "typescript-language-server", environ=env)
         self.assertEqual(os.path.realpath(ts), head[1] if head else why)
         head, why = L._global_node_package_bin(root, "pyright-langserver", environ=env)

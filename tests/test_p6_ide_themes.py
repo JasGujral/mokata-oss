@@ -337,6 +337,42 @@ def focus_rules():
     return out
 
 
+#: 0.0.29 E (`IDE-UI-PIN-GAPS` P6): the tokens the contrast check does NOT grade, each with why.
+#: Every other token in themes.css is graded — a token added to themes.css that the check never
+#: reads reds `test_every_token_in_the_file_is_graded_or_declared`.
+NOT_GRADED = {
+    "--line": "a 1px rule between rows, not text",
+    "--line2": "a 1px rule between rows, not text",
+    "--edge": "a panel border, not text",
+    "--amber-line": "the left bar of a warning row, not text",
+    "--shadow": "a drop shadow under a popover",
+    "--shadow-lg": "a drop shadow under a dialog",
+    "--scrim": "the dimming layer behind a dialog",
+    "--ansi-0": "ANSI black: the terminal's background slot, never text on it",
+    "--heat-3": "defined for the heat scale; no rule reads it",
+}
+
+
+class _Reads(dict):
+    def __init__(self, *a):
+        super().__init__(*a)
+        self.read = set()
+
+    def __getitem__(self, k):
+        self.read.add(k)
+        return dict.__getitem__(self, k)
+
+
+class EveryTokenIsGraded(unittest.TestCase):
+
+    def test_every_token_in_the_file_is_graded_or_declared(self):
+        for theme, toks in tokens().items():
+            seen = _Reads(toks)
+            contrast_failures(seen, theme)
+            self.assertEqual(sorted(set(toks) - seen.read), sorted(NOT_GRADED), theme)
+            self.assertIn("--sel", seen.read, theme)
+
+
 class WcagAAInEveryTheme(unittest.TestCase):
     """The rule: the person can read the text and see where the keyboard is, in every theme."""
 
@@ -464,6 +500,16 @@ class TheChoiceSurvivesARestart(unittest.TestCase):
             self.assertIsNone(c.get("/api/workspace").json()["theme_unknown"], ok)
         self.save(c, None)
         self.assertIsNone(c.get("/api/workspace").json()["theme_unknown"], "no theme at all is not an unknown one")
+
+    def test_a_non_string_saved_theme_is_named_too(self):
+        """0.0.29 E (`IDE-UI-PIN-GAPS` P6): a number or a list in the saved theme is as unknown as a
+        misspelt name — the page is told, not left silently on the system theme."""
+        for bad, said in ((3, "3"), (["dark"], "['dark']"), ({"a": 1}, "{'a': 1}"),
+                          ("x" * 99, "x" * 40)):
+            c, _ = boot(self.d)
+            self.save(c, bad)
+            w = c.get("/api/workspace").json()
+            self.assertEqual(("system", said), (w["theme"], w["theme_unknown"]), repr(bad))
 
     def test_the_page_tells_the_person_once_at_load(self):
         tabs = (STATIC / "features" / "tabs.js").read_text(encoding="utf-8")

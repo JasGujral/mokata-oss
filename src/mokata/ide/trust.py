@@ -30,7 +30,7 @@ import time
 from typing import Any, Dict, Optional
 
 from . import statedir
-from ..errors import MokataError
+from ..errors import MokataError, RecordRefused
 
 LEDGER_KIND = "workspace_trust"
 RECORD = "trust.json"
@@ -68,7 +68,12 @@ def status(root: str) -> Dict[str, Any]:
                            "why": WHY, "note": NOTE, "command": TRUST_CMD,
                            "revoke_command": UNTRUST_CMD}
     from ..winacl import read_private
-    raw = read_private(record_path(root))          # 0.0.28 C1: ours and private, or not trust
+    try:
+        raw = read_private(record_path(root))      # 0.0.28 C1: ours and private, or not trust
+    except RecordRefused as exc:                   # 0.0.29 H4: a REFUSED record is not trust, said
+        out["refused"] = exc.line()
+        out["why"] = out["refused"]
+        return out
     if raw is None:
         return out
     try:

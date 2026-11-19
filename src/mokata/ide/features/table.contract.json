@@ -20,6 +20,9 @@
     },
     "cut": {
      "type": "integer"
+    },
+    "changed": {
+     "type": "string"
     }
    }
   },

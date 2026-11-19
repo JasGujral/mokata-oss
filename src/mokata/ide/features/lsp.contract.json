@@ -14,7 +14,7 @@
         "source": {"type": "string", "enum": ["lsp", "graph", "none"]},
         "lsp": {"type": "object", "required": ["state"], "properties": {"state": {"type": "string"}, "note": {"type": "string"}}},
         "results": {"type": "array", "items": {"type": "object"}},
-        "edge": {"type": "object"}
+        "edge": {"type": "object", "properties": {"state": {"type": "string", "enum": ["indexing", "failed", "cancelled"]}, "job": {"type": ["string", "null"]}, "note": {"type": "string"}}}
       }
     },
     "CallRow": {
@@ -24,7 +24,8 @@
         "name": {"type": "string"}, "kind": {"type": "string"}, "detail": {"type": "string"},
         "path": {"type": "string"}, "shown": {"type": "string"}, "outside": {"type": "boolean"},
         "line": {"type": "integer"}, "col": {"type": ["integer", "null"]}, "col_exact": {"type": "boolean"},
-        "snippet": {"type": "string"}, "test": {"type": "boolean"}, "calls": {"type": ["integer", "null"]}
+        "snippet": {"type": "string"}, "test": {"type": "boolean"}, "calls": {"type": ["integer", "null"]},
+        "expandable": {"type": "boolean"}
       }
     },
     "CallsAnswer": {
@@ -44,7 +45,7 @@
                                   "total": {"type": "integer"}, "truncated": {"type": "boolean"}, "skipped": {"type": "integer"}}}},
         "total": {"type": "integer"}, "truncated": {"type": "boolean"}, "skipped": {"type": "integer"},
         "complete": {"type": "boolean"}, "items_named": {"type": "integer"}, "items_asked": {"type": "integer"},
-        "cap": {"type": "integer"}, "note": {"type": "string"}, "edge": {"type": "object"}
+        "cap": {"type": "integer"}, "note": {"type": "string"}, "edge": {"type": "object", "properties": {"state": {"type": "string", "enum": ["indexing", "failed", "cancelled"]}, "job": {"type": ["string", "null"]}, "note": {"type": "string"}}}
       }
     },
     "LspServer": {

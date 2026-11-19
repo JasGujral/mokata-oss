@@ -130,7 +130,7 @@
     if (none && !s1.q && s1.filter === "all") {
       empty.replaceChildren(el("b", "", "No Claude Code session has run in this repo yet."), el("br"),
         document.createTextNode("Start one in its own worktree: "), el("code", "", "claude -w"),
-        document.createTextNode(" — or plan first with "), el("code", "", "/mokata:brainstorm"), document.createTextNode("."));
+        document.createTextNode(" — or plan first with "), el("code", "", MK.cmd("brainstorm")), document.createTextNode("."));
     } else if (none) {
       empty.replaceChildren(document.createTextNode("No session matches — "));
       const clr = el("button", "link", "clear the filter");

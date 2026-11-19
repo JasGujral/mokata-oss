@@ -108,6 +108,9 @@
 
   // P37 (R24, G19) — what is drawn: the server's draw plan (≤150: the most relevant nodes, one
   // CLUSTER per directory group for the rest), plus the clusters this page opened (G.open).
+  // How weak an edge's basis is: proved < anything not proved (e.g. "name-matched") < a name match
+  // on the lexical floor. A group takes its weakest member's word.
+  const BASIS_RANK = (b) => (b === "structural" || b === "verified_empty" ? 0 : b === "lexical" ? 2 : 1);
   function visible(data) {
     const plan = data.draw || { shown: data.nodes.map((n) => n.id), clusters: [], limit: 150 };
     const byId = new Map(data.nodes.map((n) => [n.id, n]));
@@ -135,8 +138,14 @@
       if (s === e.source && t === e.target) { edges.set(e.id, e); continue; }
       const key = `g:${s}>${t}`;
       const g = edges.get(key);
-      if (g) { g.count += 1; if (e.basis === "lexical") g.basis = "lexical"; }
-      else edges.set(key, { id: key, source: s, target: t, kind: "GROUP", basis: e.basis, count: 1, site: e.site, pending: e.pending });
+      // 0.0.29 E (ruling D6): a group stands for EVERY call in it, so it is as weak as its weakest
+      // member — pending while any member is pending, never `structural` while any is a name match
+      // — and it counts the members not confirmed yet (the details panel says "N of M").
+      if (!g) edges.set(key, { id: key, source: s, target: t, kind: "GROUP", basis: e.basis, count: 0, pend: 0, site: e.site, pending: false });
+      const grp = edges.get(key);
+      grp.count += 1;
+      if (e.pending) { grp.pend += 1; grp.pending = true; }
+      if (BASIS_RANK(e.basis) > BASIS_RANK(grp.basis)) grp.basis = e.basis;
     }
     return { nodes, edges: [...edges.values()], clusters, limit: plan.limit || 150, total: plan.total || data.nodes.length };
   }
@@ -585,6 +594,11 @@
     box.replaceChildren();
     if (what === "edge") {
       box.append(el("b", "mono", `${d.kind}`), document.createTextNode(" "), MK.basisBadge(d.basis));
+      if (d.kind === "GROUP") {
+        box.append(el("div", "small" + (d.pend ? "" : " dim"), d.pend
+          ? `${d.pend} of ${d.count} call(s) matched by name only — not confirmed yet`
+          : `${d.count} call(s), all from the call graph`));
+      }
       box.append(el("div", "mono small", `site: ${d.site}`));
       const row = el("div", "row2");
       const b = el("button", "btn", "Open the site");

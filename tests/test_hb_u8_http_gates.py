@@ -193,7 +193,10 @@ class TheGateDoorAnswersLikeAClaudeCodeHttpHookExpects(unittest.TestCase):
             with TestClient(build_app(state), base_url="http://127.0.0.1:9999") as c:
                 ok = c.post(G.GATE_PATH, headers=hook, json=_pre(d, "Write", {
                     "file_path": os.path.join(d, "src", "a.py"), "content": "x = 3\n"}))
-                self.assertEqual((200, b""), (ok.status_code, ok.content))
+                # The body is the evidence when this reds: a benign write answered with anything
+                # but an empty 2xx is a BLOCK, and its reason says which gate (0.0.29 C2 macOS leg).
+                self.assertEqual((200, b""), (ok.status_code, ok.content),
+                                 ok.content.decode("utf-8", "replace"))
                 no = c.post(G.GATE_PATH, headers=hook, json=_pre(d, "Write", {
                     "file_path": os.path.join(d, "src", "k.py"), "content": f"K = '{SECRET}'\n"}))
                 self.assertEqual(200, no.status_code)

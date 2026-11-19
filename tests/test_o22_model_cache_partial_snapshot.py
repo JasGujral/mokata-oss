@@ -40,8 +40,15 @@ def _fake_hub(cache_dir, present):
             raise IncompleteSnapshotError("The cached snapshot … is incomplete: 6 file(s) are missing")
         return cache_dir
 
+    def hf_hub_download(repo_id, filename, **_kw):
+        # 0.0.29 C1 re-verify: the fetch is memory's one door (`embed._hub_fetch`), per file
+        if filename == E.MODEL_FILES[0]:
+            calls["snapshot"].append(False)
+        return os.path.join(cache_dir, filename)
+
     hub.try_to_load_from_cache = try_to_load_from_cache
     hub.snapshot_download = snapshot_download
+    hub.hf_hub_download = hf_hub_download
     return hub, calls
 
 

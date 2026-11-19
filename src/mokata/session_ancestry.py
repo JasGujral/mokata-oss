@@ -56,8 +56,11 @@ and the Claude is identified by NAME on both sides, not by how many hops away it
   * both sides meet on the same pid AND the same start token (guard 1), so a reused pid never
     matches; a nested Claude is never a launcher, so a walk never passes through one.
 
-Never raises. Linux reads `/proc` directly; macOS/BSD pay ONE `ps` call per snapshot
-(1s timeout, `LC_ALL=C`); Windows uses a Toolhelp snapshot via ctypes. Anything else -> no chain.
+Never raises. No hook spawns a process to read the table (0.0.29 F): Linux reads `/proc`
+directly; macOS reads libproc + `sysctl(KERN_PROCARGS2)` in-process (`_libproc_lookup`, tokens and
+names byte-identical to what `ps` gave; a failed read is no chain, never a `ps` fallback); Windows
+uses a Toolhelp snapshot via ctypes. Only a non-darwin BSD still pays ONE `ps` call per snapshot
+(1s timeout, `LC_ALL=C`). Anything else -> no chain.
 
 Stdlib-only. Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """
@@ -194,6 +197,111 @@ def _ps_lookup() -> Optional[ProcLookup]:
     return table.get if table else None
 
 
+#: `ps lstart`'s day and month names (the C locale `ps` runs under, `LC_ALL=C`) — fixed tables, so
+#: the token never depends on this process's locale.
+_DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+#: `sizeof(struct proc_bsdinfo)` (sys/proc_info.h) — `proc_pidinfo` returns exactly this on success.
+_BSDINFO_SIZE = 136
+_PROC_PIDTBSDINFO = 3
+_CTL_KERN, _KERN_ARGMAX, _KERN_PROCARGS2 = 1, 8, 49
+
+
+def lstart_token(epoch_secs: int) -> str:
+    """The start token `_ps_lookup` builds from `ps -o lstart=` (`" ".join(parts[2:7])`: local time,
+    `Dow Mon D HH:MM:SS YYYY`, the day unpadded because `split()` drops `ps`'s padding) — rebuilt
+    from an epoch so the macOS in-process reader writes byte-identical tokens (0.0.29 F §3b.2)."""
+    t = time.localtime(int(epoch_secs))
+    return (f"{_DAYS[t.tm_wday]} {_MONTHS[t.tm_mon - 1]} {t.tm_mday} "
+            f"{t.tm_hour:02d}:{t.tm_min:02d}:{t.tm_sec:02d} {t.tm_year}")
+
+
+def _libproc_lookup() -> Optional[ProcLookup]:
+    """macOS — the process table read IN-PROCESS (0.0.29 F, W5-HOOK-BUDGET-MARGIN-THIN): no `ps`
+    spawn on the prompt path (it cost ~25 ms per call). Per pid, on demand:
+
+      * `proc_pidinfo(pid, PROC_PIDTBSDINFO)` -> ppid and the start second. A short or zero return
+        (a dead pid, or ANOTHER USER's process: EPERM) or a `pbi_pid` that is not `pid` is ABSENT.
+      * the token is `ps lstart`'s string for that second (`lstart_token`), byte-identical to what
+        `_ps_lookup` recorded, so rows written before this reader still match (no format change).
+      * the name is argv[0] from `sysctl(KERN_PROCARGS2)` — what `ps -o comm=` prints (the LAUNCHED
+        path: `~/.local/bin/claude -> versions/2.1.311` reads `claude`), never `pbi_name`/`pbi_comm`,
+        which name the resolved image and would lose SESSION-BIND-BY-ANCESTOR past
+        `HOOK_LAUNCH_DEPTH`. A name that cannot be read is None (unknown: never a launcher, never a
+        Claude — fail-closed).
+
+    None when libproc or sysctl cannot be loaded — and then NOTHING else is tried (no `ps`
+    fallback on darwin: an empty chain is today's fail-closed answer)."""
+    import ctypes
+    import struct
+
+    class _BSDInfo(ctypes.Structure):          # struct proc_bsdinfo, sys/proc_info.h
+        _fields_ = [("pbi_flags", ctypes.c_uint32), ("pbi_status", ctypes.c_uint32),
+                    ("pbi_xstatus", ctypes.c_uint32), ("pbi_pid", ctypes.c_uint32),
+                    ("pbi_ppid", ctypes.c_uint32), ("pbi_uid", ctypes.c_uint32),
+                    ("pbi_gid", ctypes.c_uint32), ("pbi_ruid", ctypes.c_uint32),
+                    ("pbi_rgid", ctypes.c_uint32), ("pbi_svuid", ctypes.c_uint32),
+                    ("pbi_svgid", ctypes.c_uint32), ("rfu_1", ctypes.c_uint32),
+                    ("pbi_comm", ctypes.c_char * 16), ("pbi_name", ctypes.c_char * 32),
+                    ("pbi_nfiles", ctypes.c_uint32), ("pbi_pgid", ctypes.c_uint32),
+                    ("pbi_pjobc", ctypes.c_uint32), ("e_tdev", ctypes.c_uint32),
+                    ("e_tpgid", ctypes.c_uint32), ("pbi_nice", ctypes.c_int32),
+                    ("pbi_start_tvsec", ctypes.c_uint64), ("pbi_start_tvusec", ctypes.c_uint64)]
+
+    try:
+        if ctypes.sizeof(_BSDInfo) != _BSDINFO_SIZE:
+            return None
+        lib = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        lib.proc_pidinfo.restype = ctypes.c_int
+        lib.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p,
+                                     ctypes.c_int]
+        libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+        libc.sysctl.restype = ctypes.c_int
+        libc.sysctl.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_uint, ctypes.c_void_p,
+                                ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p, ctypes.c_size_t]
+        argmax = ctypes.c_int(0)
+        size = ctypes.c_size_t(ctypes.sizeof(argmax))
+        if libc.sysctl((ctypes.c_int * 2)(_CTL_KERN, _KERN_ARGMAX), 2, ctypes.byref(argmax),
+                       ctypes.byref(size), None, 0) != 0 or argmax.value <= 0:
+            return None
+    except (OSError, AttributeError, TypeError, ValueError):
+        return None
+    cap = int(argmax.value)
+
+    def name_of(pid: int) -> Optional[str]:
+        try:
+            buf = ctypes.create_string_buffer(cap)
+            size = ctypes.c_size_t(cap)
+            if libc.sysctl((ctypes.c_int * 3)(_CTL_KERN, _KERN_PROCARGS2, pid), 3, buf,
+                           ctypes.byref(size), None, 0) != 0:
+                return None
+            raw = buf.raw[:size.value]
+            if len(raw) < 4 or struct.unpack_from("i", raw)[0] < 1:
+                return None
+            # int argc, then the exec path NUL-terminated, NUL padding, then argv[0], ...
+            _exe, sep, rest = raw[4:].partition(b"\0")
+            argv0 = rest.lstrip(b"\0").split(b"\0", 1)[0] if sep else b""
+            return os.fsdecode(argv0) if argv0 else None
+        except (OSError, ValueError, struct.error, UnicodeError):
+            return None
+
+    def lookup(pid: int) -> Optional[ProcInfo]:
+        try:
+            pid = int(pid)
+            if pid <= 0:
+                return None
+            info = _BSDInfo()
+            got = lib.proc_pidinfo(pid, _PROC_PIDTBSDINFO, 0, ctypes.byref(info), _BSDINFO_SIZE)
+            if got != _BSDINFO_SIZE or int(info.pbi_pid) != pid:
+                return None
+            secs = int(info.pbi_start_tvsec)
+            return ProcInfo(int(info.pbi_ppid), lstart_token(secs), float(secs), name_of(pid))
+        except (OSError, ValueError, TypeError, OverflowError):
+            return None
+    return lookup
+
+
 def _windows_lookup() -> Optional[ProcLookup]:
     """Windows — one Toolhelp snapshot for parent pids, creation time per pid on demand."""
     try:
@@ -273,7 +381,9 @@ def system_lookup() -> Optional[ProcLookup]:
             return _linux_lookup()
         if sys.platform == "win32":
             return _windows_lookup()
-        if sys.platform == "darwin" or "bsd" in sys.platform:
+        if sys.platform == "darwin":
+            return _libproc_lookup()       # NEVER `ps` on darwin: a failed read is no chain
+        if "bsd" in sys.platform:
             return _ps_lookup()
     except Exception:  # noqa: BLE001 — ancestry is an optimisation; no chain is today's behaviour
         return None

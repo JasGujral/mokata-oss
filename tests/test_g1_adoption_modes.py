@@ -17,6 +17,7 @@ import argparse
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -52,6 +53,21 @@ def _run_init(path, **over):
     with redirect_stdout(buf):
         rc = setup_cmd.cmd_init(_init_args(path, **over))
     return rc, buf.getvalue()
+
+
+_PIP_EXE = re.compile(r"pip[0-9.]*(\.exe)?", re.IGNORECASE)
+
+
+def _reaches_pip(argv) -> bool:
+    """Does this argv RUN pip? By the program (`pip`, `pip3`, `pip3.12`, `pip.exe`) or by a `pip`
+    token of its own (`python -m pip`, `uv pip`) — never by a substring of a path: a temp repo
+    named `tmpipzk976q` is not an install (0.0.29 C2, macOS mirror leg)."""
+    toks = [str(t) for t in argv]
+    if not toks:
+        return False
+    if _PIP_EXE.fullmatch(os.path.basename(toks[0].replace("\\", "/"))):
+        return True
+    return any(_PIP_EXE.fullmatch(t) for t in toks[1:])
 
 
 def _manifest(path):
@@ -90,6 +106,12 @@ class TestG1ModeResolvesProfile(unittest.TestCase):
             self.assertFalse(res.aborted)
 
             got, want = _manifest(via_mode), _manifest(via_prof)
+            if mode == "memory":
+                # 0.0.29 C1 (#86): `--mode memory` switches the semantic tier on BEFORE model2vec
+                # exists (it degrades to hashing until then), so its one durable difference from
+                # `--profile standard` is the setting `mode_for_manifest` derives the mode from.
+                self.assertEqual("auto", got["settings"]["memory"]["embedder"])
+                want.setdefault("settings", {}).setdefault("memory", {})["embedder"] = "auto"
             self.assertEqual(got["profile"], expected,
                              f"--mode {mode} must persist profile '{expected}'")
             self.assertEqual(got, want,
@@ -255,7 +277,10 @@ class TestG1Consent(unittest.TestCase):
         and the ONE permitted program is NAMED, read from `harness_setup.MCP_COMMAND` rather than
         retyped, so a SECOND subprocess appearing on this path still reds."""
         for mode in adoption_modes.mode_names():
-            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as d:
+            # The repo's own path carries "pip" ON PURPOSE: a random temp name did on a macOS
+            # leg (`tmpipzk976q`, 0.0.29 C2 mirror run 44073707858), and a substring filter took
+            # git's `check-ignore` probe for an install. The path must never be the evidence.
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory(prefix="g1-pip-") as d:
                 with mock.patch("subprocess.run") as sp, \
                      mock.patch.object(extras_install, "install_extras") as ie, \
                      mock.patch.object(extras_install, "offer_extra") as oe, \
@@ -267,7 +292,7 @@ class TestG1Consent(unittest.TestCase):
                 ask.assert_not_called()
                 spawned = [list(call.args[0]) if call.args else []
                            for call in sp.call_args_list]
-                self.assertEqual([a for a in spawned if any("pip" in str(t) for t in a)], [],
+                self.assertEqual([a for a in spawned if _reaches_pip(a)], [],
                                  f"a --yes init reached pip: {spawned}")
                 # 0.0.23 B4: `setup_harness` also asks PATH's `mokata` its version when that
                 # copy lives outside a venv (`install_isolation.shadowed`) — a bounded
@@ -277,12 +302,30 @@ class TestG1Consent(unittest.TestCase):
                 def _shadow_probe(a):
                     return (len(a) == 2 and a[1] == "--version"
                             and os.path.splitext(os.path.basename(str(a[0])))[0] == "mokata")
+                # 0.0.29 UNWIRE-HARNESS-LEAVES-RESIDUE: the third named program is git's own
+                # read-only `check-ignore` (does git already ignore `.claude/worktrees/`?).
+                def _git_ignore_probe(a):
+                    return (len(a) == 6 and os.path.basename(str(a[0])) == "git"
+                            and a[1] == "-C" and a[3:5] == ["check-ignore", "-q"])
                 stray = [a for a in spawned
                          if not os.path.basename(str(a[0] if a else "")).startswith(
-                             harness_setup.MCP_COMMAND) and not _shadow_probe(a)]
+                             harness_setup.MCP_COMMAND) and not _shadow_probe(a)
+                         and not _git_ignore_probe(a)]
                 self.assertEqual(stray, [],
                                  f"a --yes init spawned something other than the "
                                  f"`{harness_setup.MCP_COMMAND}` probe: {stray}")
+
+    def test_g1_the_pip_predicate_reads_the_program_not_a_path(self):
+        """The filter above is only as good as this predicate: every way to RUN pip is caught, and
+        a path that merely contains the letters is not."""
+        for argv in ([sys.executable, "-m", "pip", "install", "x"], ["pip", "install", "x"],
+                     ["/usr/local/bin/pip3", "install"], ["/opt/py/bin/pip3.12", "install"],
+                     ["C:\\Py\\Scripts\\pip.exe", "install"], ["uv", "pip", "install", "x"]):
+            self.assertTrue(_reaches_pip(argv), argv)
+        for argv in (["git", "-C", "/var/folders/T/tmpipzk976q", "check-ignore", "-q", "x"],
+                     ["mokata-mcp", "--version"], ["/home/pipeline/bin/mokata", "--version"],
+                     ["pipx-like-tool"], []):
+            self.assertFalse(_reaches_pip(argv), argv)
 
     def test_g1_wiring_failure_never_breaks_init(self):
         """DEGRADE_CLEAN — an already-successful init is never undone by an optional step."""

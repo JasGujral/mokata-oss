@@ -31,6 +31,14 @@ from typing import Any, List, Optional
 
 SEMANTIC_OFF = "off"
 UNKNOWN = "unknown"
+#: The semantic id doctor reports for a model it did NOT load because it is not on this machine:
+#: `_semantic_engine` prefixes the id with it, and `resolve_stack` strips it into `model_pending`.
+MODEL_NOT_DOWNLOADED = "not-downloaded:"
+def _not_downloaded_note() -> str:
+    from ..adoption_modes import setup_command_for
+    return (f"switched on; the model is not downloaded yet — mokata never fetches it unasked; "
+            f"`{setup_command_for('full')}` fetches it (~30 MB from huggingface.co) after you "
+            f"approve its plan; keyword ranking meanwhile")
 
 # What each engine is honestly worth — the labels doctor prints next to the name, so nobody has to
 # read the source to learn that "semantic (hashing)" isn't semantic.
@@ -41,8 +49,8 @@ _SEMANTIC_NOTE = {
 }
 _HASHING_MODEL_NOT_LOADED = (
     "token-hash overlap, NOT meaning — mokata[embeddings] IS installed but its model has not "
-    "loaded; it downloads (~30 MB) from huggingface.co on first use, so retry when that host is "
-    "reachable")
+    "loaded; `mokata setup claude --mode full` fetches it (~30 MB from huggingface.co) once that "
+    "host is reachable")
 
 
 def _off_but_installed() -> str:
@@ -71,6 +79,7 @@ class RetrievalStack:
     semantic: str = SEMANTIC_OFF     # "model2vec:<model>" | "hashing" | "off" | "unknown"
     lexical: str = "jaccard"         # "fts5" | "tsvector" | "jaccard" | "unknown"
     detail: str = ""                 # a degrade reason (e.g. a stamp mismatch), if any
+    model_pending: bool = False      # switched on, model not on this machine (doctor never fetches)
 
     @property
     def semantic_family(self) -> str:
@@ -85,6 +94,11 @@ class RetrievalStack:
 
     def render_lines(self, *, ascii_only: bool = False) -> List[str]:
         bullet = "-" if ascii_only else "•"
+        if self.model_pending:
+            return [
+                "retrieval stack",
+                f"  {bullet} semantic: {self.semantic}  ({_not_downloaded_note()})",
+                *self._lexical_lines(bullet)]
         sem_note = _SEMANTIC_NOTE.get(self.semantic_family, "")
         if self.semantic_family == SEMANTIC_OFF and _model2vec_installed():
             # 0.0.26 L1 (`DOCTOR-SEMANTIC-OFF-SAYS-NOT-WHY`): Jas's Windows run had model2vec
@@ -96,12 +110,13 @@ class RetrievalStack:
             # could not load (first-use download). "install mokata[embeddings]" sends the user to
             # re-install something they have; the fix is reaching huggingface.co once.
             sem_note = _HASHING_MODEL_NOT_LOADED
+        return ["retrieval stack",
+                f"  {bullet} semantic: {self.semantic}" + (f"  ({sem_note})" if sem_note else ""),
+                *self._lexical_lines(bullet)]
+
+    def _lexical_lines(self, bullet: str) -> List[str]:
         lex_note = _LEXICAL_NOTE.get(self.lexical, "")
-        lines = [
-            "retrieval stack",
-            f"  {bullet} semantic: {self.semantic}" + (f"  ({sem_note})" if sem_note else ""),
-            f"  {bullet} lexical:  {self.lexical}" + (f"  ({lex_note})" if lex_note else ""),
-        ]
+        lines = [f"  {bullet} lexical:  {self.lexical}" + (f"  ({lex_note})" if lex_note else "")]
         if self.detail:
             lines.append(f"  {bullet} note:     {self.detail}")
         return lines
@@ -109,7 +124,10 @@ class RetrievalStack:
 
 def resolve_stack(surface: Any) -> RetrievalStack:
     """Resolve which engines are live for THIS repo. Never raises."""
-    return RetrievalStack(semantic=_semantic_engine(surface), lexical=_lexical_engine(surface))
+    semantic = _semantic_engine(surface)
+    pending = semantic.startswith(MODEL_NOT_DOWNLOADED)
+    return RetrievalStack(semantic=semantic[len(MODEL_NOT_DOWNLOADED):] if pending else semantic,
+                          lexical=_lexical_engine(surface), model_pending=pending)
 
 
 def _semantic_engine(surface: Any) -> str:
@@ -125,6 +143,13 @@ def _semantic_engine(surface: Any) -> str:
         # built, not the one the settings block literally spells out.
         if not name and _memory_tool(surface) == "pgvector":
             name = "auto"
+        # 0.0.29 C1 verify M2 — doctor is READ-ONLY: it never fetches. When resolving the name
+        # would load a model this machine does not have yet (`make_embedder` would download ~30 MB
+        # from huggingface.co), REPORT that model and that it is not here; only a model already
+        # cached is loaded, and that load is local.
+        from . import embed as _embed
+        if _embed.would_load_model(name) and _embed.cached_model_dir(_embed.MODEL2VEC_MODEL) is None:
+            return f"{MODEL_NOT_DOWNLOADED}model2vec:{_embed.MODEL2VEC_MODEL}"
         embedder = make_embedder(name)
         if embedder is None:
             return SEMANTIC_OFF
@@ -143,7 +168,9 @@ def _lexical_engine(surface: Any) -> str:
     try:
         from .backends import LEXICAL_MODE_JACCARD
         from .store import MemoryStore
-        store = MemoryStore.from_surface(surface)
+        # load_model=False: the lexical mode is a property of the backend, and doctor never pays
+        # (or fetches) a model to read it (0.0.29 C1 verify M2).
+        store = MemoryStore.from_surface(surface, knowledge=False, load_model=False)
         return getattr(store.backend, "lexical_mode", LEXICAL_MODE_JACCARD)
     except Exception:
         return UNKNOWN

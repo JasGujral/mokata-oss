@@ -33,14 +33,12 @@ import tempfile
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+import _hermetic_git  # noqa: E402  (0.0.29 D1: the one hermetic git door)
 from _code_lines import code_line_texts
 
 _REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 _MISSING = [t for t in ("bash", "git") if shutil.which(t) is None]
 
-_GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull,
-            "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
-            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
 
 # `scripts/verify-mirror.sh` and `scripts/release.sh` are INTERNAL — excluded from the public
 # mirror by both of `sync-public.sh`'s controls — so every class reading or running them carries
@@ -65,7 +63,7 @@ class _Mirrors:
     def _git(self, *args, cwd, check=True):
         return subprocess.run(["git", *args], cwd=cwd, check=check, capture_output=True,
                               text=True, stdin=subprocess.DEVNULL,
-                              env={**os.environ, **_GIT_ENV})
+                              env=_hermetic_git.git_env())
 
     @staticmethod
     def _write(path, text):
@@ -104,7 +102,7 @@ class _Mirrors:
         if repo:
             argv.append(repo)
         return subprocess.run(_support.bash_argv(*argv), capture_output=True, text=True,
-                              stdin=subprocess.DEVNULL, env={**os.environ, **_GIT_ENV})
+                              stdin=subprocess.DEVNULL, env=_hermetic_git.git_env())
 
 
 @unittest.skipUnless(os.path.exists(VERIFY_SH), _INTERNAL)

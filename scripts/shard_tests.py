@@ -46,6 +46,9 @@ COMMANDS
     shard_tests.py absorb  DIR --group windows-latest-present --os Windows
                            re-base the record on a CI leg's own per-module seconds (DIR = that
                            run's downloaded `ci-clock-*` artifacts; every OS uploads them)
+    shard_tests.py absorb  DIR --group ubuntu-latest-present --os Linux --scale-only
+                           learn ONE OS's factor from its own leg (modules untouched); the
+                           factor names its run in `ci_scale.measured` — a typed factor reds
 
 `run` exits 0 green · 1 red (as unittest does) · 2 cannot run (bad K/N, empty shard, unreadable
 record). `--record` writes the shard's measured unit seconds for `ci_ceiling.py --from-shards`.
@@ -377,11 +380,20 @@ def cmd_absorb(a) -> int:
             modules[m] = round(float(t), 2)
     scale = dict(record.get("ci_scale") or {})
     per_os = dict(scale.get("per_os") or {})
+    measured = dict(scale.get("measured") or {})
+    stamp = "%s %s" % (a.group, time.strftime("%Y-%m-%d"))
+    if a.scale_only:
+        return _absorb_scale_only(a, record, scale, per_os, measured, modules, len(shards), stamp)
     base = float(per_os.get(a.os, 0) or 0)
     if base <= 0:
         print("shard_tests: the record has no ci_scale for %r" % a.os, file=sys.stderr)
         return CANNOT
     scale["per_os"] = {o: round(float(v) / base, 3) for o, v in per_os.items()}
+    # The leg's OS is now the record's own unit — measured by construction. The others keep their
+    # ratio, and keep whatever `measured` entry they had (a ratio of two measured factors is still
+    # measured; a typed one stays unmeasured, and the test reds on it until it is absorbed).
+    measured[a.os] = stamp
+    scale["measured"] = measured
     # Real CI clocks replace the provisional imbalance allowance (see THE CEILING FROM THE RECORD).
     scale.pop("provisional_imbalance", None)
     scale.pop("provisional_why", None)
@@ -396,6 +408,29 @@ def cmd_absorb(a) -> int:
     return GREEN
 
 
+def _absorb_scale_only(a, record, scale, per_os, measured, leg, n_shards, stamp) -> int:
+    """0.0.29 D3 `W5-CI-CEILING-SCALE-FACTORS-TYPED`: LEARN one OS's factor from its own leg and
+    leave the record's modules alone. `per_os[OS] = sum(leg seconds) / sum(record seconds)` over the
+    modules both name, relative to the record's base unit; the factor names the run it came from in
+    `ci_scale.measured`. The full `absorb` re-bases on one leg and can only CARRY the others' typed
+    ratios; this is how a Linux or macOS factor becomes a measurement."""
+    rec_mods = {m: float(t) for m, t in (record.get("modules") or {}).items()}
+    common = sorted(set(rec_mods) & set(leg))
+    rec_sum = sum(rec_mods[m] for m in common)
+    if not common or rec_sum <= 0:
+        print("shard_tests: cannot absorb --scale-only: %s names no module the record has"
+              % a.group, file=sys.stderr)
+        return CANNOT
+    per_os[a.os] = round(sum(leg[m] for m in common) / rec_sum, 3)
+    measured[a.os] = stamp
+    scale["per_os"], scale["measured"] = per_os, measured
+    record["ci_scale"] = scale
+    _write_json(a.out, record)
+    print("absorbed the %s scale %.3f from %d shards of %s (%d modules in common) -> %s"
+          % (a.os, per_os[a.os], n_shards, a.group, len(common), a.out))
+    return GREEN
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="shard_tests", description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -404,6 +439,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ab.add_argument("--group", required=True, help="the leg, e.g. windows-latest-present")
     ab.add_argument("--os", required=True, help="that leg's OS key in ci_scale.per_os")
     ab.add_argument("--out", default=DURATIONS)
+    ab.add_argument("--scale-only", action="store_true",
+                    help="learn only this OS's ci_scale factor from the leg; modules untouched")
     for name in ("plan", "run", "measure"):
         p = sub.add_parser(name)
         p.add_argument("-s", dest="start", default="tests", help="discovery start (as unittest -s)")

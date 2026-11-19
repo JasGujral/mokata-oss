@@ -10,6 +10,7 @@ from ._common import (
     AuditLedger,
     _load_surface,
 )
+from ..plugin_runtime import localize_commands
 
 
 def cmd_progress(args: argparse.Namespace) -> int:
@@ -271,10 +272,10 @@ def cmd_progress_fix_attempt(args: argparse.Namespace) -> int:
               f"(run {res.run_id[:8]}).")
         return 0
     if row["tripped"]:
-        print(f"mokata fix-attempt: BREAKER TRIPPED — {row['attempts']} failed fixes at "
+        print(localize_commands(f"mokata fix-attempt: BREAKER TRIPPED — {row['attempts']} failed fixes at "
               f"\"{row['signature']}\" (run {res.run_id[:8]}). {ESCALATE}. Implementation writes "
               f"stay blocked until a NEW approach is approved (/mokata:brainstorm) or a human "
-              f"overrides `fix-breaker`.")
+              f"overrides `fix-breaker`.", surface.root))
         return 3
     print(f"mokata fix-attempt: {row['attempts']} of {FIX_BREAKER_LIMIT} failed fixes at "
           f"\"{row['signature']}\" (run {res.run_id[:8]}).")
@@ -401,8 +402,8 @@ def cmd_sessions(args: argparse.Namespace) -> int:
     surface = _load_surface(args.path)
     sessions = list_sessions(surface.state, root=surface.root)
     if not sessions:
-        print("mokata sessions: no runs on record yet. Start one with /mokata:brainstorm "
-              "or /mokata:refine.")
+        print(localize_commands("mokata sessions: no runs on record yet. Start one with /mokata:brainstorm "
+              "or /mokata:refine.", surface.root))
         return 0
     print(f"mokata sessions — {len(sessions)} run(s):")
     for s in sessions:
@@ -611,10 +612,10 @@ def cmd_worktree_test(args: argparse.Namespace) -> int:
     from ..knowledge.cancel import Cancelled
     from ..merge_gate import MergeGateError
     try:
-        with CI.cancel_on_sigint():
+        with CI.cancel_on_sigint(planned=("the suite run", "the spec legs")):
             res = MSL.run_suite_and_leg(os.path.abspath(args.path), args.target)
-    except Cancelled:
-        print(f"mokata worktree test: {CI.CANCELLED_TEXT}")
+    except Cancelled as exc:
+        print(f"mokata worktree test: {exc}")
         return CI.CANCELLED_EXIT
     except (MS.SuiteError, MSL.SpecLegError, MergeGateError) as exc:
         print(f"mokata worktree test: {exc}")
@@ -662,7 +663,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
     print(f"mokata resume: run '{rid}' — [{progress.done}/{progress.total}] phases passed.")
     print(f"  resume at: '{phase}'"
           + (f" (the '{gate.id}' gate still applies — {gate.kind})" if gate else ""))
-    print(f"  continue with: mokata enter {phase}   (or /mokata:{phase}) — gates hold.")
+    print(localize_commands(f"  continue with: mokata enter {phase}   (or /mokata:{phase}) — gates hold.", surface.root))
     return 0
 
 
@@ -705,6 +706,7 @@ def _run_session(root: str, run: Optional[str]) -> Tuple[Optional[str], Optional
 
 
 def _watch_in_ide(root: str, run: Optional[str], browser: bool) -> int:
+    from ..errors import RecordRefused
     from ..ide.launch import open_or_focus
     root = os.path.realpath(root)
     rid, session = _run_session(root, run)
@@ -714,6 +716,9 @@ def _watch_in_ide(root: str, run: Optional[str], browser: bool) -> int:
         from ..ide.server import INSTALL_LINE
         print(INSTALL_LINE, file=sys.stderr)
         return 3
+    except RecordRefused as exc:      # 0.0.29 H-a round 2 (M4): named, never a traceback
+        print(f"mokata watch: {exc.line()}", file=sys.stderr)
+        return 1
     except RuntimeError as exc:
         print(f"mokata watch: {exc}", file=sys.stderr)
         return 1

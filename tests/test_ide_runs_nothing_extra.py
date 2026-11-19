@@ -22,6 +22,7 @@ from typing import List
 from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
+import _hermetic_git  # noqa: E402  (0.0.29 D1: the one hermetic git door)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "..", "src", "mokata", "ide", "static")
@@ -84,9 +85,7 @@ class OneReconcilePerWindow(unittest.TestCase):
 
 
 def _git_repo(root):
-    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
-           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
-           "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    env = _hermetic_git.git_env()
     os.makedirs(os.path.join(root, "pkg"))
     files = {
         "pkg/__init__.py": "",

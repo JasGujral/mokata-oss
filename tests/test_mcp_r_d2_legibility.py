@@ -392,11 +392,12 @@ class TestDoctorPending(unittest.TestCase):
     def test_mcp_r_d2_liveness_references_d0_budgets_without_rebuilding_them(self):
         """UX-STUCK's never-hang half shipped in D0. This line REFERENCES those budgets — reading
         the constants, so a retune moves the line and cannot drift — and probes nothing."""
-        from mokata.baseline import BASELINE_MCP_TIMEOUT_SECONDS
+        from mokata.baseline import BASELINE_SILENCE_SECONDS
         from mokata.mcp.server import MCP_SURFACE_TIMEOUT_SECONDS
         text = "\n".join(A.liveness_lines())
         self.assertIn(f"{MCP_SURFACE_TIMEOUT_SECONDS:g}s", text)
-        self.assertIn(f"{BASELINE_MCP_TIMEOUT_SECONDS:g}s", text)
+        # 0.0.29 lane G: `baseline` has no wall clock; the line names its silence default instead.
+        self.assertIn(f"{BASELINE_SILENCE_SECONDS:g}s", text)
         self.assertIn("`running`", text)
         # no probe, no subprocess, no measurement — it takes no root and reads no repo
         import inspect

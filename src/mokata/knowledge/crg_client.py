@@ -44,7 +44,6 @@ import threading
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from ..quiet_spawn import hidden
 from ..bounded_io import (BoundedStderrTail, READ_CANCELLED, READ_CLOSED, READ_ERROR,
                           READ_TIMEOUT,
                           read_line_bounded)
@@ -767,16 +766,19 @@ class CodeReviewGraphClient:
         return self.name
 
     def _default_run_cli(self, args: List[str]) -> Tuple[int, str, str]:
+        from ..quiet_spawn import run_jobbed
         cmd = [self._command()] + list(args)
+        # 0.0.29 R-B9 / N5: through the process door. `embed` (minutes on a large repo) has NO
+        # wall clock — it ends at its exit or at a Cancel of the job it runs in; `--version` and
+        # the stand-in `build`/`update` keep the CLI bound.
+        bound = None if args[:1] == ["embed"] else self.timeout
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True,
-                                  timeout=self.timeout, cwd=self.root,
-                                  stdin=subprocess.DEVNULL, **hidden())
+            rc, out, err = run_jobbed(cmd, timeout=bound, cwd=self.root)
         except (OSError, subprocess.SubprocessError) as exc:
             raise CrgUnavailable(f"could not run {self.name}: {exc}") from exc
         # Secret-safety (B-VER precedent): CLI output for version/build/update carries no env
         # secret, but we never surface raw output — only the parsed version — so nothing leaks.
-        return proc.returncode, proc.stdout or "", proc.stderr or ""
+        return rc, out or "", err or ""
 
     def close(self) -> None:
         """Stop this client's `code-review-graph serve` session, if it has one (0.0.25
@@ -919,6 +921,9 @@ class _McpStdioSession:
         self.root = root
         self.timeout = timeout
         self._proc: Optional[subprocess.Popen] = None
+        #: 0.0.29 `CRG-CLOSE-KILL-NO-REAP`: the serve session is a process-door tree — `serve` and
+        #: the worker processes it starts are ended together, and reaped once, by `close()`.
+        self._tree: Any = None
         self._stderr: Optional[BoundedStderrTail] = None
         self._id = 0
         self.pooled = False                  # O14b — owned by the process pool, not one client
@@ -929,15 +934,20 @@ class _McpStdioSession:
         self._lock = threading.Lock()
 
     def _ensure(self) -> subprocess.Popen:
-        if self._proc is not None and self._proc.poll() is None:
+        tree = self._tree
+        if tree is not None and self._proc is not None and tree.poll_exit() is None:
             return self._proc
+        if tree is not None:
+            self.close()                     # a respawn never strands the old process's pipes
+        from ..quiet_spawn import spawn_jobbed
         try:
-            self._proc = subprocess.Popen(
+            self._tree = spawn_jobbed(
                 [self.command, "serve", "--repo", self.root],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, bufsize=1, **hidden())
+                text=True, bufsize=1)
         except (OSError, subprocess.SubprocessError) as exc:
             raise CrgUnavailable(f"could not start {self.command} serve: {exc}") from exc
+        self._proc = self._tree.proc
         # A1 — stderr was `DEVNULL`, which threw away the subprocess's own account of why it hung;
         # the people who filed #45/#46/#53 could not say what happened because the code discarded
         # it. It is now captured — but DRAINED CONTINUOUSLY, never left sitting in a pipe: an
@@ -1062,15 +1072,12 @@ class _McpStdioSession:
         left the very process this path exists to get rid of still running. The `kill()` fallback
         is the same shape `mcp_admin._terminate` uses for the same reason."""
         proc = self._proc
-        if proc and proc.poll() is None:
-            try:
-                proc.terminate()
-                proc.wait(timeout=2)
-            except (OSError, subprocess.SubprocessError):
-                try:
-                    proc.kill()
-                except OSError:
-                    pass
+        tree, self._tree = self._tree, None
+        if tree is not None:
+            # 0.0.29: the door ends `serve` AND the worker processes it started (its group / its
+            # Job Object) and reaps the leader once — never a leader-only terminate, never a kill
+            # left unreaped.
+            tree.close()
         # `CRG-SESSION-CLOSE-LEAKS-FDS` (0.0.28 lane A) — reaping the process does not close the
         # three pipes `Popen` opened on it; they stayed open until the garbage collector found
         # them and warned `ResourceWarning: unclosed file`. A long-lived owner (the IDE's per-repo

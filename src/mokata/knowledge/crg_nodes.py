@@ -31,6 +31,7 @@ import os
 import sqlite3
 from typing import Any, Dict, List, Optional, Tuple
 
+from ..errors import DegradedCapability
 from ..repo_paths import name_of, path_of
 from .cancel import checkpoint, report
 
@@ -91,6 +92,24 @@ def _kind(kind: str, parent: Optional[str]) -> str:
     return _KINDS.get(kind, (kind or "").lower())
 
 
+class IndexBuilding(DegradedCapability):
+    """code-review-graph is building this index: a read now could see half of it. The ripple
+    degrades to asking the tool per node and says so in its note (unreachable: the index cannot
+    be read right now, the same remedy as an absent one)."""
+
+
+def _tool_symbol(qn: str, base: str) -> str:
+    """The caller's name as code-review-graph's answer reaches the IDE: `crg_client` makes the
+    qualified name repo-relative, then `query.floor_symbol` takes its last segment. The part after
+    `::` does not depend on the path, so only a qualified name without one (a File node: a module-
+    level call) needs the path made relative first."""
+    from .query import floor_symbol
+    if "::" not in qn:
+        from .crg_client import _rel
+        qn = _rel(qn, base)
+    return floor_symbol(qn) or qn
+
+
 class NodeReader:
     """Read-only questions over one repo's built code-review-graph index."""
 
@@ -104,15 +123,39 @@ class NodeReader:
         from ..memory._sqlite import connect_sqlite_readonly
         return connect_sqlite_readonly(self.db, timeout_s=2.0)
 
-    def stamp(self) -> Tuple[int, int]:
-        """Changes whenever code-review-graph writes its index (the DB or its WAL)."""
-        out = []
+    def stamp(self) -> Tuple[int, ...]:
+        """Changes whenever code-review-graph writes its index (the DB or its WAL): the mtime and
+        size of each. A coarse-mtime filesystem can hide two writes inside one tick; the size half
+        catches most of those, the rest is a disclosed limit."""
+        out: List[int] = []
         for suffix in ("", "-wal"):
             try:
-                out.append(os.stat(self.db + suffix).st_mtime_ns)
+                st = os.stat(self.db + suffix)
+                out += [st.st_mtime_ns, st.st_size]
             except OSError:
-                out.append(0)
-        return out[0], out[1]
+                out += [0, 0]
+        return tuple(out)
+
+    def read_stable(self, fn: Any) -> Any:
+        """0.0.29 E (`W5-SQLITE-RO-CHECK-THEN-OPEN`) — `fn()` (a read of this index) bracketed by
+        `stamp()`: equal stamps → its result; a stamp that moved (code-review-graph wrote while it
+        read) → read again, saying so. No attempt cap: a writer finishing ends it, and every
+        attempt passes `checkpoint()`, so Cancel does too. While code-review-graph is BUILDING the
+        index (not an update over a built one) this raises `IndexBuilding` instead of spinning —
+        the caller answers another way and says why."""
+        attempt = 0
+        while True:
+            checkpoint()
+            from .crg_build import INDEX_BUILT, probe_index
+            if probe_index(self.root) != INDEX_BUILT:
+                raise IndexBuilding("code-review-graph is building its index")
+            before = self.stamp()
+            out = fn()
+            if self.stamp() == before:
+                return out
+            attempt += 1
+            report(note=f"the code graph's index changed while it was read — reading it again "
+                        f"(attempt {attempt + 1})")
 
     def built_root(self, conn: sqlite3.Connection) -> str:
         if self._built_root is None:
@@ -264,7 +307,8 @@ class NodeReader:
                 out[qn] = name if name in want else sym
         return out
 
-    def callers_by_name(self, names: List[str]) -> List[Tuple[str, str, str, int]]:
+    def callers_by_name(self, names: List[str], bare: Optional[set] = None,
+                        matched: Optional[list] = None) -> List[Tuple[str, str, str, int]]:
         """0.0.26 P37 (`GRAPH-AT-SCALE`, R4) — the PROVEN call edges into every definition named
         one of `names`, straight from the index: rows `(callee name, caller name, call-site
         path, call-site line)`. These are exactly the rows code-review-graph's own `callers_of`
@@ -272,12 +316,24 @@ class NodeReader:
         holds); its name-matched fallback rows are NOT here — the tool's answer adds them. On
         kubernetes this is ~20 ms where the tool's union over 7 definitions takes 9–26 s, so the
         ripple draws its rings from here first and the tool's answer confirms them.
-        `+kind` keeps SQLite on the target index (it otherwise scans every CALLS edge: 17 s)."""
+        `+kind` keeps SQLite on the target index (it otherwise scans every CALLS edge: 17 s).
+
+        The caller is named the way the tool's answer names it (`query.floor_symbol` of its
+        qualified name, as `crg_client` does), so a row read here and the tool's row for the same
+        call are ONE node. 0.0.29 E: with `bare` (a set), the names among `names` that are also the
+        TARGET of a bare-name CALLS edge (`target_qualified` = the plain name — the rows the tool
+        adds by its own resolution rules, which mokata does not copy) are added to it, in the same
+        connection; with `matched` (a list, needs `bare`) those bare-name rows themselves are
+        appended to it in the same row shape — candidates matched by NAME, which only the tool's
+        answer can confirm (ripple Path B, ruling D6)."""
         conn = self._conn()
         try:
             base = self.built_root(conn)
-            targets = self._qns_named(conn, sorted(set(names)))
+            uniq = sorted(set(names))
+            targets = self._qns_named(conn, uniq)
             qns = list(targets)
+            if bare is not None:
+                qns += [n for n in uniq if n not in targets]
             edges: List[Tuple[str, str, str, int]] = []
             for i in range(0, len(qns), SQL_CHUNK):
                 checkpoint()
@@ -287,7 +343,14 @@ class NodeReader:
                     conn, f"SELECT target_qualified, source_qualified, file_path, line FROM edges "
                     f"WHERE target_qualified IN ({marks}) AND +kind = 'CALLS' "
                     f"ORDER BY file_path, line", part).fetchall())
-            sources = sorted({e[1] for e in edges})
+            by_name: List[Tuple[str, str, str, int]] = []
+            if bare is not None:
+                plain = {e[0] for e in edges if e[0] not in targets}
+                bare.update(plain)
+                if matched is not None:
+                    by_name = [e for e in edges if e[0] not in targets]
+                edges = [e for e in edges if e[0] in targets]
+            sources = sorted({e[1] for e in edges + by_name})
             name_of_src: Dict[str, str] = {}
             for i in range(0, len(sources), SQL_CHUNK):
                 checkpoint()
@@ -300,11 +363,14 @@ class NodeReader:
             conn.close()
         out: List[Tuple[str, str, str, int]] = []
         for tq, sq, fp, line in edges:
-            caller = name_of_src.get(sq)
             rel = self._rel(fp, base)
-            if caller is None or rel is None:       # the tool drops a caller it holds no node for
+            if sq not in name_of_src or rel is None:  # the tool drops a caller it holds no node for
                 continue
-            out.append((targets[tq], caller, rel, int(line or 0)))
+            out.append((targets[tq], _tool_symbol(sq, base), rel, int(line or 0)))
+        for tq, sq, fp, line in by_name:
+            rel = self._rel(fp, base)
+            if sq in name_of_src and rel is not None:
+                matched.append((tq, _tool_symbol(sq, base), rel, int(line or 0)))
         return out
 
     def _names_of(self, conn: sqlite3.Connection, qns: List[str]) -> Dict[str, str]:
@@ -396,5 +462,5 @@ def reader(root: str) -> Optional[NodeReader]:
     return NodeReader(root, db_path(root))
 
 
-__all__ = ["NodeReader", "reader", "language_of", "label_of", "file_digest", "LANGUAGE_OF_EXT",
+__all__ = ["NodeReader", "IndexBuilding", "reader", "language_of", "label_of", "file_digest", "LANGUAGE_OF_EXT",
            "SCAN_BATCH", "SQL_CHUNK"]

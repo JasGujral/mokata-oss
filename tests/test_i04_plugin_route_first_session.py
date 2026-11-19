@@ -82,10 +82,27 @@ def _briefing(d, *, presence, mokata_on_path):
     return json.loads(buf.getvalue())["hookSpecificOutput"]["additionalContext"]
 
 
+def _unwire_embedder(d):
+    """A `full` repo whose semantic tier is NOT switched on — one initialised before 0.0.29 C1
+    (init now writes `memory.embedder = auto` itself) or whose write was refused."""
+    data = _manifest(d)
+    (data.get("settings") or {}).pop("memory", None)
+    with open(os.path.join(d, ".mokata", "manifest.json"), "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+
+
 class PluginOnlyFullRepoIsToldTheOneCommand(unittest.TestCase):
     def setUp(self):
         _isolated_home(self)
         self.d = _repo(self, "full")
+        _unwire_embedder(self.d)
+
+    def test_a_0029_full_init_is_already_wired_so_the_plugin_route_hears_nothing(self):
+        """0.0.29 C1 (#86): `init --profile full` writes the embedder and the pin, and the plugin's
+        pinned env carries every package — nothing is owed, so nothing is said."""
+        d = _repo(self, "full")
+        ctx = _briefing(d, presence=_NONE_PRESENT, mokata_on_path=False)
+        self.assertNotIn("mode is not complete", ctx)
 
     def test_the_first_briefing_names_what_is_missing_and_the_one_command(self):
         """0.0.26 L8: on the plugin route the PACKAGES live in the plugin's pinned `mokata[full]`
@@ -172,7 +189,7 @@ class PluginOnlyFullRepoIsToldTheOneCommand(unittest.TestCase):
         from mokata.cli import build_parser
         for on_path in (True, False):
             cmd = AM.finish_commands_for("full", packages_missing=True,
-                                         mokata_on_path=on_path)[-1]
+                                         mokata_on_path=on_path, unwired=True)[-1]
             argv = cmd.split()
             self.assertEqual("mokata", argv[0])
             ns = build_parser().parse_args(argv[1:])
@@ -210,7 +227,9 @@ class TheModeIsDerivedNotRecorded(unittest.TestCase):
                                        mokata_on_path=True,
                                        install_line_fn=lambda e: f"LINE[{e}]")
         self.assertEqual(("semantic memory model",), check.missing)
-        self.assertIn("`LINE[embeddings]`, then `mokata setup claude --mode memory`", check.line)
+        # 0.0.29 C1 (#86): the repo is wired (the embedder is set), so the install is the ONE command.
+        self.assertIn("`LINE[embeddings]`. Do not run it", check.line)
+        self.assertNotIn("setup claude", check.line)
 
     def test_plain_standard_hashing_and_minimal_imply_no_mode_dependencies(self):
         for data in ({"profile": "standard"},

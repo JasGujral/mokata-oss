@@ -45,6 +45,7 @@ import os
 import posixpath
 import re
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -55,9 +56,10 @@ from .. import __version__
 from ..errors import MokataError
 from ..knowledge import cancel as C
 from ..quiet_spawn import Jobbed, spawn_jobbed
+from ..degrade import FAILURE_INTERNAL, note_degraded
 from ..exe_path import _SHIMS, path_dirs, which_in, win_reserved_name
 from ..fs_identity import refuse_if_inside, require_inside
-from ..repo_paths import name_of, split_path
+from ..repo_paths import split_path
 
 # ------------------------------------------------------------------------ the method allowlist
 #: Client -> server. Everything else is refused at `Server.send`.
@@ -95,10 +97,18 @@ CRASH_WINDOW_S = 60.0
 #: not). There is no fallback: a server Windows refuses a job for never starts (0.0.28 D2).
 STOP_GRACE_S = 2.0
 READ_POLL_S = 0.2         # the POSIX reader's select slice (it checks the stop flag between)
+#: The exit watcher's fallback poll retries an OSError this many times in a row (~5 s) before it
+#: publishes the end with the exit code unknown (verify-A r4 R4-1). Any other exception: at once.
+WATCH_POLL_MISSES = 25
 REAP_TICK_S = 5.0         # the reaper's tick: idle shutdown and the trust re-check run this often
 STDERR_KEEP = 4096        # the tail of a server's stderr kept for its crash report
 OPEN_DOCS_MAX = 32        # documents kept open on a server (LRU), bounded by the asker
-NO_PROGRESS_GRACE_S = 3.0       # a server that reports no `$/progress` counts as indexed after this
+#: A call-hierarchy question ends when the server has said NOTHING for this long — no answer, no
+#: `$/progress`, no request of its own (0.0.29 DECISIONS #14; the house rule since D4 is a silence bound, never a
+#: wall clock: a server still talking is never cut off). It then ends NAMED (`ServerSilent`, a
+#: `$/cancelRequest` sent) and the call graph answers, labelled `no-answer`. Under `IDLE_S`.
+CALLS_SILENCE_S = 120.0
+NO_PROGRESS_GRACE_S = 3.0      # a server that reports no `$/progress` counts as indexed after this
 CALLS_MAX = 2000                # call-hierarchy rows per expansion (all prepared items together)
 CALLS_ITEMS_MAX = 20            # prepared items (overloads) asked about per expansion; more are said
 CALL_LINE_MAX = 10000           # characters of a caller's line kept (snippet, column conversion)
@@ -145,6 +155,16 @@ class ServerGone(MokataError, RuntimeError):
 
 class ServerError(MokataError, RuntimeError):
     """The server answered a JSON-RPC error."""
+
+
+class ServerSilent(MokataError, RuntimeError):
+    """A question asked with a silence bound: the server said nothing at all for that long. The
+    question was cancelled (`$/cancelRequest`); the server is left running."""
+
+    def __init__(self, server: str, method: str, silence: float) -> None:
+        self.server, self.method, self.silence = server, method, silence
+        super().__init__(f"NOT RUN: {server} said nothing for {silence:g} s after "
+                         f"{method} (lsp.CALLS_SILENCE_S)")
 
 
 def languages() -> Dict[str, Dict[str, Any]]:
@@ -230,19 +250,25 @@ NODE_PACKAGES = {"typescript-language-server": "typescript-language-server",
 
 
 def _package_bin(modules: str, anchor: str, root: str, name: str, pkg: Optional[str] = None,
-                 environ: Optional[Dict[str, str]] = None) -> Tuple[Optional[List[str]], str]:
+                 environ: Optional[Dict[str, str]] = None,
+                 scope: Optional[str] = None) -> Tuple[Optional[List[str]], str]:
     """`<modules>/<pkg>/package.json` `bin[name]` as `[node, script]`, without a shim and without
-    a shell (re-verification R3, ruled). Containment holds on REALPATHS, twice (verify2 N2):
-    `modules` itself must sit inside `anchor` (the repo root for a project install — so a
-    committed `node_modules -> /anywhere` symlink is refused), and the script must sit inside
-    `modules` — pnpm's `.pnpm` store and yarn v1's hoisted tree are inside it; a package
-    directory symlinked out of it, or a `bin` that climbs out (`../../..`), is refused (L4). node
-    comes from the user's PATH (`node_on_path`). `.cmd` files are never read."""
+    a shell (re-verification R3, ruled). Containment is ONE CHAIN of realpaths (verify2 N2,
+    verify-A r3 R3-1): the script ⊂ `scope` ⊂ `anchor`, each realpath taken after every symlink and
+    junction hop, so the FINAL realpath of the script that runs is inside `anchor`. `scope`
+    (default `modules`) is a project's `node_modules` — its pnpm `.pnpm` store and yarn v1's hoisted
+    tree are inside it, and a committed `node_modules -> /anywhere` is refused — or pnpm's GLOBAL
+    layout dir `global/<n>`, which keeps `.pnpm` beside `node_modules` (`_pnpm_layouts`): a layout
+    dir itself linked out of the global dir is refused. A package directory linked out of its
+    scope, or a `bin` that climbs out (`../../..`), is refused (L4). No link is redundant with
+    another, so each check is pinned. node comes from the user's PATH (`node_on_path`). `.cmd`
+    files are never read."""
+    scope = scope or modules
     pkg = pkg or NODE_PACKAGES.get(name)       # `pkg`: a non-server tool (npm, corepack…) by name
     if pkg is None:
         return None, ""
-    if os.path.isdir(modules) and not require_inside(modules, anchor):
-        return None, (f"{modules} resolves outside {anchor} ({os.path.realpath(modules)}) — "
+    if os.path.isdir(scope) and not require_inside(scope, anchor):
+        return None, (f"{scope} resolves outside {anchor} ({os.path.realpath(scope)}) — "
                       f"refused")
     pkg_dir = os.path.join(modules, *pkg.split("/"))
     try:
@@ -256,8 +282,8 @@ def _package_bin(modules: str, anchor: str, root: str, name: str, pkg: Optional[
         return None, f"{pkg}/package.json names no bin {name!r}"
     script = os.path.realpath(os.path.join(os.path.realpath(pkg_dir),
                                            *split_path(rel)))
-    if not require_inside(script, modules) or not os.path.isfile(script):
-        return None, (f"{pkg}/package.json: bin {rel!r} resolves outside {modules} "
+    if not require_inside(script, scope) or not os.path.isfile(script):
+        return None, (f"{pkg}/package.json: bin {rel!r} resolves outside {scope} "
                       f"({script}) — refused")
     node = node_on_path(root, environ)
     if not node:
@@ -270,42 +296,199 @@ def _node_package_bin(root: str, name: str) -> Tuple[Optional[List[str]], str]:
     return _package_bin(os.path.join(root, "node_modules"), root, root, name)
 
 
-def _global_module_dirs(d: str) -> List[Tuple[str, str]]:
-    """`(node_modules dir, containment anchor)` for each global-install layout a PATH entry `d`
-    can be the bin directory of: npm (`<d>/node_modules`), pnpm (`<d>/global/<layout n>/
-    node_modules`, `PNPM_HOME` on PATH) and yarn v1 (`…/Yarn/bin` → `…/Yarn/Data/global/
-    node_modules`)."""
-    out = [(os.path.join(d, "node_modules"), d)]
-    try:
-        layouts = sorted((n for n in os.listdir(os.path.join(d, "global")) if n.isdigit()),
-                         key=int, reverse=True)
-    except OSError:
-        layouts = []
-    out += [(os.path.join(d, "global", n, "node_modules"), d) for n in layouts]
+def _global_module_dirs(d: str) -> List[Tuple[str, str, str]]:
+    """`(node_modules dir, containment anchor, script scope)` for each global-install layout a PATH
+    entry `d` can be the bin directory of: npm (`<d>/node_modules`) and yarn v1 (`…/Yarn/bin` →
+    `…/Yarn/Data/global/node_modules`); the script must lie inside that `node_modules`. pnpm is NOT
+    found through a PATH entry: its global dir is derived as pnpm derives it (`_pnpm_layouts`)."""
+    out = [(os.path.join(d, "node_modules"), d, os.path.join(d, "node_modules"))]
     parent = os.path.dirname(os.path.normpath(d))
     if os.path.basename(os.path.normpath(d)).lower() == "bin" \
             and os.path.basename(parent).lower() == "yarn":
-        out.append((os.path.join(parent, "Data", "global", "node_modules"), parent))
+        yarn_modules = os.path.join(parent, "Data", "global", "node_modules")
+        out.append((yarn_modules, parent, yarn_modules))
     return out
+
+
+def _pnpm_global_dir(environ: Optional[Dict[str, str]] = None,
+                     plat: Optional[str] = None) -> Optional[str]:
+    """The global dir `pnpm root -g` sits in (`<global dir>/<layout n>/node_modules`), derived as
+    pnpm derives it by default — `@pnpm/config`'s `getDataDir()/global` — never by running
+    pnpm (on Windows an npm-installed pnpm is itself a `.cmd`) and never guessed from a PATH entry
+    (verify-B2 M3). The data dir: `PNPM_HOME`, `$XDG_DATA_HOME/pnpm`, macOS `~/Library/pnpm`, other
+    POSIX `~/.local/share/pnpm`, Windows `%LOCALAPPDATA%\\pnpm`, else `~/.pnpm`; a relative one is
+    not resolved against the cwd — `None` (verify-A r3 R3-6).
+
+    NO INPUT A REPOSITORY CAN SET (verify-A r3 R3-2, High under 0.0.29 DECISIONS #14): `npm run` and `pnpm run` turn
+    every key of the repo's `.npmrc` into an `npm_config_<key>` variable, so no `npm_config_*` is
+    read — a `global-dir` setting, by `.npmrc` or by environment, is not honoured, and that install
+    is then not found (fail closed). The variables read are ones neither runner derives from repo
+    config (`PNPM_HOME`, `XDG_DATA_HOME`, `LOCALAPPDATA`, the home dir): the user's environment.
+    real-lsp.yml compares this with `pnpm root -g` on every OS."""
+    env = os.environ if environ is None else environ
+    plat = sys.platform if plat is None else plat
+    home = os.path.expanduser("~")
+    told = env.get("PNPM_HOME") or env.get("XDG_DATA_HOME") \
+        or (env.get("LOCALAPPDATA") if plat == "win32" else None)
+    if told and not (ntpath if plat == "win32" else posixpath).isabs(told):
+        return None                           # relative: never resolved against the cwd
+    if env.get("PNPM_HOME"):
+        data = env["PNPM_HOME"]
+    elif env.get("XDG_DATA_HOME"):
+        data = os.path.join(env["XDG_DATA_HOME"], "pnpm")
+    elif plat == "darwin":
+        data = os.path.join(home, "Library", "pnpm")
+    elif plat != "win32":
+        data = os.path.join(home, ".local", "share", "pnpm")
+    elif env.get("LOCALAPPDATA"):
+        data = os.path.join(env["LOCALAPPDATA"], "pnpm")
+    else:
+        data = os.path.join(home, ".pnpm")
+    return os.path.join(data, "global")
+
+
+def _pnpm_layouts(root: str, environ: Optional[Dict[str, str]] = None
+                  ) -> Tuple[List[Tuple[str, str, str]], str]:
+    """`(node_modules, anchor, scope)` for each layout of pnpm's DERIVED global dir, newest first —
+    when that dir exists outside the repo AND is owned by this user (0.0.29 DECISIONS #14's rule, as for yarn). The
+    scope is the LAYOUT dir `global/<n>`: pnpm 8, 9 and 10 keep a global layout's virtual store
+    BESIDE its `node_modules` (`global/5/.pnpm`, every real `pnpm add -g` on Windows). Never another
+    layout. Refused: `([], why)`."""
+    g = _pnpm_global_dir(environ)
+    if not g or not os.path.isdir(g):
+        return [], ""
+    g = os.path.realpath(g)
+    if refuse_if_inside(g, root):
+        return [], f"pnpm's global dir {g} is inside the repository — refused"
+    if not _owned_by_me(g):
+        return [], f"pnpm's global dir {g} is not owned by this user — refused"
+    try:
+        layouts = sorted((n for n in os.listdir(g) if n.isascii() and n.isdigit()), key=int,
+                         reverse=True)
+    except OSError:
+        layouts = []
+    return [(os.path.join(g, n, "node_modules"), g, os.path.join(g, n)) for n in layouts], ""
 
 
 def _global_node_package_bin(root: str, name: str, pkg: Optional[str] = None,
                              environ: Optional[Dict[str, str]] = None
                              ) -> Tuple[Optional[List[str]], str]:
-    """A GLOBAL npm / pnpm / yarn v1 install the user made, found through PATH without reading its
-    shim: each absolute PATH entry outside the repo is asked for the package in every global
-    layout it can be the bin directory of (`_global_module_dirs`). (On POSIX the global bin is a
-    symlink `which_in` already finds.)"""
+    """A GLOBAL npm / yarn v1 install found through PATH without reading its shim (each absolute
+    PATH entry outside the repo, `_global_module_dirs`), else a pnpm one in pnpm's derived global
+    dir (`_pnpm_layouts`). (On POSIX the global bin is a symlink `which_in` already finds.)"""
     why = ""
     for d in path_dirs(environ, cwd=root):
         if refuse_if_inside(d, root):
             continue
-        for modules, anchor in _global_module_dirs(d):
-            head, w = _package_bin(modules, anchor, root, name, pkg, environ)
+        for modules, anchor, scope in _global_module_dirs(d):
+            head, w = _package_bin(modules, anchor, root, name, pkg, environ, scope=scope)
             if head is not None:
                 return head, ""
             why = why or w
+    layouts, w = _pnpm_layouts(root, environ)
+    why = why or w
+    for modules, anchor, scope in layouts:
+        head, w = _package_bin(modules, anchor, root, name, pkg, environ, scope=scope)
+        if head is not None:
+            return head, ""
+        why = why or w
     return None, why
+
+
+def _yarn_global_dir(environ: Optional[Dict[str, str]] = None,
+                     nt: Optional[bool] = None) -> Optional[str]:
+    """The directory `yarn global dir` reports, derived as yarn v1 derives it — never by running
+    yarn (on Windows it is itself a `.cmd`). `YARN_GLOBAL_FOLDER` (yarn's own config by environment)
+    when absolute; else `<data dir>/global`, the data dir being `%LOCALAPPDATA%\\Yarn\\Data` on Windows,
+    `$XDG_DATA_HOME/yarn`, or `~/.config/yarn`. A `global-folder` set only in a `.yarnrc` is not read:
+    its shim then stays "found only as" (fail closed)."""
+    env = os.environ if environ is None else environ
+    is_nt = (os.name == "nt") if nt is None else nt
+    told = env.get("YARN_GLOBAL_FOLDER")
+    if told:
+        return told if os.path.isabs(told) else None
+    home_cfg = os.path.join(os.path.expanduser("~"), ".config", "yarn")
+    if is_nt:
+        lad = env.get("LOCALAPPDATA")
+        data = os.path.join(lad, "Yarn", "Data") if lad else home_cfg
+    elif env.get("XDG_DATA_HOME"):
+        data = os.path.join(env["XDG_DATA_HOME"], "yarn")
+    else:
+        data = home_cfg
+    return os.path.join(data, "global")
+
+
+def _owned_by_me(path: str) -> bool:
+    """Is `path` owned by the user this process runs as? POSIX: its uid. Windows: its owner SID
+    (`winacl`, which also takes BUILTIN\\Administrators for an elevated token). Unreadable: no."""
+    if os.name == "nt":
+        from .. import winacl
+        return winacl.verify_private(path).owner_is_me
+    try:
+        return os.stat(path).st_uid == os.geteuid()
+    except OSError:
+        return False
+
+
+#: A script a `cmd-shim` `.cmd` names: `"%~dp0\<rel>"` (cmd-shim 2, yarn v1) or `"%dp0%\<rel>"`
+#: (newer cmd-shim). The shim is READ as text; nothing in it is ever run.
+_SHIM_SCRIPT = re.compile(r'"(?:%~dp0|%dp0%)\\?([^"%]+)"')
+SHIM_READ_MAX = 64 * 1024
+
+
+def _shim_script(shim: str) -> Optional[str]:
+    """The ONE target a `.cmd` shim names (a script, or yarn 1.22's next shim), as a path beside
+    the shim; None when it names none, or more than one."""
+    try:
+        with open(shim, "rb") as fh:
+            text = fh.read(SHIM_READ_MAX + 1)
+    except OSError:
+        return None
+    if len(text) > SHIM_READ_MAX:
+        return None
+    rels = {m for m in _SHIM_SCRIPT.findall(text.decode("utf-8", "replace"))
+            if (split_path(m) or [""])[-1].lower() not in ("node", "node.exe")}
+    if len(rels) != 1:
+        return None
+    return os.path.join(os.path.dirname(shim), *split_path(rels.pop()))
+
+
+def _yarn_shim_bin(root: str, name: str, environ: Optional[Dict[str, str]] = None
+                   ) -> Tuple[Optional[List[str]], str]:
+    """yarn v1 under npm's prefix (0.0.29 A, DECISIONS #14 H-A2): the Windows bin is `<npm prefix>\\bin\\<name>
+    .cmd`, the package is in `yarn global dir`. The shim is followed to its target ONLY when the
+    target's realpath lies inside yarn's global dir AND that dir is owned by this user (its realpath,
+    outside the repo); then the package's own `bin` there runs as `[node, script]` — never a shim.
+    Anything else: refused, and why."""
+    if name not in NODE_PACKAGES:
+        return None, ""
+    shim = None
+    for d in path_dirs(environ, cwd=root):
+        if not refuse_if_inside(d, root) and os.path.isfile(os.path.join(d, name + ".cmd")):
+            shim = os.path.join(d, name + ".cmd")
+            break
+    if shim is None:
+        return None, ""
+    ygd = _yarn_global_dir(environ)
+    if not ygd or not os.path.isdir(ygd):
+        return None, f"yarn's global dir ({ygd or 'unknown'}) does not exist"
+    ygd = os.path.realpath(ygd)
+    script = _shim_script(shim)
+    if script is None:
+        return None, f"{shim} names no single target"
+    real = os.path.realpath(script)
+    if refuse_if_inside(ygd, root) or not require_inside(real, ygd) or not os.path.isfile(real):
+        return None, f"its target {real} is not inside yarn's global dir {ygd}"
+    if not _owned_by_me(ygd):
+        return None, f"yarn's global dir {ygd} is not owned by this user"
+    # The shim's target only proves the shim is yarn's: yarn 1.22's own bin shim names ANOTHER shim
+    # (`<global dir>\node_modules\.bin\<name>.cmd`, seen on the real runner). What runs is the
+    # package's `package.json` `bin`, inside yarn's `node_modules` — `_package_bin`, as for npm.
+    modules = os.path.join(ygd, "node_modules")
+    head, why = _package_bin(modules, ygd, root, name, environ=environ)
+    if head is None:
+        return None, why or f"{name} is not installed in {modules}"
+    return head, ""
 
 
 def _shim_only(root: str, name: str) -> Optional[str]:
@@ -332,6 +515,7 @@ def find_server(root: str, language: str) -> Dict[str, Any]:
     cands = []
     pick = None
     note = ""
+    shim_why: Dict[str, str] = {}
     for name, tail, install in spec["servers"]:
         head: Optional[List[str]] = None
         user = bool(spec.get("user"))
@@ -344,6 +528,8 @@ def find_server(root: str, language: str) -> Dict[str, Any]:
         if head is None and not user:
             head, why = _global_node_package_bin(root, name)
             note = note or why
+        if head is None and not user:
+            head, shim_why[name] = _yarn_shim_bin(root, name)
         cands.append({"name": name, "install": install, "found": head is not None})
         if head is not None and pick is None:
             pick = (name, [*head, *tail])
@@ -351,9 +537,11 @@ def find_server(root: str, language: str) -> Dict[str, Any]:
         for name, _tail, _install in spec["servers"]:
             shim = _shim_only(root, name)
             if shim is not None:          # found and NOT run, and why — never "not on PATH"
+                why = shim_why.get(name)
                 note = (f"`{name}` was found only as {shim} — mokata never runs a .cmd/.bat/.ps1 "
-                        f"(cmd.exe / PowerShell would parse the command line); name the server's "
-                        f"real executable in {USER_CONFIG}")
+                        f"(cmd.exe / PowerShell would parse the command line)"
+                        + (f" and did not follow it: {why}" if why else "")
+                        + f"; name the server's real executable in {USER_CONFIG}")
                 break
         return {"found": False, "binary": None, "argv": None, "name": None, "candidates": cands,
                 "note": note or (f"no {language} language server on PATH, in the venv or node_modules"
@@ -430,6 +618,25 @@ def source_text(path: str) -> str:
         return fh.read().decode("utf-8", "replace")
 
 
+def _watch_say(server: Any, kind: str, exc: BaseException, fallback: str) -> None:
+    """The exit watcher's notice: one per SERVER and per KIND (verify-A r5 R5-3), because a degrade
+    notice prints once per subsystem per process — under one shared key the give-up after a failed
+    wait, and every later server's failure, were silent. Keyed by kind, language and pid.
+
+    BEST-EFFORT, never the thing that decides the publish (R5-1): a notice that fails (a closed
+    stderr under an IDE whose reader went away) is dropped. A KeyboardInterrupt is not caught here:
+    it leaves through `_watch_exit`'s finally, which publishes first."""
+    proc = getattr(server, "proc", None)
+    pid = getattr(proc, "pid", None)
+    try:
+        said = f"{server.name}: {type(exc).__name__}: {exc}"     # the TYPE is in the printed line
+        note_degraded(f"lsp-exit-watch/{kind}/{server.language}/{pid}", FAILURE_INTERNAL,
+                      fallback=f"{said} — {fallback}",
+                      fix="report it: the exit watcher should never fail", detail=said)
+    except Exception:
+        pass
+
+
 # ------------------------------------------------------------------------ one server
 class Server:
     """One language-server process and its JSON-RPC conversation (stdio). Thread-safe: any
@@ -454,9 +661,11 @@ class Server:
         self.refused_methods: List[str] = []
         self.sent: List[str] = []                           # method names, for the tests' audit
         self.exit_code: Optional[int] = None
+        self.exit_unknown = False           # the watcher could not learn the exit (R4-1): said, not 0
         self.started_at = self.clock()
         self.last_used = self.clock()
-        self.answered = 0                                   # textDocument answers
+        self.heard_at = self.clock()        # the server's last answer, `$/progress` or request
+        self.answered = 0                                 # textDocument answers
         self.stopped = threading.Event()
         self._stderr = bytearray()
         self.stopping = False
@@ -491,8 +700,12 @@ class Server:
             "clientInfo": {"name": "mokata ide (read-only)", "version": __version__},
             "capabilities": {
                 "window": {"workDoneProgress": True},
-                "workspace": {"workspaceFolders": True, "configuration": True,
-                              "applyEdit": False},
+                # NOT `workspaceFolders` (0.0.29 A, DECISIONS #14 H-A1): mokata sends no folder changes, and
+                # pyright 1.1.390 reads that claim as "the client will push settings" — it skips
+                # its own `workspace/configuration` pull and holds EVERY request until a
+                # `workspace/didChangeConfiguration` that never comes. The folder still goes in
+                # `workspaceFolders` above; a server asking for it is still answered.
+                "workspace": {"configuration": True, "applyEdit": False},
                 "textDocument": {
                     "hover": {"contentFormat": ["markdown", "plaintext"]},
                     "definition": {"linkSupport": False},
@@ -508,7 +721,11 @@ class Server:
 
     @property
     def alive(self) -> bool:
-        return self.tree is not None and self.tree.poll_exit() is None and not self.stopped.is_set()
+        """Over only once that is PUBLISHED (verify-B2 M2): `stopped` is set by the first `_gone`
+        caller after `exit_code` and the pending questions — never read from the process, which
+        exits before any of that is written. A process that exits on its own is published by the
+        exit watcher (`_watch_exit`), which every started server has."""
+        return self.tree is not None and not self.stopped.is_set()
 
     def stop(self, why: str = "stopped") -> None:
         """`shutdown` → `exit` → the process TREE is ended if it lingers. Two STOP_GRACE_S steps,
@@ -546,16 +763,62 @@ class Server:
         self._gone(why)
 
     def _watch_exit(self) -> None:
+        """Wait for the server's exit and PUBLISH it. PUBLISHING IS THE INVARIANT (verify-A r4 R4-1,
+        r5 R5-1): `alive` reads only what is published, so a watcher that ends without publishing
+        leaves a dead server "alive" for ever (M2). Hence the shape: try → except → FINALLY, and the
+        finally publishes the end unless something else already has — whatever happened above it,
+        BaseException included. Saying what went wrong is best-effort (`_watch_say` never raises an
+        Exception, and a KeyboardInterrupt out of it still reaches the finally).
+
+        - The OS wait fails (anything): said, then the bounded poll.
+        - The poll fails with OSError: retried, at most WATCH_POLL_MISSES in a row. Anything else is
+          a bug and is NOT retried (R5-4).
+        - Gave up, or a BaseException in flight: the end is published with its exit code UNKNOWN
+          (`_gone`'s `unknown`): `exit_code` None, never our own kill's -9 (R5-2). The
+          BaseException then keeps propagating — the publish is a finally, never a handler."""
         tree = self.tree
         if tree is None:
             return
+        unknown: Optional[str] = None
+        gave_up: Optional[BaseException] = None
         try:
             tree.wait_exit()                  # never reaps: the tree is ended while unreaped
-        except OSError:
-            return
-        self._gone("exited")
+        except Exception as exc:              # not only OSError (verify-A r3 R3-4)
+            # Said NOW — it is true for the whole poll. Even an interrupt out of it cannot skip the
+            # publish: it leaves through the finally, which publishes before it says anything.
+            _watch_say(self, "wait-failed", exc, "polling the server's exit instead")
+            misses = 0
+            while not self.stopped.wait(READ_POLL_S):
+                try:
+                    if tree.poll_exit() is not None:
+                        break
+                    misses = 0
+                except Exception as bad:
+                    misses += 1
+                    if isinstance(bad, OSError) and misses < WATCH_POLL_MISSES:
+                        continue
+                    unknown, gave_up = f"{type(bad).__name__}: {bad}", bad   # said AFTER the publish
+                    break
+        finally:
+            # The publish. Never a BaseException HANDLER (the D5 register: catching one is only
+            # cleanup-then-re-raise) — a finally IS that: whatever is in flight here (a Ctrl-C, a
+            # SystemExit, any BaseException) is published as an unknown exit and then keeps going.
+            # PUBLISH FIRST, SAY AFTER (verify-A r6 R6-1): no notice stands between the watcher
+            # and `_gone` — a notice raising a BaseException can then only cut the notices short.
+            if not self.stopped.is_set():
+                inflight = sys.exc_info()[1]
+                if inflight is not None and unknown is None:
+                    unknown, gave_up = f"{type(inflight).__name__}: {inflight}", inflight
+                late = [] if gave_up is None else [
+                    ("gave-up", gave_up, "the server was ended; its exit code is unknown")]
+                try:
+                    self._gone("exited", unknown=unknown)
+                except Exception as exc:      # `_gone` sets `stopped` in its own finally: no loop
+                    late.append(("publish-failed", exc, "the end was published; its event was not"))
+                for kind, what, fallback in late:
+                    _watch_say(self, kind, what, fallback)
 
-    def _gone(self, why: str) -> None:
+    def _gone(self, why: str, unknown: Optional[str] = None) -> None:
         """The server is over (stopped, killed or crashed): its whole tree is killed — on the
         crash path too (R1) — pending questions fail with ServerGone at once, the readers are
         told to stop. Idempotent: the first caller publishes the event, the rest only re-kill.
@@ -563,9 +826,21 @@ class Server:
         The FIRST CALLER'S REASON is the answer (0.0.28 W5): it is claimed under the lock BEFORE
         the kill. The kill wakes the exit watcher, whose own `_gone("exited")` used to reach the
         lock first and answer a frame-cap refusal as "exited (exit -9)" — the reason the reader
-        decided on lost to the signal it sent. A later caller only re-kills; it never fails the
-        questions, and the questions are failed before `stopped` is set, so a waiting `request`
-        never sees `stopped` without its answer."""
+        decided on lost to the signal it sent. The questions are failed before `stopped` is set,
+        so a waiting `request` never sees `stopped` without its answer.
+
+        0.0.29 A (`W5-LSP-GONE-LATER-CALLER-RETURNS-EARLY`): EVERY caller returns only when the
+        server is over. A later caller re-ends the tree, then waits for `stopped` — which the first
+        caller sets in a `finally`, so a `close` that raises still ends the questions. No timeout,
+        and no lock cycle: no caller holds `_lock` while closing or waiting, and `Jobbed.close`
+        takes only the handle's own lock and joins no thread (POSIX: one group signal + the reap;
+        Windows: TerminateJobObject, then a wait for the job to be EMPTY bounded by END_BOUND_S),
+        so it never waits on a thread that could itself be a later caller here.
+
+        `unknown` (verify-A r5 R5-2): the exit watcher could not learn the exit — the reason. The
+        FIRST caller decides the exit, once, under the lock: with `unknown`, `exit_code` stays None
+        and `exit_unknown` is set, and no later reap (our own kill's -9) ever writes a code over
+        it, because nothing writes `exit_code` but this one first-caller block."""
         proc = self.proc
         with self._lock:
             first = not self._ended
@@ -573,19 +848,28 @@ class Server:
         # The tree is ended ONCE, through its door handle (verify2 N1; 0.0.28 R3): on POSIX the
         # group only while the leader is unreaped, then the id is forgotten; on Windows the Job
         # Object until it is empty. A later stop / kill / reap signals nothing.
-        if self.tree is not None:
-            self.tree.close()                 # end() (idempotent) + release the job handle
         if not first:
+            if self.tree is not None:
+                self.tree.close()             # end() (idempotent) + release the job handle
+            self.stopped.wait()               # over only when the first caller has ended it all
             return
-        with self._lock:
-            if proc is not None:
-                self.exit_code = proc.returncode
-            pend, self._pending = self._pending, {}
-            exit_note = f" (exit {self.exit_code})" if self.exit_code is not None else ""
-            for p in pend.values():
-                p["error"] = ServerGone(f"{self.name} {why}{exit_note}")
-                p["done"].set()
-            self.stopped.set()
+        try:
+            if self.tree is not None:
+                self.tree.close()
+        finally:
+            with self._lock:
+                if unknown is not None:
+                    self.exit_unknown, self.exit_code = True, None
+                    exit_note = f" (exit code unknown: the exit watcher failed — {unknown})"
+                else:
+                    if proc is not None:
+                        self.exit_code = proc.returncode
+                    exit_note = f" (exit {self.exit_code})" if self.exit_code is not None else ""
+                pend, self._pending = self._pending, {}
+                for p in pend.values():
+                    p["error"] = ServerGone(f"{self.name} {why}{exit_note}")
+                    p["done"].set()
+                self.stopped.set()
         if self._stop_readers is not None:
             self._stop_readers.set()
         if self.proc is not None and self.proc.stdin is not None:
@@ -595,7 +879,8 @@ class Server:
                 pass
         self.on_event({"kind": "lsp", "what": "stopped" if self.stopping else "crashed",
                        "language": self.language, "server": self.name,
-                       "exit_code": self.exit_code, "stderr": self.stderr_tail()})
+                       "exit_code": self.exit_code, "exit_unknown": self.exit_unknown,
+                       "stderr": self.stderr_tail()})
 
     def stderr_tail(self) -> str:
         return bytes(self._stderr[-STDERR_KEEP:]).decode("utf-8", "replace")
@@ -627,10 +912,13 @@ class Server:
     def notify(self, method: str, params: Any) -> None:
         self.send({"method": method, "params": params})
 
-    def request(self, method: str, params: Any, wait: Optional[float] = None) -> Any:
+    def request(self, method: str, params: Any, wait: Optional[float] = None,
+                silence: Optional[float] = None) -> Any:
         """Ask and wait. NO deadline unless `wait` is given (only `shutdown` uses one): a slow
         server is a pending job with Cancel — a cancelled job sends `$/cancelRequest` and raises
-        `Cancelled` through `knowledge.cancel`."""
+        `Cancelled` through `knowledge.cancel`. `silence` (the call hierarchy's bound, 0.0.29 DECISIONS #14) is not
+        a deadline: the question ends — `$/cancelRequest`, then `ServerSilent` — only once the
+        server has said nothing at all for that long since it was asked."""
         with self._lock:
             rid = self._next
             self._next += 1
@@ -643,7 +931,7 @@ class Server:
             with self._lock:
                 self._pending.pop(rid, None)
             raise
-        self.last_used = self.clock()
+        self.last_used = asked = self.clock()
         deadline = None if wait is None else self.clock() + wait
         while not rec["done"].wait(0.05):
             if self.stopped.is_set() and not rec["done"].is_set():
@@ -662,6 +950,14 @@ class Server:
                 with self._lock:
                     self._pending.pop(rid, None)
                 raise TimeoutError(method)
+            if silence is not None and self.clock() - max(asked, self.heard_at) > silence:
+                with self._lock:
+                    self._pending.pop(rid, None)
+                try:
+                    self.notify("$/cancelRequest", {"id": rid})
+                except ServerGone:
+                    pass
+                raise ServerSilent(self.name, method, silence)
         self.last_used = self.clock()
         if rec["error"] is not None:
             raise rec["error"]
@@ -775,6 +1071,10 @@ class Server:
     def _dispatch(self, msg: Dict[str, Any]) -> None:
         if not isinstance(msg, dict):
             return
+        # Heard (the silence bound): an answer, a request of its own, or `$/progress`. A log line
+        # or a diagnostic is not work on a question, so it does not keep a question alive.
+        if "id" in msg or msg.get("method") == "$/progress":
+            self.heard_at = self.clock()
         if "method" in msg:
             if "id" in msg:
                 self._server_request(msg)
@@ -902,7 +1202,8 @@ class Server:
                  "indexing" if not self.is_ready() else "ready")
         return {"language": self.language, "server": self.name, "binary": self.argv[0],
                 "state": state, "pid": self.proc.pid if self.proc is not None else None,
-                "exit_code": self.exit_code, "indexing": self.indexing(),
+                "exit_code": self.exit_code, "exit_unknown": self.exit_unknown,
+                "indexing": self.indexing(),
                 "answered": self.answered, "open_documents": len(self._docs),
                 "refused_edits": self.refused_edits, "refused_methods": list(self.refused_methods),
                 "idle_s": round(self.clock() - self.last_used, 1)}
@@ -1042,6 +1343,8 @@ class Host:
         if not self.recheck_trust():
             return None, {"state": "untrusted", "note": "this workspace is not trusted — the "
                                                         "graph layer answers"}
+        from . import jobs as J       # 0.0.29 A: this job's answer is handed out only while trusted
+        J.kept_while(self.trusted)
         with self._lock:
             srv = self._servers.get(language)
         if srv is None:
@@ -1114,15 +1417,18 @@ class Host:
 
 # ------------------------------------------------------------------------ the answers
 def _rel(root: str, abspath: str) -> Tuple[Optional[str], bool]:
-    """(repo-relative path with '/', outside?)"""
-    real_root = os.path.realpath(root)
-    real = os.path.realpath(abspath)
+    """(repo-relative path with '/', outside?) — ALLOW side (a snippet is shown): inside only when the
+    disk says so (`fs_identity.disk_rel` finds the root by identity, 0.0.29 H3), so a case-flipped
+    spelling of the root is inside, and the name is spelled as the disk spells it."""
+    from ..fs_identity import disk_rel
     try:
-        if os.path.commonpath([real_root, real]) == real_root:
-            return str(name_of(real, real_root)), False
-    except ValueError:
-        pass
-    return None, True
+        got = disk_rel(root, abspath)
+    except (OSError, ValueError):
+        got = None
+    if got is None:
+        return None, True
+    below, tail, _deepest = got
+    return "/".join(below + tail) or ".", False
 
 
 class _Lines:
@@ -1382,7 +1688,7 @@ def call_edges(root: str, srv: Server, uri: str, pos: Dict[str, int], direction:
         return {"revoked": True}
     checkpoint()
     prep = srv.request("textDocument/prepareCallHierarchy",
-                       {"textDocument": {"uri": uri}, "position": pos})
+                       {"textDocument": {"uri": uri}, "position": pos}, silence=CALLS_SILENCE_S)
     skipped = 0
     raw = prep if isinstance(prep, list) else [] if prep is None else None
     if raw is None:
@@ -1396,7 +1702,7 @@ def call_edges(root: str, srv: Server, uri: str, pos: Dict[str, int], direction:
         if not recheck():
             return {"revoked": True}
         checkpoint()
-        res = srv.request(method, {"item": it})
+        res = srv.request(method, {"item": it}, silence=CALLS_SILENCE_S)
         entries = res if isinstance(res, list) else [] if res is None else None
         g_skipped = 0
         if entries is None:
@@ -1434,8 +1740,8 @@ def call_edges(root: str, srv: Server, uri: str, pos: Dict[str, int], direction:
 
 __all__ = ["ALLOWED", "ALLOWED_REQUESTS", "ALLOWED_NOTIFICATIONS", "WRITE_METHODS", "READ_ONLY",
            "IDLE_S", "MAX_CRASHES", "CRASH_WINDOW_S", "MethodRefused", "ServerGone",
-           "ServerError", "Server", "Host", "languages", "language_of", "language_id",
+           "ServerError", "ServerSilent", "Server", "Host", "languages", "language_of", "language_id",
            "find_binary", "find_server", "path_dirs", "which_in", "will_run", "to_uri", "from_uri",
            "utf16_col", "char_col", "location", "hover_text", "symbols_flat", "diagnostics_of",
-           "source_text", "CALLS_MAX", "CALLS_ITEMS_MAX", "CALL_DIRECTIONS",
+           "source_text", "CALLS_MAX", "CALLS_ITEMS_MAX", "CALLS_SILENCE_S", "CALL_DIRECTIONS",
            "call_hierarchy_supported", "call_edges", "call_row", "CallLines"]

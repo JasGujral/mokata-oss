@@ -65,18 +65,44 @@ def _refuse_api_key() -> None:
                  "own Claude login only; unset it and re-run.")
 
 
+#: 0.0.29 D3 `LIVE-CHECK-INHERITS-HOST-SESSION-ENV`. Run from inside the Claude app's shell, the
+#: child `claude -p` inherited `ANTHROPIC_BASE_URL`, ~30 `CLAUDE_CODE_*` (host session id, OAuth
+#: scopes, child-session marker) and `CLAUDECODE`, and graded a session nobody runs. The child gets
+#: what a plain terminal has: an ALLOWLIST (a denylist of host names is a guess about future names).
+#: Auth is the user's own login under `~/.claude` / the keychain, which `HOME` reaches.
+CHILD_ENV_NAMES = frozenset((
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM", "LANG", "TMPDIR", "TZ",
+    # Windows: a process cannot start without some of these; names are case-insensitive there.
+    "SYSTEMROOT", "COMSPEC", "PATHEXT", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP",
+    "HOMEDRIVE", "HOMEPATH",
+    # What a plain-terminal user may rely on to reach the network at all.
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY",
+))
+CHILD_ENV_PREFIXES = ("LC_", "XDG_")
+
+
+def child_env(environ=None) -> dict:
+    """The environment a child of this check gets: only the plain-terminal ALLOWLIST of
+    `environ` (default `os.environ`). Every `ANTHROPIC_*`, `CLAUDE*`, `GIT_*` and every name not
+    listed is dropped. Pure."""
+    env = os.environ if environ is None else environ
+    return {k: v for k, v in env.items()
+            if k.upper() in CHILD_ENV_NAMES or k.upper().startswith(CHILD_ENV_PREFIXES)}
+
+
 def _fixture(src: str, init: bool) -> str:
     d = tempfile.mkdtemp(prefix="mokata-live-" + ("init-" if init else "bare-"))
     for rel, text in FIXTURE_FILES.items():
         os.makedirs(os.path.join(d, os.path.dirname(rel)), exist_ok=True)
         with open(os.path.join(d, rel), "w", encoding="utf-8", newline="\n") as fh:
             fh.write(text)
-    subprocess.run(["git", "init", "-q", d], check=True, stdin=subprocess.DEVNULL)
+    subprocess.run(["git", "init", "-q", d], check=True, stdin=subprocess.DEVNULL, env=child_env())
     if init:
         code = ("import sys; sys.path.insert(0, sys.argv[1]); from mokata.init import init_repo; "
                 "init_repo(root=sys.argv[2], profile='standard', assume_yes=True, "
                 "out=lambda *a: None)")
-        subprocess.run([sys.executable, "-c", code, src, d], check=True, stdin=subprocess.DEVNULL)
+        subprocess.run([sys.executable, "-c", code, src, d], check=True, stdin=subprocess.DEVNULL,
+                       env=child_env())
     return d
 
 
@@ -162,7 +188,8 @@ def _run(claude: str, model: Optional[str], repo: str, cfg: str, prompt: str,
         argv += ["--model", model]
     try:
         proc = subprocess.run(argv, cwd=repo, capture_output=True, text=True, encoding="utf-8",
-                              errors="replace", stdin=subprocess.DEVNULL, timeout=timeout)
+                              errors="replace", stdin=subprocess.DEVNULL, timeout=timeout,
+                              env=child_env())
     except subprocess.TimeoutExpired as exc:
         out = exc.stdout or ""
         out = out.decode("utf-8", "replace") if isinstance(out, bytes) else out

@@ -54,7 +54,7 @@ mutant "M02 a startup child before the park" $S \
   "    # 0.0.28 I1 — FIRST: the protocol input leaves fd 0 before anything else can spawn a child.${NL}    rpc_in = _park_stdin()" \
   "    _register_this_window(\".\")${NL}    rpc_in = _park_stdin()" "test_i1_mcp_transport.py"
 mutant "M03 drop errors=replace on the protocol input" $S \
-  "encoding=\"utf-8\",${NL}                                             errors=\"replace\"))" "encoding=\"utf-8\"))" "test_i1_mcp_transport.py"
+  "encoding=\"utf-8\", errors=\"replace\"))" "encoding=\"utf-8\"))" "test_i1_mcp_transport.py"
 mutant "M04 tools back on the default limiter" $S \
   "abandon_on_cancel=True, limiter=_tool_limiter())" "abandon_on_cancel=True)" "test_i1_mcp_transport.py"
 mutant "M05 a finite tool limiter (64)" $S \

@@ -21,7 +21,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 from ..quiet_spawn import detached
 from .server import TOKEN_HEADER, read_record
@@ -58,8 +58,14 @@ def _call(port: int, token: str, path: str, body: Optional[dict] = None,
 
 
 def running(root: str) -> Optional[dict]:
-    """The live server's record, or None (a stale record from a crashed server reads as None)."""
-    rec = read_record(root)
+    """The live server's record, or None (a stale record from a crashed server reads as None). A
+    REFUSED record (0.0.29 H4) reads as None here — this is a pure reader (links, status); a caller
+    that would START a server over it (`open_or_focus`) asks `read_record` itself and says so."""
+    from ..errors import RecordRefused
+    try:
+        rec = read_record(root)
+    except RecordRefused:
+        return None
     if not rec:
         return None
     pong = _call(int(rec.get("port") or 0), str(rec.get("token") or ""), "/api/ping")
@@ -97,6 +103,7 @@ def open_or_focus(root: str, session: Optional[str] = None, demo: bool = False,
     # `fcntl.flock` on POSIX, `msvcrt.locking` on Windows, released if the holder dies, and a
     # BOUNDED wait (a stuck launcher is named, never waited on forever).
     with file_lock(lock, timeout=START_TIMEOUT + LOCK_SLACK):
+        read_record(root)        # 0.0.29 H4: a REFUSED record raises `RecordRefused` — never started over
         return _open_or_focus(root, session, demo, browser, idle_secs, terminal, target, screen)
 
 
@@ -118,7 +125,7 @@ def _open_or_focus(root: str, session: Optional[str], demo: bool, browser: bool,
     if old_pid:
         # ONE server per repo: the running one is the other mode (demo vs real) — stop it, so the
         # link printed below can only ever be the new server's, never the old one's.
-        _stop(old_pid, root)
+        _stop(old_pid, root, port=int(rec.get("port") or 0))
     # 0.0.26 L8 — the server child runs THIS interpreter; if it lacks the web stack the child dies
     # silently and the caller waited START_TIMEOUT for nothing. Say it now, as the ImportError every
     # caller already turns into its install line (the plugin route's hook names its launcher).
@@ -166,24 +173,149 @@ def _pinged_pid(rec: dict) -> int:
         return 0
 
 
-def _stop(pid: int, root: str, wait: float = 3.0) -> None:
-    """Stop the server we pinged, then wait until it stops ANSWERING.
+STOP_WAIT = 3.0
+
+
+def _stop(pid: int, root: str, wait: float = STOP_WAIT, *, port: int = 0,
+          ping: Optional[Callable[[], bool]] = None) -> str:
+    """Stop the server we pinged, then wait until it stops ANSWERING. Returns what happened:
+    `"stopped"`, `"still-running"` (signalled, still answering after `wait`), or `"not-signalled"`
+    (the pid could not be proven to be the listener, or the signal was refused / failed).
 
     0.0.23 C4: the wait used to poll `os.kill(pid, 0)`. On Windows that call is not a probe — any
     signal other than CTRL_C/CTRL_BREAK is `TerminateProcess` — and on POSIX a recycled pid
-    answers it too. The server's own ping is the liveness signal on every OS."""
+    answers it too. The server's own ping is the liveness signal on every OS.
+
+    0.0.29 H4: `pid` came from a ping, and whatever listens on the port answers a ping — so before
+    any signal the OS must say that `pid` IS the process listening on 127.0.0.1:`port`
+    (`listener_owned`); unknown or no → nothing is signalled. `ping` is the liveness check the wait
+    polls: `running(root)` for a launcher (the default), the record-free ping for `doctor --fix`."""
     import signal
     from ..quiet_spawn import signal_pid
+    alive = ping if ping is not None else (lambda: running(root) is not None)
+    if not port or listener_owned(pid, port) is not True:
+        return "not-signalled"
     try:
         if not signal_pid(pid, signal.SIGTERM):   # POSIX: SIGTERM · Windows: TerminateProcess
-            return                                # 0, 1, our own pid: never a target
+            return "not-signalled"                # 0, 1, our own pid: never a target
     except OSError:
-        return
+        return "not-signalled"
     deadline = time.time() + wait
     while time.time() < deadline:
-        if running(root) is None:
-            return
+        if not alive():
+            return "stopped"
         time.sleep(0.05)
+    return "stopped" if not alive() else "still-running"
+
+
+# ------------------------------------------------------------------ who listens on a port (H4)
+
+def listener_owned(pid: int, port: int) -> Optional[bool]:
+    """Does process `pid` hold the LISTENING socket on 127.0.0.1:`port`? True / False, or None when
+    this OS cannot say (a missing tool, an unreadable table): a caller then signals nothing.
+
+    A ping is answered by whatever listens on the port, so a record someone else wrote can point at
+    a listener of theirs that answers with ANY pid; only the OS's own socket table ties the pid to the
+    port. Linux: `/proc/net/tcp{,6}` (the socket inode) and `/proc/<pid>/fd`. macOS: `lsof` for that
+    pid and port, through the process door. Windows: `GetExtendedTcpTable` (the owning pid)."""
+    try:
+        pid, port = int(pid), int(port)
+    except (TypeError, ValueError):
+        return None
+    if pid <= 1 or not 0 < port < 65536:
+        return False
+    if os.name == "nt":
+        return _nt_listener_owned(pid, port)
+    if sys.platform.startswith("linux"):
+        return _proc_listener_owned(pid, port)
+    if sys.platform == "darwin":
+        return _lsof_listener_owned(pid, port)
+    return None
+
+
+def _proc_listener_owned(pid: int, port: int) -> Optional[bool]:
+    inodes = set()
+    want = "%04X" % port
+    for table in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            with open(table, encoding="ascii") as fh:
+                next(fh, None)
+                for line in fh:
+                    f = line.split()
+                    if len(f) > 9 and f[3] == "0A" and f[1].rsplit(":", 1)[-1] == want:
+                        inodes.add(f[9])
+        except OSError:
+            continue
+    if not inodes:
+        return False
+    fd_dir = f"/proc/{pid}/fd"
+    try:
+        names = os.listdir(fd_dir)
+    except OSError:
+        return None
+    links = set()
+    for n in names:
+        try:
+            links.add(os.readlink(os.path.join(fd_dir, n)))
+        except OSError:
+            continue
+    return any(f"socket:[{i}]" in links for i in inodes)
+
+
+LSOF = "/usr/sbin/lsof"
+LSOF_TIMEOUT = 60.0      # a local table read; generous — a slow machine is not a refusal
+
+
+def _lsof_listener_owned(pid: int, port: int) -> Optional[bool]:
+    import subprocess
+    from .. import quiet_spawn
+    if not os.path.isfile(LSOF):
+        return None
+    argv = [LSOF, "-nP", "-a", "-p", str(pid), f"-iTCP:{port}", "-sTCP:LISTEN", "-t"]
+    try:
+        rc, out, _err = quiet_spawn.run_jobbed(argv, timeout=LSOF_TIMEOUT)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if rc not in (0, 1):
+        return None
+    return str(pid) in out.split()
+
+
+def _nt_listener_owned(pid: int, port: int) -> Optional[bool]:
+    import ctypes
+    from ctypes import wintypes
+    try:
+        iphlp = ctypes.WinDLL("iphlpapi.dll")
+    except OSError:
+        return None
+    fn = iphlp.GetExtendedTcpTable
+    fn.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD), wintypes.BOOL, wintypes.ULONG,
+                   ctypes.c_int, wintypes.ULONG]
+    fn.restype = wintypes.DWORD
+    af_inet, listener_table = 2, 3                 # AF_INET, TCP_TABLE_OWNER_PID_LISTENER
+    size = wintypes.DWORD(0)
+    fn(None, ctypes.byref(size), False, af_inet, listener_table, 0)
+    for _ in range(4):                            # the table can grow between the two calls
+        buf = ctypes.create_string_buffer(size.value or 4)
+        rc = fn(buf, ctypes.byref(size), False, af_inet, listener_table, 0)
+        if rc == 0:
+            break
+        if rc != 122:                             # ERROR_INSUFFICIENT_BUFFER
+            return None
+    else:
+        return None
+    import struct
+    (count,) = struct.unpack_from("<I", buf.raw, 0)
+    for i in range(count):                        # MIB_TCPROW_OWNER_PID: six DWORDs
+        state, laddr, lport, _raddr, _rport, owner = struct.unpack_from("<6I", buf.raw, 4 + 24 * i)
+        if socket_port(lport) == port and owner == pid and laddr in (0, 0x0100007F):
+            return True
+    return False
+
+
+def socket_port(dword: int) -> int:
+    """A `MIB_TCPROW` port: network byte order in the low 16 bits."""
+    return ((dword & 0xFF) << 8) | ((dword >> 8) & 0xFF)
 
 
 def headless(environ: Optional[dict] = None, platform: Optional[str] = None) -> bool:

@@ -56,6 +56,14 @@ class TestSecretGuardHook(unittest.TestCase):
                    '"content":"token AKIAIOSFODNN7EXAMPLE here"}}')
         self.assertEqual(self._run_stdin(payload), 2)
 
+    def test_a_project_stem_in_a_bash_command_passes(self):
+        # 0.0.29 H1: a lane-tagged stem written bare in a command is not a secret.
+        stem = "-".join(("0027", "W5", "lsp", "bin", "pick"))
+        payload = ('{' + self._ENVELOPE_META +
+                   ',"tool_name":"Bash","tool_input":{"command":'
+                   '"cat docs/' + stem + '.md"}}')
+        self.assertEqual(self._run_stdin(payload), 0)
+
     def test_raw_non_envelope_stdin_still_scanned(self):
         # backward-compat: non-JSON stdin is scanned as raw text.
         self.assertEqual(self._run_stdin("here is AKIAIOSFODNN7EXAMPLE raw"), 2)

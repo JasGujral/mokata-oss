@@ -129,5 +129,63 @@ class MainRefusesToGradeNothing(unittest.TestCase):
         self.assertIs(shutil.which, real, "a leaked which() poisons every later test in the process")
 
 
+class TheChildSeesAPlainTerminal(unittest.TestCase):
+    """0.0.29 D3 `LIVE-CHECK-INHERITS-HOST-SESSION-ENV`: run from inside the Claude app's shell, the
+    child `claude -p` must see what a plain terminal has — an ALLOWLIST, so a name the host invents
+    next year is dropped without a code change. FIRING CONTROL: the allowlist turned into a
+    denylist of `CLAUDE_CODE_*` (the planted future name and `CLAUDECODE` survive)."""
+
+    #: The app shell's variable set, transcribed by NAME (values are placeholders).
+    APP = ("ANTHROPIC_BASE_URL", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT",
+           "CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH", "CLAUDE_CODE_OAUTH_SCOPES",
+           "CLAUDE_CODE_HOST_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_AGENT_SDK_VERSION",
+           "GIT_CONFIG_PARAMETERS", "GIT_EDITOR", "PYTHONDONTWRITEBYTECODE", "NODE_OPTIONS",
+           "__CFBundleIdentifier", "VIRTUAL_ENV", "OTEL_EXPORTER_OTLP_ENDPOINT")
+    PLAIN = ("PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM", "LANG", "LC_ALL", "LC_CTYPE",
+             "TMPDIR", "TZ", "XDG_CONFIG_HOME", "SSL_CERT_FILE", "HTTPS_PROXY", "NO_PROXY")
+    WINDOWS = ("SystemRoot", "ComSpec", "PATHEXT", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+               "TEMP", "TMP", "HOMEDRIVE", "HOMEPATH")
+
+    def test_only_the_allowlist_survives_the_app_shell(self):
+        mod = _load()
+        env = {name: "v" for name in self.APP + self.PLAIN + self.WINDOWS}
+        env["CLAUDE_CODE_FUTURE"] = "a name nobody has invented yet"
+        got = mod.child_env(env)
+        self.assertEqual(sorted(got), sorted(self.PLAIN + self.WINDOWS))
+        for gone in ("ANTHROPIC_BASE_URL", "CLAUDECODE", "CLAUDE_CODE_FUTURE",
+                     "GIT_CONFIG_PARAMETERS", "CLAUDE_CODE_HOST_SESSION_ID"):
+            self.assertNotIn(gone, got)
+
+    def test_values_pass_through_untouched_and_the_default_is_os_environ(self):
+        mod = _load()
+        with mock.patch.dict(os.environ, {"HOME": "/h/x", "USERPROFILE": "/h/x", "CLAUDECODE": "1"}):
+            got = mod.child_env()
+        self.assertEqual(got["HOME"], "/h/x")
+        self.assertNotIn("CLAUDECODE", got)
+
+    def test_every_child_the_check_starts_gets_the_plain_env(self):
+        """`_run` (claude -p) and `_fixture` (git init, python -c init_repo) — no inherited env."""
+        mod = _load()
+        seen = []
+
+        class _P:
+            stdout = ""
+
+        def fake_run(argv, **kw):
+            seen.append((argv[0], kw.get("env")))
+            return _P()
+        with mock.patch.dict(os.environ, {"CLAUDECODE": "1", "ANTHROPIC_BASE_URL": "http://x"}), \
+                mock.patch.object(mod.subprocess, "run", fake_run):
+            mod._run("claude", None, tempfile.gettempdir(), "cfg.json", "p", 5.0)
+            d = mod._fixture(os.path.join(os.path.dirname(_PATH), "..", "src"), True)
+        self.addCleanup(shutil.rmtree, d, True)
+        self.assertEqual([a for a, _e in seen], ["claude", "git", sys.executable])
+        for argv0, env in seen:
+            with self.subTest(argv0):
+                self.assertIsNotNone(env, f"{argv0} inherited the whole host environment")
+                self.assertNotIn("CLAUDECODE", env)
+                self.assertNotIn("ANTHROPIC_BASE_URL", env)
+
+
 if __name__ == "__main__":
     unittest.main()

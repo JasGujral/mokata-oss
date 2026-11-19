@@ -41,15 +41,27 @@ def _route(plugin: bool, home=None):
     return mock.patch.dict(os.environ, env, clear=True)
 
 
-def _install(base, bare):
+def _install(base, bare, mark=True):
+    """What `mokata setup` writes: a command file whose frontmatter description carries mokata's
+    mark. `mark=False` is ANOTHER tool's same-named file (0.0.29 C1, SLASH-COMMAND-FOREIGN-FILE)."""
     d = os.path.join(base, ".claude", "commands")
     os.makedirs(d, exist_ok=True)
+    desc = "mokata · " + bare if mark else "another tool's " + bare
     with open(os.path.join(d, bare + ".md"), "w", encoding="utf-8") as fh:
-        fh.write("x\n")
+        fh.write(f"---\ndescription: {desc}\n---\nx\n")
 
 
 class TheExplainCommandMatchesWhatIsInstalled(unittest.TestCase):
     """Four route states x (what the user is told, what the IDE types, what a live session is told)."""
+
+    def test_a_foreign_file_of_the_same_name_is_not_mokata_s(self):
+        """0.0.29 C1 — another tool's `explain.md` never makes mokata say `/explain`."""
+        from mokata.plugin_runtime import slash_command
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as home:
+            _install(d, "explain", mark=False)
+            self.assertEqual("/mokata:explain", slash_command("explain", d, {}, home))
+            _install(d, "explain")
+            self.assertEqual("/explain", slash_command("explain", d, {}, home))
 
     @classmethod
     def setUpClass(cls):

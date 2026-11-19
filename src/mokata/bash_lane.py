@@ -407,19 +407,13 @@ def own_record_hits(root: str, cwd: str, guarded: str, targets: List[str], comma
     `guarded` (or an ancestor of it inside the repo, like `.mokata/`). "" when nothing does.
 
     Literal paths are resolved (realpath, so `./`, `..` and symlinks land where they really
-    point), globs are expanded, and the comparison ignores case (macOS volumes do). A command
+    point), globs are expanded, and inside is the REFUSE question (`fs_identity.refuse_if_inside`:
+    the disk's identity OR any fold-equal spelling, 0.0.29 H3). A command
     that NAMES the state directory in a shape no path can be read from (`$S/…`, a glob, a brace
     list) and writes anything at all is refused on that alone."""
     import glob as _glob
-    from .repo_paths import escapes_root, name_of
+    from .fs_identity import refuse_if_inside
     g = os.path.realpath(guarded)
-
-    def _inside(path: str, base: str) -> bool:
-        try:
-            name = name_of(path.lower(), base.lower())
-        except ValueError:
-            return False
-        return name == "." or not escapes_root(name)
 
     def _expand(t: str) -> List[str]:
         p = t if os.path.isabs(os.path.expanduser(t)) else os.path.join(cwd, t)
@@ -429,7 +423,7 @@ def own_record_hits(root: str, cwd: str, guarded: str, targets: List[str], comma
 
     for t in targets:
         for ab in _expand(t):
-            if _inside(ab, g):
+            if refuse_if_inside(ab, g):          # REFUSE side: identity OR fold (0.0.29 H3)
                 return f"`{t}` writes inside it"
     if not command:
         return ""
@@ -449,7 +443,7 @@ def own_record_hits(root: str, cwd: str, guarded: str, targets: List[str], comma
             continue
         for o in operands:
             for ab in _expand(o):
-                if _inside(ab, g) or _inside(g, ab):
+                if refuse_if_inside(ab, g) or refuse_if_inside(g, ab):
                     return f"`{verb} {o}` removes or moves it"
     has_write = bool(targets) or bool(bash and (bash.unreadable or bash.mutates))
     if has_write and _OWN_RECORD_TEXT.search(command):

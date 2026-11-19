@@ -1,0 +1,126 @@
+name: real-lsp (weekly)
+
+# 0.0.29 A `LSP-CALLS-UNRUN-CELLS` + `WIN-LSP-GLOBAL-STORE-UNPROVEN` (ruling A-Q2: a new weekly 3-OS
+# workflow, never blocking). The call hierarchy's unit suite runs on a fake language server; three
+# cells need the real world and had never run on any runner:
+#
+#   * RealServerSmoke — a REAL pyright answers callers AND callees of a three-function repo;
+#   * BigRepoFallback — a GENERATED 68,000-file / ~2M-line tree (graph callers and callees stay jobs
+#     with progress and finish; ONE index build) and a 1,000,000-function file (a language server's
+#     answer arrives before the code graph's first index). Generated, so nothing outside the repo is
+#     read — the old kit tree under /private/tmp was eaten by macOS tmp_cleaner;
+#   * RealGlobalStore (macOS + Windows) — a REAL `pnpm add -g` and a REAL `yarn global add` (v1) of
+#     typescript-language-server, each found by `find_server` inside that global store.
+#
+# Never a PR gate: weekly + by hand. The network is used by the installers only; no API key.
+# Every npm package is pinned to an exact version (the pinned-dependencies property).
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "37 4 * * 4"
+
+permissions:
+  contents: read
+
+jobs:
+  real-lsp:
+    name: real language servers · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    # MEASURED, NOT YET GREEN: four probe runs (0.0.29 A, mirror probe/0029-A) x 3 OSes ran to
+    # completion; the worst job measured 911 s (Windows), which includes RealServerSmoke's 600 s
+    # wait on a pyright that never answered (H-A1) -> ci_ceiling derives 23 min. Kept at the
+    # pre-run derivation (68k-file cold index ~4 min x3 for Windows + 1M-function parse + installs
+    # ~16 min, x1.5, doubled for no completed run) -> **50** until a GREEN run: a working smoke
+    # changes the shape of the job, so 23 min is not yet the job this ceiling will guard.
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Start the ceiling clock
+        run: echo "MOKATA_CLOCK_T0=$(date +%s)" >> "$GITHUB_ENV"
+
+      # Not editable: an `-e` site is a Scorecard alert the pinned-dependency property counts
+      # (`test_pinned_dependency_property`); the IDE leg's `pip install .` is the precedent.
+      - name: Install mokata
+        run: pip install .
+
+      - name: Install the suite's own requirements (PyYAML — `_support` refuses without it)
+        run: pip install --require-hashes -r requirements/ci.txt
+
+      - name: Install a real pyright (pinned)
+        run: |
+          set -euo pipefail
+          npm install -g pyright@1.1.390
+          command -v pyright-langserver
+
+      # Each cell is its own verdict: a red cell never hides the next one (`success() || failure()`
+      # — the first run's red smoke step skipped every later cell, so they stayed unrun).
+      - name: "RealServerSmoke — a real pyright: callers and callees"
+        working-directory: tests
+        env:
+          MOKATA_REQUIRE_REAL_LSP: "1"   # a server not found here is a failure, never a skip
+        run: python -m unittest -v test_g_lsp_call_hierarchy.RealServerSmoke
+
+      - name: "BigRepoFallback — a generated 68k-file tree and a 1M-function file"
+        if: success() || failure()
+        working-directory: tests
+        env:
+          MOKATA_SCALE_LSP: "1"
+        run: python -m unittest -v test_g_lsp_call_hierarchy.BigRepoFallback
+
+      - name: "RealGlobalStore — pnpm add -g, pnpm 8, 9 and 10 (pinned)"
+        if: success() || failure()
+        working-directory: tests
+        run: |
+          set -euo pipefail
+          # A Windows path in bash's PATH splits at its drive colon: cygpath it (Git bash has it).
+          for v in 8.15.9 9.15.0 10.4.1; do
+            echo "::group::pnpm $v"
+            npm install -g "pnpm@$v"
+            export PNPM_HOME="$RUNNER_TEMP/pnpm-home-$v"
+            mkdir -p "$PNPM_HOME"
+            ph="$PNPM_HOME"; command -v cygpath >/dev/null && ph="$(cygpath -u "$ph")"
+            PATH="$ph:$PATH" pnpm add -g typescript-language-server@4.3.3 typescript@5.6.3
+            echo "pnpm $(PATH="$ph:$PATH" pnpm --version) · pnpm root -g: $(PATH="$ph:$PATH" pnpm root -g)"
+            # mokata DERIVES pnpm's global dir (never runs pnpm); the test checks it against pnpm's own
+            # `pnpm root -g`, and that what it would run lies inside it.
+            PATH="$ph:$PATH" MOKATA_PNPM_ROOT_G="$(PATH="$ph:$PATH" pnpm root -g)" \
+              MOKATA_GLOBAL_STORE_DIR="$PNPM_HOME" python -m unittest -v test_g_lsp_call_hierarchy.RealGlobalStore
+            # A repo `.npmrc` under a REAL `npm run` and `pnpm run` must not steer the derivation
+            # (verify-A r3 R3-2), plus the forced layout/link refusals, with this pnpm on PATH.
+            PATH="$ph:$PATH" python -m unittest -v test_g_lsp_call_hierarchy.PnpmGlobalVirtualStore
+            PATH="$ph:$PATH" pnpm remove -g typescript-language-server typescript
+            echo "::endgroup::"
+          done
+
+      - name: "RealGlobalStore — yarn global add (v1, pinned)"
+        if: success() || failure()
+        working-directory: tests
+        run: |
+          set -euo pipefail
+          npm install -g yarn@1.22.22
+          yarn global add typescript-language-server@4.3.3 typescript@5.6.3
+          yb="$(yarn global bin)"; command -v cygpath >/dev/null && yb="$(cygpath -u "$yb")"
+          echo "yarn global bin: $yb · yarn global dir: $(yarn global dir)"
+          # The shim mokata READS (never runs) on Windows, shown so a red says what it named.
+          if [ -f "$yb/typescript-language-server.cmd" ]; then cat "$yb/typescript-language-server.cmd"; fi
+          export PATH="$yb:$PATH"
+          MOKATA_GLOBAL_STORE_DIR="$(yarn global dir)/node_modules" \
+            python -m unittest -v test_g_lsp_call_hierarchy.RealGlobalStore
+
+      - name: Ceiling still clears this job (CI-CEILING)
+        if: always()
+        run: python scripts/ci_ceiling.py --since "$MOKATA_CLOCK_T0" --workflow .github/workflows/real-lsp.yml --job real-lsp

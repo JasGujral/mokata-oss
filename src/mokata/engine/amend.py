@@ -53,6 +53,7 @@ from .completeness import run_completeness_gate
 from .emit import EMIT_KIND, EMIT_TARGET, preview_content, spec_commit, spec_version
 from .spec import Spec, TestRef
 from .spec_gate import SPEC_STATE_KEY, load_emitted_spec
+from ..plugin_runtime import localize_commands
 
 # The WriteGate / trust identity of an amendment. Distinct from `spec_emit`: a team may well want to
 # let a tool emit the FIRST spec and still hold a scope CHANGE to a stricter dial (K3/SI.4).
@@ -295,8 +296,8 @@ def begin_amend(surface: Any, spec: Spec, tests: List[TestRef], *, run_id: str,
         empty = SpecDiff()
         return AmendPlan(
             False, run_id, spec, tests, empty, 0, gate="spec-persisted",
-            reason_text=("no spec is emitted for this run — there is nothing to amend. Emit one "
-                         "first (/mokata:spec)."))
+            reason_text=(localize_commands("no spec is emitted for this run — there is nothing to amend. Emit one "
+                         "first (/mokata:spec).", surface.root)))
 
     from_version = spec_version(store) or 1
     diff = diff_specs(current, spec)

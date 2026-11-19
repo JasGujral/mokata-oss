@@ -618,6 +618,19 @@ def phase_ide(res: Result, repo: str, env: Dict[str, str], runs: int, spec: Dict
             ide.stop()
 
 
+def _answers_query(url: str, post_data: Optional[str], q: str) -> bool:
+    """The ⌘P clock stops only on the server's answer to THIS query: a `/api/quickopen` response
+    whose request asked exactly `q` — never the empty palette's (recent files) answer, nor one
+    for a prefix the page asked while the query was being typed."""
+    if "/api/quickopen" not in url:
+        return False
+    try:
+        body = json.loads(post_data or "")
+    except ValueError:
+        return False
+    return isinstance(body, dict) and body.get("q") == q
+
+
 def _step(res: Result, name: str, runs: int, once: Callable[[int], Optional[float]],
           limit: float) -> None:
     xs = []
@@ -675,8 +688,8 @@ def _ide_steps(res: Result, page: Any, url: str, root: str, runs: int, spec: Dic
         page.fill("#qo-input", "")
         # the empty palette lists recent files — the target among them once opened — so the clock
         # stops only on rows painted after the server answered THIS query
-        asked = lambda r: ("/api/quickopen" in r.url and  # noqa: E731
-                           spec["fuzzy"] in (r.request.post_data or ""))
+        def asked(r: Any) -> bool:
+            return _answers_query(r.url, r.request.post_data, spec["fuzzy"])
         t0 = time.perf_counter()
         with page.expect_response(asked, timeout=wait_s * 1000):
             page.fill("#qo-input", spec["fuzzy"])

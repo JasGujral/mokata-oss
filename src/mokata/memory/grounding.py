@@ -251,16 +251,16 @@ def citations_of(item: Any, root: str = "") -> List[Citation]:
 
 
 # --------------------------------------------------------------------------- resolution
-def _inside(root: str, rel: str) -> Optional[str]:
-    """The absolute path for `rel` if it stays inside `root`, else None."""
+def _resolve_beneath(root: str, rel: str) -> Optional[str]:
+    """The absolute path for `rel` if it stays inside `root` ON DISK (ALLOW side: `require_inside`,
+    identity, 0.0.29 H3), else None."""
+    from ..fs_identity import require_inside
     try:
         base = os.path.realpath(root)
         ab = os.path.realpath(os.path.join(base, rel))
+        return ab if require_inside(ab, base) else None
     except (OSError, ValueError):
         return None
-    if ab != base and not ab.startswith(base + os.sep):
-        return None
-    return ab
 
 
 def _count_lines_upto(path: str, need: int) -> int:
@@ -279,7 +279,7 @@ def _count_lines_upto(path: str, need: int) -> int:
 
 
 def _check_path(c: Citation, root: str) -> CitationVerdict:
-    ab = _inside(root, c.target)
+    ab = _resolve_beneath(root, c.target)
     if ab is None:
         return CitationVerdict(c, False, "path escapes the repository")
     try:
@@ -464,7 +464,7 @@ def evaluate_retire_when(items: Iterable[Any], *, root: str, layer: Any = None,
                 if when is not None and ref is not None and ref >= when:
                     reason = f"the date {arg} has passed"
             elif op == RETIRE_DELETED and root:
-                ab = _inside(root, arg)
+                ab = _resolve_beneath(root, arg)
                 if ab is not None and not os.path.exists(ab):
                     reason = f"{arg} no longer exists in the repo"
             elif op == RETIRE_AFTER and root:

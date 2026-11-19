@@ -40,6 +40,7 @@ from mokata import approval
 from mokata import bootstrap as B
 from mokata import briefing_cache as BC
 from mokata import hints as H
+from mokata import session_index as SI
 from mokata.config import Surface
 from mokata.govern.resume import PipelineCheckpoint
 from mokata.init import init_repo
@@ -164,6 +165,27 @@ def _start(root, sid, source="startup"):
 
 def _expected(root, sid, now):
     return B.resume_line(H.derive(root, session=sid, now=now, rules=H.PIPELINE_ONLY))
+
+
+def _refresh_stored(root, sid, now, tries=50):
+    """`refresh_resume_hint` until what it stored is a hit for `sid` at `now`; its answer.
+
+    ONE refresh is not a promise of a store: the refresher stores only when nothing it read moved
+    while it read it, else returns and leaves "the next refresh" to store (its own docstring). On
+    windows-latest under parallel load (the jsonschema=absent shard; reproduced by the 0.0.29
+    wave-2 bookend's probe, 6 workers x 12 runs: 10 of 72 runs) a just-restored input had not
+    settled, the refresh declined, and the previous entry — keyed on the input's pre-write
+    signature — was rightly refused: a MISS, the hook derived, the line was the derivation's. The
+    product did what it says; the cell had assumed one refresh always stores. A bounded number of
+    refreshes must store (a refresher that never stores still reds, here)."""
+    from mokata import briefing_cache as BC
+    for _ in range(tries):
+        ans = B.refresh_resume_hint(root, sid, now=now)
+        entry = BC.read_resume(root)
+        if entry is not None and BC.resume_holds(entry, sid, now=now):
+            return ans
+        time.sleep(0.02)
+    raise AssertionError(f"{tries} refreshes and none stored a hit for {sid}")
 
 
 AGE = re.compile(r" \(derived [^()]* ago\)$")
@@ -413,7 +435,7 @@ class KeyIsDerived(unittest.TestCase):
         with open(anc, "w", encoding="utf-8") as fh:
             fh.write("{}")
         now = time.time()
-        inputs = B.refresh_resume_hint(w.d, SID, now=now)["basis"]["inputs"]
+        inputs = _refresh_stored(w.d, SID, now)["basis"]["inputs"]
         self.assertTrue(inputs)
         self.assertEqual((_expected(w.d, SID, now), 0), _hook_read(w.d, SID, now))
         self.assertNotIn(os.path.realpath(anc), {os.path.realpath(p) for p in inputs})
@@ -424,7 +446,7 @@ class KeyIsDerived(unittest.TestCase):
         self.assertEqual(_expected(w.d, NEW, now), _hook_read(w.d, NEW, now)[0])
         for p in inputs:
             with self.subTest(input=p):
-                B.refresh_resume_hint(w.d, SID, now=now)
+                _refresh_stored(w.d, SID, now)
                 self.assertEqual(0, _hook_read(w.d, SID, now)[1])
                 # each input is moved, judged, then PUT BACK — so the next row's answer reads
                 # what the first one did (a damaged input changes what derive goes on to read)
@@ -442,7 +464,12 @@ class KeyIsDerived(unittest.TestCase):
                 os.makedirs(os.path.dirname(p), exist_ok=True)
                 with open(p, "a", encoding="utf-8") as fh:
                     fh.write("\n")
-                self.assertEqual((_expected(w.d, SID, now), 1), _hook_read(w.d, SID, now), p)
+                # 0.0.29 F §3e.3 — the session's OWN index row is keyed by its liveness projection,
+                # not its bytes: SessionStart rewrites it on every start, and a rewrite that changes
+                # no liveness fact is a hit (the projection's own cells: test_f_resume_answer_at_start)
+                own = os.path.realpath(p) == os.path.realpath(SI.path_of(w.d, SID))
+                self.assertEqual((_expected(w.d, SID, now), 0 if own else 1),
+                                 _hook_read(w.d, SID, now), p)
                 if existed:
                     with open(p, "wb") as fh:
                         fh.write(saved)
@@ -458,7 +485,7 @@ class ValidUntil(unittest.TestCase):
         w.gate("blocked", gate="red-before-green")
         hb = os.path.getmtime(SI.path_of(w.d, SID))
         now = hb + 60
-        ans = B.refresh_resume_hint(w.d, SID, now=now)
+        ans = _refresh_stored(w.d, SID, now)
         self.assertEqual(H.R_GATE, H.primary(ans)["rule"])
         self.assertAlmostEqual(hb + H.LIVE_SECS, ans["valid_until"], places=3)
         before, after = ans["valid_until"] - 1, ans["valid_until"] + 1
@@ -476,7 +503,7 @@ class ValidUntil(unittest.TestCase):
         w.test_run(True, [T1], at=now - 200)
         vt = float(int(now - 100))
         w.verdict(True, ts=vt)
-        ans = B.refresh_resume_hint(w.d, SID, now=now)
+        ans = _refresh_stored(w.d, SID, now)
         self.assertEqual(H.C_SHIP, H.primary(ans)["rule"])
         self.assertAlmostEqual(vt + 24 * 3600.0, ans["valid_until"], places=3)
         after = ans["valid_until"] + 1

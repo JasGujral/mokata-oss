@@ -233,3 +233,73 @@ class TestCliWiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ============================================================ WIZARD-WIRES-BESIDE-PLUGIN
+class TheWizardDoesNotWireBesideTheInstalledPlugin(unittest.TestCase):
+    """With the mokata plugin recorded, wiring the project too runs every hook twice. The wizard
+    does not ask, says why once, and still honours an explicit request. FAKE home throughout: a
+    real plugin root is recorded on a developer machine, so the real home decides nothing here."""
+
+    def setUp(self):
+        from mokata import extras_install
+        p = mock.patch.object(extras_install, "offer_embeddings",
+                              return_value=extras_install.OfferResult(declined=True))
+        p.start()
+        self.addCleanup(p.stop)
+        # the host may itself be a plugin session: the route env must not decide these tests
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("CLAUDE_PLUGIN_ROOT", "MOKATA_VIA_PLUGIN")}
+        p2 = mock.patch.dict(os.environ, env, clear=True)
+        p2.start()
+        self.addCleanup(p2.stop)
+
+    def _home(self, with_plugin):
+        home = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(home, ignore_errors=True))
+        if with_plugin:
+            from mokata import plugin_cache
+            root = os.path.join(home, "plug")
+            os.makedirs(os.path.join(root, ".claude-plugin"))
+            with open(os.path.join(root, ".claude-plugin", "plugin.json"), "w",
+                      encoding="utf-8") as fh:
+                fh.write('{"name": "mokata", "mcpServers": {"mokata": {"command": "x"}}}')
+            plugin_cache.record_plugin_root(root, home=home)
+        return home
+
+    def _wizard(self, home, wire=None):
+        from mokata import onboarding
+        out, asked = [], []
+
+        def _confirm(prompt):
+            asked.append(prompt)
+            return True
+
+        with tempfile.TemporaryDirectory() as d:
+            res = onboarding.run_wizard(root=d, confirm=_confirm, out=out.append,
+                                        ask=lambda _p, _c, default: default, home=home,
+                                        profile="minimal", wire_harness=wire,
+                                        offer_embeddings=False)
+        return res, "\n".join(out), asked
+
+    def test_plugin_installed_is_not_asked_and_says_why_once(self):
+        res, out, asked = self._wizard(self._home(with_plugin=True))
+        self.assertFalse(any("Wire mokata into" in q for q in asked), asked)
+        self.assertFalse(res.harness_wired)
+        self.assertEqual(1, out.count("mokata plugin is installed"), out)
+        self.assertIn("mokata setup claude", out)
+
+    def test_an_explicit_wire_request_is_honoured_beside_the_plugin(self):
+        res, out, asked = self._wizard(self._home(with_plugin=True), wire=True)
+        self.assertNotIn("mokata plugin is installed", out)
+
+    def test_no_plugin_still_asks(self):
+        res, out, asked = self._wizard(self._home(with_plugin=False))
+        self.assertTrue(any("Wire mokata into" in q for q in asked), asked)
+        self.assertNotIn("mokata plugin is installed", out)
+
+    def test_a_detection_that_raises_still_asks(self):
+        from mokata import mcp_admin
+        with mock.patch.object(mcp_admin, "plugin_shadow", side_effect=OSError("unreadable")):
+            res, out, asked = self._wizard(self._home(with_plugin=True))
+        self.assertTrue(any("Wire mokata into" in q for q in asked), asked)

@@ -292,7 +292,9 @@ class TheAgeLimitAndTheRestoreRowSayWhatIsTrue(unittest.TestCase):
     def test_branch_protection_degraded_pass_the_cache_lives_with_the_users_caches(self):
         old = os.environ.get("XDG_CACHE_HOME")
         try:
-            os.environ["XDG_CACHE_HOME"] = "/x/y"
+            # absolute on EVERY platform: `/x/y` is drive-relative on Windows, which mokata's one
+            # cache rule ignores there (0.0.29 F, `pycache.user_cache_base`)
+            os.environ["XDG_CACHE_HOME"] = os.path.join(os.path.abspath(os.sep), "x", "y")
             self.assertEqual(os.path.normpath(default_cache_dir()).split(os.sep)[-3:],
                              ["y", "mokata", "branch-protection"])
             os.environ.pop("XDG_CACHE_HOME")

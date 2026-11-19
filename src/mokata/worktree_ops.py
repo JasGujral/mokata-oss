@@ -27,7 +27,7 @@ import re
 import time
 from typing import Any, Dict, List, Optional
 
-from .repo_identity import canonical_repo_root
+from .repo_identity import canonical_repo_root, same_entry
 from .session_worktrees import (_git, base_commit, bindings, branch_of, head_of, is_git, _gitdir_of,
                                 _session_run, NOT_GIT)
 
@@ -42,13 +42,6 @@ TOOL_DELETE = "worktree_delete"
 TOOL_CLEAN = "worktree_clean_merged"
 TOOL_SYNC = "worktree_sync"
 REBASE_TIMEOUT = 300.0
-
-
-def _real(p: str) -> str:
-    try:
-        return os.path.normcase(os.path.realpath(os.path.abspath(p)))
-    except (OSError, ValueError):
-        return os.path.normcase(os.path.abspath(p))
 
 
 def _list(main: str) -> Optional[List[Any]]:
@@ -90,12 +83,12 @@ def _last_activity(path: str, b: Optional[Dict[str, Any]]) -> float:
     return best
 
 
-def _bound(root: str) -> Dict[str, List[Dict[str, Any]]]:
-    out: Dict[str, List[Dict[str, Any]]] = {}
-    for sid, b in bindings(root).items():
-        out.setdefault(_real(str(b.get("path", ""))), []).append(b)
-    for rows in out.values():
-        rows.sort(key=lambda b: float(b.get("last_seen") or 0), reverse=True)
+def _bound(root: str, path: str) -> List[Dict[str, Any]]:
+    """The session bindings whose worktree IS `path` on disk (identity, `same_entry` — never a spelling:
+    a case-variant or symlinked spelling of one worktree is that worktree), most recent first."""
+    out = [b for b in bindings(root).values()
+           if b.get("path") and same_entry(str(b.get("path")), path)]
+    out.sort(key=lambda b: float(b.get("last_seen") or 0), reverse=True)
     return out
 
 
@@ -109,12 +102,12 @@ def rows(root: str) -> Dict[str, Any]:
                 "worktrees": []}
     into = branch_of(main)
     into_head = head_of(main)
-    by_path = _bound(root)
     deadline = time.monotonic() + DIRTY_DEADLINE_SECS
     out: List[Dict[str, Any]] = []
-    linked = [w for w in wts if _real(w.path) != _real(main)]
+    linked = [w for w in wts if not same_entry(w.path, main)]
+    managed = os.path.join(main, ".claude", "worktrees")
     for w in linked[:MAX_ROWS]:
-        bs = by_path.get(_real(w.path), [])
+        bs = _bound(root, w.path)
         b = bs[0] if bs else None
         base = str((b or {}).get("base") or "")
         if not base and w.head and os.path.isdir(w.path):
@@ -133,8 +126,7 @@ def rows(root: str) -> Dict[str, Any]:
             "session": sid, "sessions": [str(x.get("session")) for x in bs],
             "run": _session_run(root, sid) if sid else None,
             "last_activity": _last_activity(w.path, b) if os.path.isdir(w.path) else None,
-            "claude_managed": _real(os.path.dirname(w.path.rstrip("/\\"))) ==
-                              _real(os.path.join(main, ".claude", "worktrees")),
+            "claude_managed": same_entry(os.path.dirname(w.path.rstrip("/\\")), managed),
             "resume": f"claude --resume {sid}" if sid else "",
         })
     note = ""
@@ -150,9 +142,8 @@ def find(root: str, path: str) -> Optional[Dict[str, Any]]:
     """The listed linked worktree at `path` (never the main checkout), or None."""
     if not path:
         return None
-    want = _real(path)
     for r in rows(root).get("worktrees", []):
-        if _real(r["path"]) == want:
+        if same_entry(r["path"], path):
             return r
     return None
 
@@ -306,11 +297,11 @@ def delete(root: str, approved: Dict[str, Any]) -> Dict[str, Any]:
 
 def clean(root: str, approved_paths: List[str]) -> Dict[str, Any]:
     plan = plan_clean(root)
-    allowed = {_real(p): it for p, it in zip(plan["paths"], plan["items"])}
+    allowed = list(zip(plan["paths"], plan["items"]))
     done, skipped = [], []
     main = canonical_repo_root(root)
     for p in approved_paths:
-        it = allowed.get(_real(p))
+        it = next((i for q, i in allowed if same_entry(q, p)), None)
         if it is None:
             skipped.append({"path": p, "reason": "no longer merged-and-clean"})
             continue

@@ -110,7 +110,19 @@ jobs:
     # the allowance: predicted 1570 s per shard, worst on a Windows runner 1870 s with overhead,
     # x1.5 = 47 (`shard_tests.py plan --of 4 --os Windows`). `tests/test_o6_shard_tests.py`
     # derives the same number from the record and reds if this stops clearing it or sits >5 above.
-    timeout-minutes: 47
+    #
+    # 47 -> 54 (0.0.29 wave 2, W2-final-2). Waves 1-2 added 38 modules the record did not know
+    # (costed at the median; b29 alone runs 343 s on Windows, a41 244 s, h1 164 s), and every
+    # Windows shard 2/4 went TOO-TIGHT: mirror run 43954985486 present 2571 s (1.10x), absent
+    # 2485 s (1.13x); run 43946281004 present 2/4 hit the 47 m cap. `shard_tests.py absorb` of the
+    # complete windows-latest-absent leg (run 43954985486 shards 1, 3, 4 + run 43946281004 shard 2,
+    # the same plan: no module added between them) re-balanced it to 1823 s per shard; worst on a
+    # Windows runner 2123 s with overhead, x1.5 = 54 (`shard_tests.py plan --of 4 --os Windows`).
+    # 54 -> 61: that plan's first fully green matrix (run 43963005956, every leg CLEARS, Windows
+    # 1687-2408 s) was then absorbed whole (windows-latest-absent 1..4 of ONE run). Its runners
+    # were slower (leg 8400 s vs 7234 s): 2100 s per shard, worst on a Windows runner 2400 s,
+    # x1.5 = 61.
+    timeout-minutes: 61
     # Every `run:` step uses bash on both OSes — windows-latest defaults to pwsh, which would
     # break the `mktemp -d` / `|| true` POSIX steps. windows-latest ships Git Bash.
     defaults:
@@ -333,11 +345,14 @@ jobs:
     permissions:
       contents: read
     # CEILING = a RUNNER measurement x 1.5, rounded up (scripts/ci_ceiling.py `derive_minutes`), never a
-    # laptop time: mirror run 42638305064, job 129232266078 ran 305s by the job's own clock on
-    # ubuntu-24.04 (install + browser + the whole suite, 275 flows after 0.0.28 D; the slowest of three
-    # green runs) -> ceil(305 x 1.5 / 60) = 8. The job's last step re-grades it (exit 1 when under
-    # 1.2x) so suite growth reds a PR, not a cut.
-    timeout-minutes: 8
+    # laptop time: mirror run 43911410521, job 133453986142 ran 464s by the job's own clock on
+    # ubuntu-24.04 (install + browser + the whole suite, 332 flows at 0.0.29 E2; every flow green) ->
+    # ceil(464 x 1.5 / 60) = 12. Re-derived at 0.0.29 E2 because the work grew: 275 -> 332 flows, and
+    # lane E's focus audit (8 screens x 4 themes, computed style + pixel probe) is ~70s of real
+    # grading here once E2 removed its waste (whole-screen retries, shots thrown away for a red: it was
+    # >180s and cancelled this job on mirror runs 43869782006 / 43883056679 / 43896526038). The job's
+    # last step re-grades it (exit 1 when under 1.2x) so suite growth reds a PR, not a cut.
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -358,11 +373,23 @@ jobs:
       - name: IDE end-to-end in a real browser
         env:
           MOKATA_REQUIRE_E2E: '1'
+          MOKATA_E2E_EVIDENCE_DIR: ${{ runner.temp }}/e2e-evidence
         # Run as a SCRIPT, not `unittest discover`: it is not part of the suite the release
         # preflight mirrors (`tests/_preflight_parity.py` reads every `discover -s tests…` as that
         # suite) and it never imports `tests/_support.py`, so it needs no PyYAML. It exits 2 when
         # it finds no flow — a runner that ran nothing never reads green.
         run: python tests/e2e_ide/run_e2e.py -v
+      - name: Keep a red flow's evidence (E2E-RACES-UNNAMED, 0.0.29 D6)
+        # The harness writes a failing step's Playwright trace, screenshot, console + request log
+        # and the server's output under MOKATA_E2E_EVIDENCE_DIR; only a red run uploads it, so the
+        # NEXT once-only red names itself instead of being re-run blind. 7 days, like ci-clock.
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-evidence-chromium
+          path: ${{ runner.temp }}/e2e-evidence/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: This job's ceiling still clears this leg (CI-CEILING)
         run: python scripts/ci_ceiling.py --since "$MOKATA_CLOCK_T0" --workflow .github/workflows/ci.yml --job ide-e2e
 
@@ -380,11 +407,13 @@ jobs:
     permissions:
       contents: read
     # CEILING = a RUNNER measurement x 1.5, rounded up (scripts/ci_ceiling.py `derive_minutes`), never a
-    # laptop time: mirror run 42638304994, job 129232265659 ran 397s by the job's own clock on
-    # ubuntu-24.04 (install + browser + the whole suite, 275 flows; the slowest of three GREEN runs
-    # after 0.0.28 D closed the full-suite reds) -> ceil(397 x 1.5 / 60) = 10. The job's last step
-    # re-grades it (exit 1 when under 1.2x) so suite growth reds a PR, not a cut.
-    timeout-minutes: 10
+    # laptop time: mirror run 43911410521, job 133453987055 ran 594s by the job's own clock on
+    # ubuntu-24.04 (install + browser + the whole suite, 332 flows at 0.0.29 E2; every flow green) ->
+    # ceil(594 x 1.5 / 60) = 15. Re-derived at 0.0.29 E2 for the same grown work as the Chromium
+    # leg (275 -> 332 flows; the focus audit is ~110s of real grading in Firefox after E2, >165s
+    # before). The job's last step re-grades it (exit 1 when under 1.2x) so suite growth reds a PR,
+    # not a cut.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -405,11 +434,23 @@ jobs:
         env:
           MOKATA_REQUIRE_E2E: '1'
           MOKATA_E2E_BROWSER: firefox
+          MOKATA_E2E_EVIDENCE_DIR: ${{ runner.temp }}/e2e-evidence
         # Run as a SCRIPT, not `unittest discover`: it is not part of the suite the release
         # preflight mirrors (`tests/_preflight_parity.py` reads every `discover -s tests…` as that
         # suite) and it never imports `tests/_support.py`, so it needs no PyYAML. It exits 2 when
         # it finds no flow — a runner that ran nothing never reads green.
         run: python tests/e2e_ide/run_e2e.py -v
+      - name: Keep a red flow's evidence (E2E-RACES-UNNAMED, 0.0.29 D6)
+        # The harness writes a failing step's Playwright trace, screenshot, console + request log
+        # and the server's output under MOKATA_E2E_EVIDENCE_DIR; only a red run uploads it, so the
+        # NEXT once-only red names itself instead of being re-run blind. 7 days, like ci-clock.
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-evidence-firefox
+          path: ${{ runner.temp }}/e2e-evidence/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: This job's ceiling still clears this leg (CI-CEILING)
         run: python scripts/ci_ceiling.py --since "$MOKATA_CLOCK_T0" --workflow .github/workflows/ci.yml --job ide-e2e-firefox
 

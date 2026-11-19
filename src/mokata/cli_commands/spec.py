@@ -18,6 +18,7 @@ import json
 import sys
 
 from ._common import AuditLedger, _load_surface
+from ..plugin_runtime import localize_commands
 
 
 def _read_payload(args: argparse.Namespace) -> dict:
@@ -111,11 +112,11 @@ def _run_scoped_store(surface, run_id: "str | None" = None):
     run = resolve_run(surface.root, run_id=run_id)
     if run.ambiguous:
         return None, None, (
-            f"{len(run.candidates)} mokata runs have state in this repo and none is pinned, so "
+            localize_commands(f"{len(run.candidates)} mokata runs have state in this repo and none is pinned, so "
             f"mokata cannot tell which run this spec belongs to and will not guess (emitting it "
             f"onto the wrong run would leave the right one still blocked).\n"
             f"       Pin the run with MOKATA_SESSION_ID, or emit through the harness "
-            f"(/mokata:spec), which always knows its own run.")
+            f"(/mokata:spec), which always knows its own run.", surface.root))
     if run.run_id is None:
         # No run has pipeline state — a standalone spec (no brainstorm ran). This shell's own
         # session IS the run; `surface.state` is already scoped to it.
@@ -167,8 +168,8 @@ def _await_a_human(surface, spec, store, run_id: "str | None", emit_args: dict,
               "is not a TTY).")
         print("  There is no tracked pipeline run here to attach a proposal to, so there would be "
               "nothing for `mokata approve` to redeem.")
-        print("  Emit through the harness (/mokata:spec), pin the run with MOKATA_SESSION_ID, or "
-              "pass --yes if this is your own non-interactive flow.")
+        print(localize_commands("  Emit through the harness (/mokata:spec), pin the run with MOKATA_SESSION_ID, or "
+              "pass --yes if this is your own non-interactive flow.", surface.root))
         return 1
 
     p = approval.propose(
@@ -384,7 +385,7 @@ def cmd_spec_emit(args: argparse.Namespace) -> int:
           f"({out.corpus_size} spec(s)).")
     if committed:
         print(f"  committed copy: {committed} — commit it with your change so CI checks it.")
-    print("  implementation is unblocked once a failing test is on record (/mokata:test).")
+    print(localize_commands("  implementation is unblocked once a failing test is on record (/mokata:test).", surface.root))
     return 0
 
 
@@ -409,7 +410,7 @@ def cmd_spec_show(args: argparse.Namespace) -> int:
     # spec to — the conversational-brainstorm repro) from "a run is tracked but no spec is emitted
     # yet". The first names how to START/attach a tracked run; the second, how to emit.
     if run_id is None:
-        print(NO_TRACKED_RUN_RECOVERY)
+        print(localize_commands(NO_TRACKED_RUN_RECOVERY, surface.root))
         return 0
     # SPEC-HISTORY (0.0.23 D6) — `--versions` lists the run's spec history; `--version N` reads a
     # superseded spec back from its archive. Same reader as the MCP `spec_show` (engine/spec_history).
@@ -417,7 +418,7 @@ def cmd_spec_show(args: argparse.Namespace) -> int:
     if getattr(args, "versions", False):
         rows = SH.spec_versions(store, run_id)
         if not rows:
-            print(NO_SPEC_RECOVERY)
+            print(localize_commands(NO_SPEC_RECOVERY, surface.root))
             return 0
         print(f"spec history (run {run_id[:8]}):")
         for line in SH.render_versions(rows):
@@ -439,7 +440,7 @@ def cmd_spec_show(args: argparse.Namespace) -> int:
     else:
         spec = load_emitted_spec(store)
     if spec is None:
-        print(NO_SPEC_RECOVERY)
+        print(localize_commands(NO_SPEC_RECOVERY, surface.root))
         return 0
     print(f"spec: {spec.title}")
     print(_version_line(version, SH.current_version(store)))
@@ -513,11 +514,11 @@ def cmd_spec_task(args: argparse.Namespace) -> int:
         print(f"error: {err}", file=sys.stderr)
         return 1
     if run_id is None:
-        print(NO_TRACKED_RUN_RECOVERY)
+        print(localize_commands(NO_TRACKED_RUN_RECOVERY, surface.root))
         return 1
     data = store.read(SPEC_STATE_KEY)
     if not isinstance(data, dict):
-        print(NO_SPEC_RECOVERY)
+        print(localize_commands(NO_SPEC_RECOVERY, surface.root))
         return 1
     attestation = attest(data)
     if not attestation.ok:
@@ -733,9 +734,9 @@ def cmd_spec_amend(args: argparse.Namespace) -> int:
     print(f"spec amended to v{outcome.version} — v{plan.from_version} superseded (kept), the diff "
           f"is on the audit ledger.")
     if outcome.red_owed:
-        print(f"  develop resumes, but implementation of the new criteria is BLOCKED until "
+        print(localize_commands(f"  develop resumes, but implementation of the new criteria is BLOCKED until "
               f"{', '.join(outcome.red_owed)} "
-              f"{'is' if len(outcome.red_owed) == 1 else 'are'} RED (/mokata:test).")
+              f"{'is' if len(outcome.red_owed) == 1 else 'are'} RED (/mokata:test).", surface.root))
     else:
         print("  develop resumes from the last passed gate.")
     return 0

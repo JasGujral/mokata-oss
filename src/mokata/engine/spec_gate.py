@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from ..plugin_runtime import localize_commands
 from .spec import Spec
 
 # The StateStore key the `emit` phase writes the spec under (see engine/phases.py).
@@ -98,10 +99,10 @@ def check_spec_persisted(store: Any, ledger: Any = None,
     ac_count = len(spec.criteria) if spec is not None else 0
 
     if malformed:
-        passed, reason = False, SPEC_MALFORMED_MESSAGE
+        passed, reason = False, localize_commands(SPEC_MALFORMED_MESSAGE)
     elif spec is None or ac_count < 1:
         # absent, empty, or AC-less spec — all block with the same actionable message
-        passed, reason = False, SPEC_PERSISTED_MESSAGE
+        passed, reason = False, localize_commands(SPEC_PERSISTED_MESSAGE)
     else:
         passed = True
         reason = (f"emitted spec present with {ac_count} acceptance "

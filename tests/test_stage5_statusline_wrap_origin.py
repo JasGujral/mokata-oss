@@ -176,7 +176,10 @@ class TestNosecJustificationIsDerivable(unittest.TestCase):
                 sites.append((path.name, fn))
         self.assertEqual(
             sorted(sites),
-            [("harness_setup.py", "_statusline_command"),      # writes it
+            [("doctor.py", "_wrapped_statusline"),        # parses it, RUNS nothing (0.0.29 D16;
+                                                            # pinned in test_b29's
+                                                            # RefusedLinesAreNeverSilent)
+             ("harness_setup.py", "_statusline_command"),      # writes it
              ("hook_cli.py", "statusline_main")],              # reads it
             "a second writer or reader of `--wrap` means the nosec's caller-graph claim "
             f"covers a path nobody checked: {sorted(sites)}")

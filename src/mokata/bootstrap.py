@@ -74,10 +74,12 @@ SETUP_OFFER = (
 )
 
 
-def build_setup_offer(budget: int = BOOTSTRAP_TOKEN_BUDGET) -> "BootstrapResult":
+def build_setup_offer(budget: int = BOOTSTRAP_TOKEN_BUDGET,
+                      root: "str | None" = None) -> "BootstrapResult":
     """The one-line setup offer for an uninitialized repo (Stage 23). Same shape as the
     briefing so the SessionStart hook emits it identically."""
-    text = SETUP_OFFER + "\n"
+    from .plugin_runtime import localize_commands   # lazy: the prompt hook imports this module
+    text = localize_commands(SETUP_OFFER, root) + "\n"
     return BootstrapResult(text=text, token_estimate=estimate_tokens(text), budget=budget)
 
 
@@ -438,18 +440,26 @@ def refresh_resume_hint(root: str, session: str, now: "float | None" = None) -> 
     except OSError:
         pass
 
+    import time as _t
+    now = _t.time() if now is None else now      # one moment: the derivation's and the key's
+
     def read() -> "tuple":
         ans = H.derive(root, session=session, now=now, rules=H.PIPELINE_ONLY)
         basis = ans.get("basis") or {}
         return ans, list(basis.get("inputs") or []), list(basis.get("listed") or [])
+
+    def facts(ans) -> "tuple":
+        basis = ans.get("basis") or {}
+        return basis.get("pids"), basis.get("env"), basis.get("events")
     ans, inputs, listed = read()
     if (H.primary(ans) or {}).get("rule") == H.R_INIT or not inputs:
         return ans
-    before = BC.input_key(inputs, listed)
+    before, first = BC.input_key(inputs, listed), facts(ans)
     ans, again, again_listed = read()
-    if again != inputs or again_listed != listed or BC.input_key(inputs, listed) != before:
+    if again != inputs or again_listed != listed or BC.input_key(inputs, listed) != before \
+            or facts(ans) != first:
         return ans                         # it moved while being read: the next refresh stores it
-    BC.store_resume(root, session, ans, before, resume_line(ans))
+    BC.store_resume(root, session, ans, before, resume_line(ans), now=now)
     return ans
 
 
@@ -466,7 +476,7 @@ def _cached_resume_hint(surface: Surface, session: str = "",
     if entry is not None:
         until = entry["answer"].get("valid_until")
         if not (isinstance(until, (int, float)) and now >= until) and \
-                BC.resume_holds(entry, session):
+                BC.resume_holds(entry, session, now=now):
             line = entry["line"]                 # rendered by `resume_line` when it was stored
             if line is None:
                 return None

@@ -35,10 +35,12 @@ file is removed and `OSError` raised.
 READERS (`read_record`, `read_private`) open once without following a link and without blocking (a FIFO
 planted at a record path cannot hang a hook or doctor), require a regular file, verify THAT handle, and
 read THAT handle. A file owned by someone else, or weaker than the descriptor on a place that can hold it,
-is refused (None): never returned, never re-protected. A reader never writes the record (the volume probe
+is refused: never returned, never re-protected. `read_private` RAISES `errors.RecordRefused` for it and
+returns None only when nothing is there (0.0.29 H4). A reader never writes the record (the volume probe
 is a scratch file of its own, removed at once).
 
-Stdlib only (`ctypes` is imported lazily, and only for the private door). Imports nothing from mokata.
+Stdlib only (`ctypes` is imported lazily, and only for the private door). Imports nothing from mokata at
+load time; `read_private` imports `errors.RecordRefused` when it refuses.
 Copyright 2026 MoStack. Licensed under the Apache License, Version 2.0.
 """
 
@@ -150,7 +152,10 @@ def _probe(directory: Optional[str], dir_fd: Optional[int] = None) -> Optional[b
     """Ask the volume, by behaviour: make two fresh files in `directory`, one 0o600 and one 0o400, read
     each mode back on its handle, remove both. The volume holds a private mode only if each reads back
     exactly as it was created (a CIFS / drvfs / ntfs-3g / FAT mount reports one mount-wide mode for both).
-    Nothing is ever chmod'ed. None when no probe file can be made there (unknown)."""
+    0.0.29 H4 (`PRIVACY-PROBE-LOWS` a): each probe file is `fchmod`ed to its mode on its OWN fresh fd
+    before the readback, so a umask (or a default ACL's mask) that narrowed the create cannot make a
+    volume that holds modes read as one that does not. Only the probe's own scratch files are chmod'ed.
+    None when no probe file can be made there (unknown)."""
     import secrets
     seen = []
     for want in (0o600, 0o400):
@@ -161,6 +166,10 @@ def _probe(directory: Optional[str], dir_fd: Optional[int] = None) -> Optional[b
         except OSError:
             return None
         try:
+            try:
+                os.fchmod(fd, want)
+            except OSError:
+                pass                          # a modeless mount may refuse it: the readback says so
             st = os.fstat(fd)
             seen.append(stat.S_IMODE(st.st_mode) & 0o777 == want)
         except OSError:
@@ -186,6 +195,15 @@ def _posix_verdict(fd: int, where: Optional[str] = None, dir_fd: Optional[int] =
         why.append(f"owned by uid {st.st_uid}, not this user ({os.geteuid()})")
     if mode & 0o077:
         why.append(f"mode {oct(mode)} lets other users in")
+    elif stat.S_ISDIR(st.st_mode):
+        if mode & 0o777 != 0o700:                 # setgid/sticky inherited from a parent: not weak
+            why.append(f"mode {oct(mode)}, not 0700 — harmless; `mokata doctor --fix` rewrites it 0700")
+    elif mode != 0o600:
+        why.append(f"mode {oct(mode)}, not 0600"
+                   + (" — harmless; `mokata doctor --fix` rewrites it 0600"
+                      if mode & 0o7000 == 0 else " — a setuid/setgid/sticky bit on a record"))
+    if stat.S_ISREG(st.st_mode) and st.st_nlink > 1:
+        why.append(f"it has {st.st_nlink} hard links (another name reaches the same bytes)")
     if _MAC and _mac_acl_entries(fd):
         why.append("it carries an ACL entry for someone else")
     if _ignores_ownership(fd):
@@ -237,6 +255,8 @@ def _win():
                                                       ctypes.POINTER(wintypes.DWORD), vp,
                                                       wintypes.DWORD]
         ker.GetVolumeInformationByHandleW.restype = wintypes.BOOL
+        ker.GetFileInformationByHandle.argtypes = [vp, vp]
+        ker.GetFileInformationByHandle.restype = wintypes.BOOL
         adv.OpenProcessToken.argtypes = [vp, wintypes.DWORD, ctypes.POINTER(vp)]
         adv.GetTokenInformation.argtypes = [vp, ctypes.c_int, vp, wintypes.DWORD,
                                             ctypes.POINTER(wintypes.DWORD)]
@@ -336,12 +356,25 @@ def _with_descriptor(directory: bool, create):
         ker.LocalFree(sd)
 
 
+def _nt_links(h) -> Optional[int]:
+    """How many names reach the file behind handle `h` (`BY_HANDLE_FILE_INFORMATION.nNumberOfLinks`);
+    1 for a directory; None when the call fails."""
+    ctypes, wintypes, _adv, ker = _win()
+    info = (wintypes.DWORD * 13)()        # attrs, 3 FILETIMEs, serial, size hi/lo, LINKS, index hi/lo
+    if not ker.GetFileInformationByHandle(h, ctypes.byref(info)):
+        return None
+    return 1 if info[0] & 0x10 else int(info[10])          # FILE_ATTRIBUTE_DIRECTORY
+
+
 def _nt_handle_verdict(h) -> Verdict:
     ctypes, wintypes, adv, ker = _win()
     flags = wintypes.DWORD(0)
-    holds = bool(ker.GetVolumeInformationByHandleW(h, None, 0, None, None, ctypes.byref(flags),
-                                                   None, 0)) and bool(flags.value
-                                                                      & _FILE_PERSISTENT_ACLS)
+    # 0.0.29 H4 (`PRIVACY-PROBE-LOWS` d): a volume query that FAILS is no evidence of a volume without
+    # access control. Only a query that answers, without `FILE_PERSISTENT_ACLS`, means FAT/exFAT; a
+    # failed one checks the ACL like any other file (never "no ACLs, owner is me").
+    answered = bool(ker.GetVolumeInformationByHandleW(h, None, 0, None, None, ctypes.byref(flags),
+                                                      None, 0))
+    holds = not answered or bool(flags.value & _FILE_PERSISTENT_ACLS)
     if not holds:
         # FAT/exFAT: `CreateFileW` ignored the descriptor; there is no owner to compare - every account
         # is the owner here. Said by doctor, never claimed private.
@@ -358,6 +391,11 @@ def _nt_handle_verdict(h) -> Verdict:
         why = []
         if not mine:
             why.append(f"owned by {who}, not this user ({me})")
+        links = _nt_links(h)          # 0.0.29 H-a xplat: the POSIX nlink rule, on NTFS too
+        if links is None:
+            why.append("its link count cannot be read")
+        elif links > 1:
+            why.append(f"it has {links} hard links (another name reaches the same bytes)")
         if not dacl.value:
             why.append("it has NO access list (everyone may open it)")
         else:
@@ -389,6 +427,34 @@ def _nt_open_meta(path: str):
     if h is None or h == ctypes.c_void_p(-1).value:
         raise ctypes.WinError(ctypes.get_last_error())
     return h
+
+
+def final_path(fd: int) -> Optional[str]:
+    """Where the OPEN handle behind CRT fd `fd` really is (0.0.29 H2): `GetFinalPathNameByHandleW` with
+    `FILE_NAME_NORMALIZED | VOLUME_NAME_GUID` — `\\\\?\\Volume{guid}\\dir\\file`, every link, junction and
+    8.3 name resolved, in the disk's own spelling, and with a GUID volume so a volume mounted at a folder
+    (no drive letter) still answers. Asked of the handle, never of a path: a name swapped after the open
+    cannot change it. None when not on Windows or when the call fails (the caller refuses)."""
+    if not _NT:
+        return None
+    try:
+        import msvcrt
+        ctypes, wintypes, _adv, ker = _win()
+        fn = ker.GetFinalPathNameByHandleW
+        fn.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, wintypes.DWORD, wintypes.DWORD]
+        fn.restype = wintypes.DWORD
+        h = msvcrt.get_osfhandle(fd)
+        size = 512
+        while True:
+            buf = ctypes.create_unicode_buffer(size)
+            n = fn(h, buf, size, 0x1)               # FILE_NAME_NORMALIZED (0) | VOLUME_NAME_GUID (1)
+            if n == 0:
+                return None
+            if n < size:
+                return buf.value
+            size = n + 1
+    except (OSError, ValueError, AttributeError):
+        return None
 
 
 # =============================================================================== the primitives
@@ -472,6 +538,17 @@ def _staged_create(name: str, dir_fd: Optional[int]) -> int:
             pass                                 # the file is in place; a stray empty stage is harmless
 
 
+def _exact_mode(fd: int, want: int) -> None:
+    """0.0.29 H4: a record is private at EXACTLY 0600 (a directory 0700) — the verdict calls any other
+    mode weak. A umask may have narrowed the create (0o277 makes 0o400), so the fresh handle is set to
+    the exact mode; it only ever narrows group/other, which the create already left at zero. A mount
+    that refuses it is a modeless mount, which the verdict then names."""
+    try:
+        os.fchmod(fd, want)
+    except OSError:
+        pass
+
+
 def create_private_file(name: str, *, dir_fd: Optional[int] = None) -> int:
     """Create `name` NEW (exists, or a link there: `OSError`), readable and writable by this user ONLY from
     its first instant, verified on the handle; returns a read-write binary fd children do not inherit.
@@ -502,6 +579,8 @@ def create_private_file(name: str, *, dir_fd: Optional[int] = None) -> int:
     else:
         fd = os.open(name, _FLAGS, 0o600, dir_fd=dir_fd)
     try:
+        if not _NT:
+            _exact_mode(fd, 0o600)
         _must_hold(_verify_fd(fd, None if dir_fd is not None else (os.path.dirname(name) or "."),
                               dir_fd), name)
     except BaseException:
@@ -546,6 +625,7 @@ def make_private_dir(name: str, *, dir_fd: Optional[int] = None) -> None:
         try:
             if _MAC and _mac_acl_entries(dfd):
                 _mac_strip(dfd)
+            _exact_mode(dfd, 0o700)
             _must_hold(_verify_fd(dfd, dir_fd=dfd), name)
         finally:
             os.close(dfd)
@@ -624,13 +704,37 @@ def read_record(path: str, limit: int = 1 << 20,
         os.close(fd)
 
 
+def _refused(path: str, reason: str) -> Exception:
+    from .errors import RecordRefused        # lazily: this module imports nothing from mokata at load
+    return RecordRefused(path, reason)
+
+
 def read_private(path: str, limit: int = 1 << 20) -> Optional[bytes]:
-    """The bytes of a private-set file IF it may be trusted (`Verdict.accept`), else None (`read_record`:
-    one open, the SAME handle verified and read). Never writes anything."""
+    """The bytes of a private-set file IF it may be trusted (`Verdict.accept`). `read_record`: one open,
+    the SAME handle verified and read. Never writes anything.
+
+    0.0.29 H4 (`PRIVATE-READ-ABSENT-VS-REFUSED`): None means ABSENT — nothing at the path, or a parent
+    that is not a directory. Anything else that is not trusted RAISES `errors.RecordRefused(path,
+    reason)`: a file owned by someone else, one others can read or write, a link, a directory, a FIFO,
+    a file this user cannot open, or one larger than `limit`. A pure reader may treat a refusal as
+    absent; a writer never writes over it on that basis."""
     got = read_record(path, limit)
-    if got is None or not got[0].accept:
-        return None
-    return got[1]
+    if got is None:
+        try:
+            os.lstat(path)
+        except FileNotFoundError:
+            return None
+        except NotADirectoryError:
+            return None
+        except OSError as exc:
+            raise _refused(path, f"it cannot be examined ({exc.strerror or exc})") from None
+        raise _refused(path, "not a regular file this user can open")
+    v, raw = got
+    if not v.accept:
+        raise _refused(path, v.reason or "not private")
+    if raw is None:
+        raise _refused(path, "it is larger than a record can be")
+    return raw
 
 
 def acl_sddl(path: str) -> str:

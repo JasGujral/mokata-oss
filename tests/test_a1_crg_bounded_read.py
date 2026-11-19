@@ -594,11 +594,9 @@ class TestCloseDoesNotWaitForAPipeAGrandchildHolds(FakeServerCase):
         self.assertEqual([], joined_closers, "close() waited on a closer thread")
         closers = [c for c in session._closers if c is not None]
         self.assertTrue(closers)
-        # the pipes are still held at the moment close() returned: the closers are still parked...
-        self.assertTrue(any(c.is_alive() for c in closers),
-                        "the closers finished while the grandchild still held the pipes")
-        # ...and the moment the holder goes, they exit (no timeout: a hang here is a hang)
-        reap()
+        # 0.0.29 `CRG-CLOSE-KILL-NO-REAP`: the session is a door tree, so `close()` ended the
+        # grandchild WITH `serve` — nobody else has to reap it for the pipes to reach EOF. The
+        # closers exit on their own (an event: their reads see EOF; a hang here is a hang).
         for c in closers:
             real_join(c)
             self.assertFalse(c.is_alive())
@@ -720,15 +718,15 @@ class TestTheUntouchedPathsAreUntouched(unittest.TestCase):
         """`_default_run_cli` was already bounded and is untouched — it is the OTHER half of the
         separated pair, and the evidence that the attribute was always there to be used."""
         seen = {}
-        real = subprocess.run
+        from mokata import quiet_spawn
+        real = quiet_spawn.run_jobbed
 
-        def spy(*args, **kwargs):
+        def spy(argv, **kwargs):
+            seen.setdefault("calls", []).append((list(argv), kwargs.get("timeout")))
             seen.update(kwargs)
-            class R:
-                returncode, stdout, stderr = 0, "code-review-graph 2.3.6", ""
-            return R()
+            return 0, "code-review-graph 2.3.6", ""
 
-        subprocess.run = spy
+        quiet_spawn.run_jobbed = spy
         # 0.0.26 O15 — the client runs only a RESOLVED binary (mokata's env / MOKATA_CRG); this
         # test is about the bound, so it names one rather than depending on the venv.
         from unittest import mock
@@ -738,9 +736,13 @@ class TestTheUntouchedPathsAreUntouched(unittest.TestCase):
                                    lambda n: "/opt/crg/bin/code-review-graph"):
                 client = CodeReviewGraphClient(name="code-review-graph", timeout=17.0)
                 self.assertEqual(client.version(), "2.3.6")
+                # 0.0.29 N5: `embed` (minutes on a large repo) has no wall clock — it ends at its
+                # exit or a Cancel; `--version` keeps the stored bound.
+                self.assertTrue(client.provision_semantic("."))
         finally:
-            subprocess.run = real
-        self.assertEqual(seen.get("timeout"), 17.0)
+            quiet_spawn.run_jobbed = real
+        self.assertEqual(seen["calls"][0], (["/opt/crg/bin/code-review-graph", "--version"], 17.0))
+        self.assertEqual(seen["calls"][1][1], None, "embed runs under no clock")
 
     def test_a1_the_injected_call_tool_path_is_untouched(self):
         """Every existing unit test injects `call_tool` and never reaches the transport. That

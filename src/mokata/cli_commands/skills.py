@@ -30,10 +30,16 @@ def _templates_dir():
     return package_data_root() / "templates" / "commands"
 
 
+def _root() -> str:
+    """The repo this command runs in — the route a command reference is rendered for."""
+    from ..repo_identity import find_project_root
+    return find_project_root(".")
+
+
 def _catalog() -> List:
     """CAT.S1 — the COMPLETE curated catalog (all of CURATED_SKILLS), single-sourced."""
     from ..agent_skills import curated_catalog
-    return curated_catalog(_templates_dir())
+    return curated_catalog(_templates_dir(), _root())
 
 
 def _search_skills(query: str) -> List[tuple]:
@@ -63,7 +69,8 @@ def _skills_detail_non_runnable(name: str) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     print(f"/{src.name} — {src.description}")
-    print(f"  invoke: /mokata:{src.name} "
+    from ..plugin_runtime import slash_command
+    print(f"  invoke: {slash_command(src.name, _root())} "
           f"(auto-fires / own command — not `mokata run`)")
     if src.when_to_use:
         print(f"  when to use: {src.when_to_use}")
@@ -215,9 +222,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         # is listed by `mokata skills` but isn't a `mokata run` target; point at how to invoke it
         # rather than the generic "no skill" error.
         from ..agent_skills import CURATED_SKILLS
+        from ..plugin_runtime import slash_command
         if args.name in set(CURATED_SKILLS):
             print(f"'{args.name}' isn't runnable via `mokata run` — it's an auto-firing / "
-                  f"own-command skill. Invoke it with `/mokata:{args.name}` "
+                  f"own-command skill. Invoke it with `{slash_command(args.name, _root())}` "
                   f"(or `mokata skills {args.name}` for detail).", file=sys.stderr)
             return 2
         print(f"error: {exc}", file=sys.stderr)
@@ -245,7 +253,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             return 1
 
     grounding = ground(surface.router) if surface is not None else ground(None)
-    sys.stdout.write(render_skill(skill, grounding))
+    sys.stdout.write(render_skill(skill, grounding, _root()))
     return 0
 
 

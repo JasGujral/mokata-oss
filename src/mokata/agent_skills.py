@@ -223,7 +223,7 @@ class CatalogEntry:
     invocation: str         # how to invoke it
 
 
-def curated_catalog(templates_dir: Path) -> List[CatalogEntry]:
+def curated_catalog(templates_dir: Path, root: Optional[str] = None) -> List[CatalogEntry]:
     """The complete curated skill catalog — one entry per name in ``CURATED_SKILLS``, in order.
 
     The set and the count are single-sourced to ``CURATED_SKILLS``: add a name there and the
@@ -231,6 +231,7 @@ def curated_catalog(templates_dir: Path) -> List[CatalogEntry]:
     registry for a runnable pipeline skill, and from the command template's frontmatter
     ``description`` for a standalone/auto-firing one — so nothing is hand-copied and nothing drifts.
     """
+    from .plugin_runtime import slash_command
     from .skills import SKILLS
     entries: List[CatalogEntry] = []
     for name in CURATED_SKILLS:
@@ -239,7 +240,8 @@ def curated_catalog(templates_dir: Path) -> List[CatalogEntry]:
             entries.append(CatalogEntry(name, skill.summary, True, f"mokata run {name}"))
         else:
             src = load_skill_source(name, templates_dir)
-            entries.append(CatalogEntry(name, src.description, False, f"/mokata:{name}"))
+            entries.append(CatalogEntry(name, src.description, False,
+                                        slash_command(name, root)))
     return entries
 
 

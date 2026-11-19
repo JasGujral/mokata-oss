@@ -82,18 +82,39 @@ def is_python_env(path: str) -> bool:
     return any(os.path.exists(os.path.join(path, m)) for m in ENV_MARKERS)
 
 
+def _below(rel: str) -> Optional[List[str]]:
+    """`rel`'s own components, `.`/empty dropped and `..` folded lexically; None when it climbs out."""
+    from .repo_paths import split_path
+    out: List[str] = []
+    for part in split_path(rel):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if not out:
+                return None
+            out.pop()
+            continue
+        out.append(part)
+    return out
+
+
 def under_python_env(root: str, rel: str) -> bool:
     """True when the repo-relative `rel` sits inside a Python environment below `root`.
 
     For listings that do not come from an `os.walk` — `git ls-files --others` in the review
     window — so an un-ignored `venv/` cannot flood them with site-packages either."""
-    cur = os.path.dirname(os.path.join(root, os.path.normpath(rel)))
-    root_abs = os.path.abspath(root)
-    cur = os.path.abspath(cur)
-    while cur.startswith(root_abs) and cur != root_abs:
+    # 0.0.29 H3: a loop over `rel`'s OWN components (normalised first), never a prefix test of two
+    # path spellings. A `rel` that climbs out, or is absolute, names nothing below `root`: False.
+    if not rel or os.path.isabs(rel):
+        return False
+    parts = _below(rel)
+    if parts is None:
+        return False
+    cur = root
+    for part in parts[:-1]:
+        cur = os.path.join(cur, part)
         if is_python_env(cur):
             return True
-        cur = os.path.dirname(cur)
     return False
 
 

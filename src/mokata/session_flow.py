@@ -118,7 +118,8 @@ def last_persist_error(moment: str) -> str:
 
 def note_persist_failure(moment: str, out: Optional[Callable[[str], None]] = None, *,
                          seen: Optional[Set[str]] = None,
-                         error: Optional[BaseException] = None) -> bool:
+                         error: Optional[BaseException] = None,
+                         approval_lost: bool = False) -> bool:
     """Warn LOUDLY that a coarse-state persist failed — but only ONCE per `moment` this process.
 
     Degrade-clean by contract: the pipeline moment itself already succeeded; only its crash-safety
@@ -163,11 +164,16 @@ def note_persist_failure(moment: str, out: Optional[Callable[[str], None]] = Non
     # and user, so showing them all would break the notice's own never-the-DSN-value promise. This
     # site's summary is bounded BY CONSTRUCTION (`describe_persist_error`), so it is safe on screen
     # — and it is the entire point of the fix, so it goes where a person will actually read it.
-    note_degraded(
-        "checkpoint:" + moment, failure_class,
-        fallback="your work is not blocked (the moment itself succeeded), but this checkpoint is "
-                 "NOT on record and an interrupted run will not resume from it [%s]" % summary,
-        detail=summary, out=emit)
+    # 0.0.29 lane G (#83) — the consequence is CHOSEN from what failed, never guessed: a lost approval
+    # blocks the user (the approach-approval gate), any other loss only costs a resume point. The old
+    # "your work is not blocked (the moment itself succeeded)" was false for the first case.
+    if approval_lost:
+        said = ("the approach approval is NOT on record — the approach-approval gate blocks "
+                "implementation until it lands [%s]" % summary)
+    else:
+        said = ("this checkpoint is NOT on record — an interrupted run resumes from the last good "
+                "save [%s]" % summary)
+    note_degraded("checkpoint:" + moment, failure_class, fallback=said, detail=summary, out=emit)
     return True
 
 
@@ -197,10 +203,15 @@ class SessionFlow:
                    passed: Optional[List[str]] = None, run_id: Optional[str] = None,
                    moment: str = "checkpoint") -> Optional[SaveResult]:
         """The ONE degrade-clean persist seam: snapshot whatever coarse state is given (a
-        brainstorm milestone/approval and/or a passed gate) via SS.S0's `save_session`. A persist
-        failure warns ONCE for `moment` (secret-free) and returns None — never blocks the moment."""
+        brainstorm milestone/approval and/or a passed gate) via SS.S0's `save_session`.
+
+        0.0.29 lane G (#83): a write that did not land is in the returned result's `failed` (with
+        `approval_persisted` when an approval was asked) and warns ONCE for `moment`, naming the
+        consequence. None only when the call raised before any write (a `brainstorm` that does
+        not parse) — `last_error` then holds it."""
         try:
-            return save_session(self.surface, brainstorm=brainstorm, passed=passed, run_id=run_id)
+            result = save_session(self.surface, brainstorm=brainstorm, passed=passed,
+                                  run_id=run_id)
         except Exception as exc:
             # ⛔ THE EXCEPTION IS PASSED ON, NOT DISCARDED. `except Exception:` with a bare handler
             # threw away the one fact that identifies the failure, and the notice then guessed —
@@ -208,6 +219,12 @@ class SessionFlow:
             note_persist_failure(moment, self._warn, error=exc)
             self.last_error = exc
             return None
+        if result.failed:
+            first = next(iter(result.failed.values()))
+            self.last_error = first
+            note_persist_failure(moment, self._warn, error=first,
+                                 approval_lost=result.approval_persisted is False)
+        return result
 
     # --- (c) brainstorm milestones + (a) approval — coarse moments, NOT per-turn ----------------
     def milestone(self, brainstorm: Dict[str, Any],

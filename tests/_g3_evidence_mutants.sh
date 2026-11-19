@@ -61,8 +61,9 @@ mutant "G01 the changed-files filter is dropped: every record in the repo is thi
 mutant "G02 a committed 'block' verdict feeds the PR's blocked state" "$CC" \
   '        return any(leg.blocked for leg in self.legs)' \
   '        return any(leg.blocked for leg in self.legs) or bool(self.records is not None and any(e.get("verdict") == "block" for r in self.records.records for e in r.evidence))' "$T"
+# re-anchored 0.0.29 H-b xplat: the boundary goes through fs_identity.require_inside since H3
 mutant "G03 realpath containment dropped: a symlink out of the repo is linked" "$CE" \
-  '    if not (full == real_root or full.startswith(real_root.rstrip(os.sep) + os.sep)):' \
+  '    if not require_inside(full, real_root):              # ALLOW side: identity (0.0.29 H3)' \
   '    if False:' "$T"
 mutant "G04 a fixed three-backtick fence" "$CE" \
   '    n = max(3, (max(len(r) for r in runs) if runs else 0) + 1)' \

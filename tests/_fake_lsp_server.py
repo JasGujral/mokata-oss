@@ -34,6 +34,15 @@ green round trip proves the item went back untouched.
   --delay NAME:SECONDS  answer incomingCalls / outgoingCalls about an item named NAME this late
   --frame N             answer prepare as one frame whose body is exactly N bytes (the frame cap)
   --headerless N        answer prepare with N bytes that never end a header (the frame cap)
+  --heartbeat S         while a --delay answer is pending, send a `$/progress` report every S s
+                        (a server that is working, not silent)
+
+The settings handshake (0.0.29 A, H-A1 `REAL-PYRIGHT-NEVER-ANSWERS-CALL-HIERARCHY`):
+  --settings-pull       pyright 1.1.390's `handleInitialized`, as its dist ships it: a client that
+                        announced `workspace.workspaceFolders` gets NO settings pull at `initialized`
+                        (the server waits for `workspace/didChangeConfiguration`, as VS Code sends);
+                        any other client gets `workspace/configuration` at once. Until settings are
+                        in, every request is HELD, unanswered: exactly the hang real pyright showed.
 """
 from __future__ import annotations
 
@@ -71,11 +80,18 @@ OUTSIDE = _opt("--outside")
 DELAY = _opt("--delay")
 FRAME = int(_opt("--frame", "0"))            # reply to prepare as ONE frame of exactly this many bytes
 HEADERLESS = int(_opt("--headerless", "0"))  # answer prepare with this many bytes and no header end
+HEARTBEAT = float(_opt("--heartbeat", "0"))
+SETTINGS_PULL = "--settings-pull" in ARGS
+SETTLED = [not SETTINGS_PULL]             # settings in: requests are answered
+ANNOUNCED_FOLDERS = [False]
+CONFIG_ID = [None]
+HELD = []
 ROOT = [None]
 KNOWN = {"--index-seconds", "--crash-on", "--slow", "--apply-edit", "--log", "--grandchild",
          "--pidfile", "--ignore-shutdown", "--no-call-hierarchy", "--data", "--hub", "--hub-file",
-         "--malformed", "--outside", "--delay", "--frame", "--headerless"}
-_FLAGS = {"--apply-edit", "--ignore-shutdown", "--no-call-hierarchy"}
+         "--malformed", "--outside", "--delay", "--frame", "--headerless", "--heartbeat",
+         "--settings-pull"}
+_FLAGS = {"--apply-edit", "--ignore-shutdown", "--no-call-hierarchy", "--settings-pull"}
 
 
 def _check_knobs():                       # a stand-in fails LOUD on a knob it does not know (§7e)
@@ -413,6 +429,25 @@ def diagnostics(uri, text):
     send({"method": "textDocument/publishDiagnostics", "params": {"uri": uri, "diagnostics": diags}})
 
 
+def _pull_settings():
+    CONFIG_ID[0] = request("workspace/configuration", {"items": [
+        {"section": "python"}, {"section": "python.analysis"}]})
+
+
+def _settle(hovered):
+    SETTLED[0] = True
+    while HELD:
+        handle(HELD.pop(0), hovered)
+
+
+def _heartbeat():
+    t0 = time.time()
+    while time.time() - t0 < 60:
+        time.sleep(HEARTBEAT)
+        send({"method": "$/progress", "params": {"token": "beat", "value": {
+            "kind": "report", "message": "working"}}})
+
+
 def main():
     hovered = [0]
     if GRANDCHILD:
@@ -430,107 +465,128 @@ def main():
         msg = read()
         if msg is None:
             return 0
-        method = msg.get("method")
-        rid = msg.get("id")
-        params = msg.get("params") or {}
-        if method is None:
-            continue                                    # a response to one of our requests
-        log(method)
-        if CRASH_ON and method == CRASH_ON:
-            os._exit(3)
-        if method == "initialize":
-            ROOT[0] = _uri_path(params["rootUri"]) if params.get("rootUri") else None
-            caps = {"hoverProvider": True, "definitionProvider": True,
-                    "referencesProvider": True, "documentSymbolProvider": True,
-                    "textDocumentSync": 1}
-            if not NO_CALLS:
-                caps["callHierarchyProvider"] = True
-            reply(rid, {"capabilities": caps})
-            continue
-        if method == "initialized":
-            threading.Thread(target=index_pass, daemon=True).start()
-            continue
-        if method == "shutdown":
-            if not IGNORE_SHUTDOWN:
-                reply(rid, None)
-            continue
-        if method == "exit":
-            if IGNORE_SHUTDOWN:
-                continue
+        if handle(msg, hovered) == 0:
             return 0
-        if method == "$/cancelRequest":
-            cid = params.get("id")
-            if cid in SLOW_WAITING:
-                reply(cid, error={"code": -32800, "message": "cancelled"})
-                SLOW_WAITING.pop(cid, None)
-            continue
-        if method == "textDocument/didOpen":
-            td = params["textDocument"]
-            DOCS[td["uri"]] = td["text"]
-            diagnostics(td["uri"], td["text"])
-            continue
-        if method == "textDocument/didClose":
-            DOCS.pop(params["textDocument"]["uri"], None)
-            continue
-        if SLOW and method == SLOW:
-            SLOW_WAITING[rid] = True
-            continue
-        if method in ("textDocument/rename", "textDocument/codeAction", "textDocument/formatting",
-                      "workspace/executeCommand", "textDocument/completion"):
-            # The proxy must never let these through; if one arrives, answer so the test can see it.
-            reply(rid, {"changes": {}})
-            continue
-        if method in ("textDocument/definition", "textDocument/references", "textDocument/hover"):
-            uri = params["textDocument"]["uri"]
-            text = DOCS.get(uri, "")
-            pos = params["position"]
-            word = word_at(text, pos["line"], pos["character"])
-            bad = {"uri": "file://[abc/z.py", "range": _rng(0, 0, 1)}   # `baduri`: does not parse
-            if method == "textDocument/definition":
-                res = definition(uri, text, word)
-                if MALFORMED == "baduri":
-                    res = [bad] + (res if isinstance(res, list) else [res] if res else [])
-                reply(rid, res)
-            elif method == "textDocument/references":
-                out = [bad] if MALFORMED == "baduri" else []
-                for u, t in DOCS.items():
-                    out.extend(occurrences(u, t, word))
-                reply(rid, out)
+
+
+def handle(msg, hovered):
+    """One message. Returns 0 when the server is to exit; None otherwise."""
+    method = msg.get("method")
+    rid = msg.get("id")
+    params = msg.get("params") or {}
+    if method is None:                                  # a response to one of our requests
+        if SETTINGS_PULL and rid is not None and rid == CONFIG_ID[0]:
+            _settle(hovered)
+        return None
+    log(method)
+    if CRASH_ON and method == CRASH_ON:
+        os._exit(3)
+    if method == "initialize":
+        ROOT[0] = _uri_path(params["rootUri"]) if params.get("rootUri") else None
+        caps = {"hoverProvider": True, "definitionProvider": True,
+                "referencesProvider": True, "documentSymbolProvider": True,
+                "textDocumentSync": 1}
+        if not NO_CALLS:
+            caps["callHierarchyProvider"] = True
+        reply(rid, {"capabilities": caps})
+        ANNOUNCED_FOLDERS[0] = bool(((params.get("capabilities") or {}).get("workspace") or {})
+                                    .get("workspaceFolders"))
+        return None
+    if method == "initialized":
+        threading.Thread(target=index_pass, daemon=True).start()
+        if SETTINGS_PULL and not ANNOUNCED_FOLDERS[0]:
+            _pull_settings()
+        return None
+    if method == "workspace/didChangeConfiguration":
+        if SETTINGS_PULL:
+            _pull_settings()
+        return None
+    if rid is not None and not SETTLED[0] and method != "shutdown":
+        HELD.append(msg)                                # pyright: unanswered until settings are in
+        return None
+    if method == "shutdown":
+        if not IGNORE_SHUTDOWN:
+            reply(rid, None)
+        return None
+    if method == "exit":
+        if IGNORE_SHUTDOWN:
+            return None
+        return 0
+    if method == "$/cancelRequest":
+        cid = params.get("id")
+        if cid in SLOW_WAITING:
+            reply(cid, error={"code": -32800, "message": "cancelled"})
+            SLOW_WAITING.pop(cid, None)
+        return None
+    if method == "textDocument/didOpen":
+        td = params["textDocument"]
+        DOCS[td["uri"]] = td["text"]
+        diagnostics(td["uri"], td["text"])
+        return None
+    if method == "textDocument/didClose":
+        DOCS.pop(params["textDocument"]["uri"], None)
+        return None
+    if SLOW and method == SLOW:
+        SLOW_WAITING[rid] = True
+        return None
+    if method in ("textDocument/rename", "textDocument/codeAction", "textDocument/formatting",
+                  "workspace/executeCommand", "textDocument/completion"):
+        # The proxy must never let these through; if one arrives, answer so the test can see it.
+        reply(rid, {"changes": {}})
+        return None
+    if method in ("textDocument/definition", "textDocument/references", "textDocument/hover"):
+        uri = params["textDocument"]["uri"]
+        text = DOCS.get(uri, "")
+        pos = params["position"]
+        word = word_at(text, pos["line"], pos["character"])
+        bad = {"uri": "file://[abc/z.py", "range": _rng(0, 0, 1)}   # `baduri`: does not parse
+        if method == "textDocument/definition":
+            res = definition(uri, text, word)
+            if MALFORMED == "baduri":
+                res = [bad] + (res if isinstance(res, list) else [res] if res else [])
+            reply(rid, res)
+        elif method == "textDocument/references":
+            out = [bad] if MALFORMED == "baduri" else []
+            for u, t in DOCS.items():
+                out.extend(occurrences(u, t, word))
+            reply(rid, out)
+        else:
+            hovered[0] += 1
+            if APPLY_EDIT and hovered[0] == 1:
+                request("workspace/applyEdit", {"label": "fake edit", "edit": {"changes": {
+                    uri: [{"range": {"start": {"line": 0, "character": 0},
+                                     "end": {"line": 0, "character": 0}}, "newText": "# edited\n"}]}}})
+            reply(rid, {"contents": {"kind": "markdown", "value": f"```python\n(function) {word}\n```"}}
+                  if word else None)
+        return None
+    if method in ("textDocument/prepareCallHierarchy", "callHierarchy/incomingCalls",
+                  "callHierarchy/outgoingCalls") and not NO_CALLS:
+        if method == "textDocument/prepareCallHierarchy":
+            found = prepare(params["textDocument"]["uri"], params["position"])
+            if FRAME:
+                send_frame(rid, found, FRAME)
+            elif HEADERLESS:
+                with LOCK:
+                    OUT.write(b"x" * HEADERLESS)          # no `\r\n\r\n`, ever
+                    OUT.flush()
             else:
-                hovered[0] += 1
-                if APPLY_EDIT and hovered[0] == 1:
-                    request("workspace/applyEdit", {"label": "fake edit", "edit": {"changes": {
-                        uri: [{"range": {"start": {"line": 0, "character": 0},
-                                         "end": {"line": 0, "character": 0}}, "newText": "# edited\n"}]}}})
-                reply(rid, {"contents": {"kind": "markdown", "value": f"```python\n(function) {word}\n```"}}
-                      if word else None)
-            continue
-        if method in ("textDocument/prepareCallHierarchy", "callHierarchy/incomingCalls",
-                      "callHierarchy/outgoingCalls") and not NO_CALLS:
-            if method == "textDocument/prepareCallHierarchy":
-                found = prepare(params["textDocument"]["uri"], params["position"])
-                if FRAME:
-                    send_frame(rid, found, FRAME)
-                elif HEADERLESS:
-                    with LOCK:
-                        OUT.write(b"x" * HEADERLESS)          # no `\r\n\r\n`, ever
-                        OUT.flush()
-                else:
-                    reply(rid, found)
+                reply(rid, found)
+        else:
+            def answer(rid=rid, method=method, it=params.get("item")):
+                res, err = call_answer(method, it)
+                reply(rid, res, err)
+            if DELAY:
+                threading.Thread(target=answer, daemon=True).start()
+                if HEARTBEAT:
+                    threading.Thread(target=_heartbeat, daemon=True).start()
             else:
-                def answer(rid=rid, method=method, it=params.get("item")):
-                    res, err = call_answer(method, it)
-                    reply(rid, res, err)
-                if DELAY:
-                    threading.Thread(target=answer, daemon=True).start()
-                else:
-                    answer()
-            continue
-        if method == "textDocument/documentSymbol":
-            reply(rid, symbols(DOCS.get(params["textDocument"]["uri"], "")))
-            continue
-        if rid is not None:
-            reply(rid, error={"code": -32601, "message": f"{method} not supported"})
+                answer()
+        return None
+    if method == "textDocument/documentSymbol":
+        reply(rid, symbols(DOCS.get(params["textDocument"]["uri"], "")))
+        return None
+    if rid is not None:
+        reply(rid, error={"code": -32601, "message": f"{method} not supported"})
 
 
 if __name__ == "__main__":

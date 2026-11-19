@@ -179,6 +179,10 @@ class Job:
         self.away_until = 0.0            # until when a page that dropped (`away`) may come back
         self.cancellable = True
         self._wakes: List[Callable[[], None]] = []
+        # 0.0.29 A `LSP-CALLS-KEPT-RESULT-AFTER-REVOKE` — set by work whose answer may be handed out
+        # only while this still says True (a language server's answer: while the workspace is
+        # trusted). Read at hand-out time by `JobRegistry._kept`; None = always kept.
+        self.kept_while: Optional[Callable[[], bool]] = None
 
     # -- inside the work (any thread) -------------------------------------------------------
     def _report(self, done: Optional[int] = None, total: Optional[int] = None,
@@ -467,12 +471,25 @@ class JobRegistry:
     # -- reading ----------------------------------------------------------------------------
     def answer(self, job_id: str, kind: str, args: Dict[str, Any]) -> Optional[Job]:
         """The DONE job `job_id`, if it answered exactly this question — what a page that waited
-        on it re-asks for (the route's `job=` parameter). Anything else: None (ask afresh)."""
+        on it re-asks for (the route's `job=` parameter). Anything else: None (ask afresh) — also
+        a job whose `kept_while` now says False (its answer may no longer be handed out)."""
         with self._lock:
             j = self._by_id.get(job_id)
-            if j is not None and j.state == DONE and j.key == (kind, _canon(args)):
-                return j
-            return None
+            if j is None or j.state != DONE or j.key != (kind, _canon(args)):
+                return None
+        return j if self._kept(j) else None
+
+    def _kept(self, j: Job) -> bool:
+        """0.0.29 A — the ONE hand-out check, used by every door that gives a job's content out
+        (`answer`, `get`). The job's `kept_while` is evaluated OUTSIDE the lock (it reads the trust
+        record); False purges the result and the partial in place, so no later door can serve
+        them either. It must be a pure read: these doors run on the event loop."""
+        check = j.kept_while
+        if check is None or check():
+            return True
+        with self._lock:
+            j.result, j.partial = None, None
+        return False
 
     def find(self, kind: str, args: Dict[str, Any]) -> Optional[Job]:
         """The ACTIVE job answering `(kind, args)`, if one runs."""
@@ -480,8 +497,12 @@ class JobRegistry:
             return self._active.get((kind, _canon(args)))
 
     def get(self, job_id: str) -> Optional[Job]:
+        """The job `job_id` — its content already purged when it may no longer be handed out."""
         with self._lock:
-            return self._by_id.get(job_id)
+            j = self._by_id.get(job_id)
+        if j is not None:
+            self._kept(j)
+        return j
 
     def listing(self) -> Dict[str, Any]:
         with self._lock:
@@ -704,6 +725,19 @@ def seal_current() -> bool:
     return True
 
 
+def kept_while(check: Callable[[], bool]) -> bool:
+    """0.0.29 A — the job running on this thread may hand its answer out only while `check()` is
+    True (a language-server answer: while the workspace is trusted). `check` must be a pure read
+    (no process stopped, no wait): it runs at hand-out, on the event loop. Returns whether a job
+    was marked (outside a job — the CLI, a test — there is nothing kept: False)."""
+    job = getattr(_CURRENT, "job", None)
+    if job is None:
+        return False
+    with job.reg._lock:
+        job.kept_while = check
+    return True
+
+
 # --------------------------------------------------------------------------- module-level door
 # Background work started deep inside a module (the meaning index's first build, ⌘P's symbol
 # index) runs as a job of the server that is serving this process, so it is visible and
@@ -732,4 +766,4 @@ def background(kind: str, args: Dict[str, Any], fn: Callable[[], Any], *, label:
 
 
 __all__ = ["CANCELLING", "REQUEST", "CAPABILITY_OF", "Job", "JobRegistry", "KINDS", "SEALING_KINDS", "STATES", "SYNC_WINDOW_S", "TICK_S", "install",
-           "installed", "background", "seal_current"]
+           "installed", "background", "kept_while", "seal_current"]

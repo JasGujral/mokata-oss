@@ -312,11 +312,15 @@ class TestTriggerCorpus(unittest.TestCase):
         # 0.0.23 E3 (WT.S3) — TWENTY-TWO: `cli_commands.runviews` joins, deliberately. `mokata
         # worktree clean` / `worktree remove` are human-gated removals and ask through the same
         # fail-closed `read_yes_no`.
+        # 0.0.29 H-a (H4) — TWENTY-THREE: `cli_commands.diagnostics` joins, deliberately. `mokata
+        # doctor --fix` applies its plan ONLY on an answer typed at a terminal (no `--yes`), asked
+        # through the same fail-closed `read_yes_no`, and each per-file second question too.
         mods = _modules_reaching_yes_no()
         self.assertEqual(
             mods,
             {"cli_commands.approve", "cli_commands.core", "cli_commands.docsync",
-             "cli_commands.gate", "cli_commands.knowledge", "cli_commands.runviews",
+             "cli_commands.diagnostics", "cli_commands.gate", "cli_commands.knowledge",
+             "cli_commands.runviews",
              "cli_commands.spec",
              "extras_install", "govern.deviation", "govern.gate", "govern.lifecycle",
              "govern.trifecta", "harness_setup", "init", "knowledge.graph_adopt",

@@ -38,7 +38,6 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from ..quiet_spawn import hidden
 from ..repo_paths import name_of
 
 # ------------------------------------------------------------------------------- states & exits
@@ -130,17 +129,17 @@ def _run_tool(argv: Sequence[str], cwd: str,
               timeout: float = TOOL_TIMEOUT_SECONDS) -> Tuple[Optional[int], str]:
     """Run a tool bounded and captured. (returncode, tail-of-output); returncode None = could not
     run or timed out (the text says which)."""
+    from ..quiet_spawn import run_jobbed
     try:
-        proc = subprocess.run(list(argv), cwd=cwd, stdin=subprocess.DEVNULL, capture_output=True,
-                              text=True, encoding="utf-8", errors="replace", timeout=timeout,
-                              **hidden())
+        # 0.0.29 R-B9: a repo-chosen launcher (`node_modules/.bin` first) runs through the process
+        # door — the whole tree is ended at the bound. The bound itself is gate policy (lane G).
+        rc, out, err = run_jobbed(list(argv), cwd=cwd, timeout=timeout)
     except subprocess.TimeoutExpired:
         return None, f"timed out after {timeout:.0f}s"
     except OSError as exc:
         return None, f"could not launch {argv[0]}: {exc}"
-    lines = [ln for ln in ((proc.stdout or "") + "\n" + (proc.stderr or "")).splitlines()
-             if ln.strip()]
-    return proc.returncode, "\n".join(lines[-15:])
+    lines = [ln for ln in ((out or "") + "\n" + (err or "")).splitlines() if ln.strip()]
+    return rc, "\n".join(lines[-15:])
 
 
 # =============================================================================== dep-cooldown

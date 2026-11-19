@@ -9,7 +9,7 @@
 // Find Usages answers in the Code inspector's References tab. 0.0.28 G (ID-LSP-CALL-HIERARCHY): the box is
 // three tabs — Usages · Callers · Callees — one tabpanel; Callers/Callees are a tree (the function
 // at the root, one level per question, any row expands) answered by the project's language server
-// through /api/lsp/calls, or by the call graph (callers only) while it cannot answer, labelled.
+// through /api/lsp/calls, or by the call graph (callers and callees, 0.0.29 A) while it cannot answer, labelled.
 // No keybinding (G-Q4): the palette (Find Callers / Find Callees), the Code right-click menu (the
 // same two items, after Find Usages), or the box's tabs. Copy with Context opens a small popover where the
 // mouse was. The popover shows the job (progress and Cancel), then the size, token estimate and
@@ -428,7 +428,7 @@
                               : plural(r.total, WORD[dir][0], WORD[dir][1])]);
     }
     if (r.skipped) out.push(["warn", `${plural(r.skipped, "entry", "entries")} the server sent malformed ${r.skipped === 1 ? "was" : "were"} skipped`]);
-    if (r.items_named > r.items_asked) out.push(["warn", `the server named ${r.items_named.toLocaleString()} functions here; the first ${r.items_asked} were asked`]);
+    if (r.items_named > r.items_asked) out.push(["warn", `${r.items_named.toLocaleString()} functions are named ${r.symbol ? "`" + r.symbol + "`" : "here"}; the first ${r.items_asked} were asked`]);
     if (r.note) out.push(["dim", r.note]);
     return out;
   }
@@ -467,9 +467,12 @@
     li.dataset.name = x.name || "";
     li._row = x; li._dir = dir; li._gen = gen;
     if (x.outside) li.setAttribute("aria-disabled", "true");
-    if (expandable && !x.outside) li.setAttribute("aria-expanded", "false");
+    // 0.0.29 A: a graph callee row whose column is unknown says `expandable: false` — expanding it
+    // would ask about the wrong function, so it offers no ▸ and no aria-expanded.
+    const opens = expandable && !x.outside && x.expandable !== false;
+    if (opens) li.setAttribute("aria-expanded", "false");
     const row = el("div", "p4-call-row");
-    const exp = el("span", "p4-exp", expandable && !x.outside ? "▸" : "");
+    const exp = el("span", "p4-exp", opens ? "▸" : "");
     exp.setAttribute("aria-hidden", "true");
     exp.onclick = (ev) => { ev.stopPropagation(); li.focus(); toggle(li); };
     row.append(exp, el("b", "p4-name", x.name || "?"), el("span", "mono dim p4-where", ` ${x.shown || x.path}:${x.line}${x.col ? ":" + x.col : ""}`));

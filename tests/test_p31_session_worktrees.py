@@ -523,6 +523,107 @@ class SetupWritesClaudeCodesWorktreeSettings(_Repo):
         self.assertEqual(1, _read(self.main, ".gitignore").count(".claude/worktrees/"))
 
 
+class UnsetupLeavesNoResidue(unittest.TestCase):
+    """UNWIRE-HARNESS-LEAVES-RESIDUE: wire then unwire returns the tree to the bytes it had before
+    setup, for every file but `.git/` and `.mokata/`. Each case is a repo the user already owned."""
+
+    def setUp(self):
+        self._t = tempfile.TemporaryDirectory()
+        self.addCleanup(self._t.cleanup)
+        self.main = os.path.realpath(os.path.join(self._t.name, "repo"))
+        self.home = os.path.join(self._t.name, "home")
+        os.makedirs(self.main)
+        os.makedirs(self.home)
+        _git(self.main, "init", "-q", "-b", "main")
+        from mokata.init import init_repo
+        init_repo(root=self.main, profile="standard", assume_yes=True, out=lambda _: None)
+
+    def _put(self, rel, data):
+        p = os.path.join(self.main, *rel.split("/"))
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "wb") as fh:
+            fh.write(data)
+
+    def _tree(self):
+        out = {}
+        for dirpath, dirnames, files in os.walk(self.main):
+            dirnames[:] = [d for d in dirnames if d not in (".git", ".mokata")]
+            for f in files:
+                full = os.path.join(dirpath, f)
+                with open(full, "rb") as fh:
+                    out["/".join(Path(full).relative_to(self.main).parts)] = fh.read()
+            if not files and not dirnames and dirpath != self.main:
+                out["/".join(Path(dirpath).relative_to(self.main).parts) + "/"] = b""     # an empty dir is state
+        return out
+
+    def _wire_then_unwire(self):
+        from mokata.harness_setup import setup_harness, unsetup_harness
+        before = self._tree()
+        res = setup_harness("claude", root=self.main, scope="project", assume_yes=True,
+                            out=lambda _: None, home=self.home)
+        self.assertFalse(res.aborted, res.message)
+        wired = self._tree()
+        self.assertNotEqual(before, wired, "setup wrote nothing: the premise is gone")
+        out = []
+        unsetup_harness("claude", root=self.main, scope="project", assume_yes=True,
+                        out=out.append, home=self.home)
+        return before, wired, self._tree(), "\n".join(out)
+
+    def test_no_prior_files(self):
+        before, wired, after, _ = self._wire_then_unwire()
+        self.assertIn(".worktreeinclude", wired)
+        self.assertEqual(before, after)
+
+    def test_a_prior_crlf_gitignore_survives_byte_for_byte(self):
+        self._put(".gitignore", b"build/\r\n*.log\r\n")
+        before, wired, after, _ = self._wire_then_unwire()
+        self.assertEqual(before, after)
+
+    def test_a_prior_worktreeinclude_with_a_user_line_keeps_it(self):
+        self._put(".worktreeinclude", b"# mine\nsecrets/local.key\n")
+        before, wired, after, _ = self._wire_then_unwire()
+        self.assertIn(b"secrets/local.key", wired[".worktreeinclude"])
+        self.assertEqual(before, after)
+
+    def test_a_user_pattern_listed_among_ours_survives(self):
+        self._put(".worktreeinclude", b".env\n")        # one of ours already: only the rest added
+        before, wired, after, _ = self._wire_then_unwire()
+        self.assertEqual(before, after)
+
+    def test_claude_already_ignored_writes_no_gitignore_line(self):
+        self._put(".gitignore", b".claude/\n")
+        before, wired, after, _ = self._wire_then_unwire()
+        self.assertEqual(b".claude/\n", wired[".gitignore"], "a redundant line was appended")
+        self.assertEqual(before, after)
+
+    def test_a_hand_written_unmarked_worktrees_line_survives(self):
+        self._put(".gitignore", b"keep\n.claude/worktrees/\n")
+        before, wired, after, _ = self._wire_then_unwire()
+        self.assertEqual(before[".gitignore"], wired[".gitignore"], "wrote beside the user's line")
+        self.assertEqual(before, after)
+
+    def test_a_user_file_in_dot_claude_keeps_the_directory(self):
+        self._put(".claude/notes.txt", b"mine\n")
+        before, wired, after, _ = self._wire_then_unwire()
+        self.assertEqual(before, after)
+        self.assertTrue(os.path.isdir(os.path.join(self.main, ".claude")))
+
+    def test_a_comment_that_only_resembles_our_mark_is_not_removed(self):
+        lookalike = b"# mokata: session worktrees\n.claude/worktrees/\n"
+        self._put(".gitignore", lookalike)
+        before, wired, after, _ = self._wire_then_unwire()
+        self.assertEqual(lookalike, after[".gitignore"])
+
+    def test_the_plan_the_human_approves_lists_what_will_be_removed(self):
+        from mokata.harness_setup import plan_unsetup, render_unsetup_plan, setup_harness
+        setup_harness("claude", root=self.main, scope="project", assume_yes=True,
+                      out=lambda _: None, home=self.home)
+        text = render_unsetup_plan(plan_unsetup("claude", self.main, "project", self.home))
+        self.assertIn(".worktreeinclude", text)
+        self.assertIn(".gitignore", text)
+        self.assertIn("emptied", text)
+
+
 class DoctorStatesThePolicy(_Repo):
 
     def test_doctor_says_where_sessions_may_edit(self):

@@ -1053,6 +1053,10 @@ class TheMokataEdge(_Repo):
             # the fake server only knows the documents it was handed: open the tests too
             for rel in ("tests/test_core.py", "tests/test_more.py"):
                 srv.open(os.path.join(self.repo, *rel.split("/")), "python")
+            # 0.0.29 A: a language server's answer never waits for the graph's FIRST index (its
+            # edge says `indexing` then) — the edge facts pinned here are the warm-index ones.
+            from mokata.ide import nav
+            self.assertTrue(nav.graph_index(self.repo, True)["ready"])
             refs = lsp_get(c, "/api/lsp/definition?path=src/app/core.py&line=8&col=16").json()
             self.assertEqual("lsp", refs["source"])
             edge = refs["edge"]

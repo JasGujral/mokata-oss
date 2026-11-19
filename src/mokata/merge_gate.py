@@ -51,6 +51,7 @@ from . import merge_lock as ML
 from .errors import MokataError
 from .git_safe import Git, GitSafeError
 from .knowledge import cancel as C
+from .plugin_runtime import localize_commands
 
 TOOL = "worktree_merge"
 TOOL_OVERRIDE = "worktree_merge_override"
@@ -353,8 +354,8 @@ def evidence(main: str, run_id: str, worktree: str, head: str, base: str,
     if st == "unreadable":
         return [unknown(f"the run's emitted spec ({run_id})")], fp, lines
     if st == "absent":
-        return [_block("no-spec", f"run {run_id} has no emitted spec — nothing says what done "
-                       f"means (/mokata:spec)")], fp, lines
+        return [_block("no-spec", localize_commands(f"run {run_id} has no emitted spec — nothing says what done "
+                       f"means (/mokata:spec)", main))], fp, lines
     crit = spec.get("criteria")
     if not isinstance(crit, list):
         return [unknown(f"the run's spec criteria ({run_id})")], fp, lines
@@ -447,9 +448,9 @@ def evidence(main: str, run_id: str, worktree: str, head: str, base: str,
         stamp = data.get("tree") if isinstance(data.get("tree"), dict) else None
         fp["verdict_ts"] = (ev or {}).get("ts")
         if stamp is None or stamp.get("error"):
-            out.append(_block("review-unstamped", "the review verdict does not say which commit it "
+            out.append(_block("review-unstamped", localize_commands("the review verdict does not say which commit it "
                               "reviewed — the evidence is UNKNOWN; re-run review at "
-                              f"{head[:12]} (/mokata:review)"))
+                              f"{head[:12]} (/mokata:review)", main)))
         elif not _same(str(stamp.get("worktree") or ""), worktree) or stamp.get("head") != head:
             out.append(_block("review-stale", f"the review was of {str(stamp.get('head'))[:12]} in "
                               f"{stamp.get('worktree')}, not {head[:12]} here — re-review"))
@@ -471,8 +472,8 @@ def _spec_leg(main: str, store: Any, run_id: str, worktree: str, head: str, base
               changes: List[Tuple[str, str, str, str]], fp: Dict[str, Any],
               lines: List[str]) -> List[Dict[str, str]]:
     """P3b — the spec legs' record (`merge_spec`), valid only for this worktree at `head` against
-    `base`, clean before and after, over this change and this spec corpus, inside the freshness
-    bound. `pass` is a card line; `absent` is NOT CHECKED (allowed, ruling F-Q1, and bound into the
+    `base`, clean before and after, over this change, this spec corpus and the decisions it read
+    (by content, any age; 0.0.29 lane G). `pass` is a card line; `absent` is NOT CHECKED (allowed, ruling F-Q1, and bound into the
     approval through `fp`); `block`, `degraded`, no record, unreadable and stale each block."""
     from . import merge_spec as MSL
     fp["spec_unchecked"] = []
@@ -495,7 +496,6 @@ def _spec_leg(main: str, store: Any, run_id: str, worktree: str, head: str, base
                        "spec leg")]
     at = rec.get("at") if isinstance(rec.get("at"), (int, float)) else 0.0
     cite = f"spec legs at {time.strftime('%Y-%m-%d %H:%M', time.localtime(at))}"
-    max_age = _review_max_age(main)
     stale = ""
     if not _same(str(rec.get("worktree") or ""), worktree):
         stale = f"they ran in another worktree ({rec.get('worktree')}), not this one"
@@ -511,9 +511,19 @@ def _spec_leg(main: str, store: Any, run_id: str, worktree: str, head: str, base
         stale = "they checked a different change than the one being merged"
     elif rec.get("corpus_fp") != MSL.corpus_fp(main):
         stale = "the saved spec corpus changed since they ran"
-    elif max_age > 0 and (time.time() - at) / 3600.0 > max_age:
-        stale = (f"they ran more than {max_age:g} h ago — decisions recorded since are not in "
-                 "them")
+    elif not isinstance(rec.get("decisions"), dict):
+        stale = "the record does not say which decisions they read"
+    if not stale:
+        # 0.0.29 lane G — the decisions they read, BY CONTENT, from the same worktree's store; no
+        # age bound (`review.verdict_max_age_hours` governs review only).
+        try:
+            moved = MSL.decisions_moved(rec["decisions"], MSL.decisions_fp(worktree))
+        except Exception as exc:  # noqa: BLE001 — UNKNOWN, which never passes
+            return [_block("unknown-evidence", f"the decision store could not be read "
+                           f"({type(exc).__name__}) — the spec legs' validity is UNKNOWN, which "
+                           "never passes (`mokata doctor`)", cite)]
+        if moved:
+            stale = f"{moved} decision(s) recorded, changed or retired since they ran"
     if stale:
         return [_block(SPEC_STALE, f"the spec legs are stale: {stale} — {redo}", cite)]
     fp["spec_leg_at"] = at
@@ -534,16 +544,6 @@ def _spec_leg(main: str, store: Any, run_id: str, worktree: str, head: str, base
         else:
             lines.append(f"{n} passed at {head[:12]}: {summary} ({cite})")
     return out
-
-
-def _review_max_age(main: str) -> float:
-    from .config import ConfigError, Surface
-    from .manifest import ManifestError
-    from .progress_events import REVIEW_VERDICT_MAX_AGE_HOURS, review_verdict_max_age_hours
-    try:
-        return review_verdict_max_age_hours(Surface.load(main))
-    except (ConfigError, ManifestError, OSError):
-        return REVIEW_VERDICT_MAX_AGE_HOURS   # an unloadable surface keeps the bound ON
 
 
 def _unchecked_lines(main: str, run_id: str, names: List[str]) -> List[str]:

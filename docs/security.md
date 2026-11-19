@@ -56,11 +56,39 @@ private.
   macOS volume that ignores ownership — mokata tells by what the volume does with a file's mode, not
   by its name): mokata still works there, and `mokata doctor` says "this volume has no access control: private files are
   as private as the disk". It never claims otherwise.
-- **`mokata doctor`** lists these files with their state. `mokata doctor --fix` re-protects one of
-  yours that became readable by others, keeping its exact bytes (your token and trust decision are
-  unchanged, so the gate keeps working). It never changes a file someone else owns.
+- **`mokata doctor`** lists these files with their state, and what `--fix` would change as
+  "staged" lines; it changes nothing. The MCP `doctor` tool and `/mokata:doctor` change nothing
+  either. `mokata doctor --fix` shows a plan first: every file it will rewrite, every process it
+  will stop and every decision it will reset. It acts only on a yes you type at an interactive
+  terminal, and records what it did (paths, never contents) in the audit ledger. **There is no
+  `--yes`.** With no terminal, it shows the plan, changes nothing, and tells you to run it in your
+  own terminal. This is the gate. An agent can remove any variable from its own environment, so
+  no environment check can be the gate. As an extra, earlier check, a shell that Claude Code
+  started for its agent (it sets `CLAUDECODE`) is refused before anyone is asked.
+  `mokata gate override` uses the same definition of an agent's shell. Out of scope: an agent that
+  deliberately gives itself a terminal (`script`, `expect`) and types the yes. A local gate cannot
+  tell that terminal from yours.
+  It acts only on the files the plan showed. If one of them changed after the plan was shown, it
+  changes nothing at all and asks you to run it again and read the new plan.
+  - A hook token others could read is never kept: `--fix` mints a new one and re-bakes it into
+    every settings file that carries it. A running IDE picks the new one up at once. Running
+    Claude Code sessions in the repo must be restarted to use it; until then their gated calls are
+    refused.
+  - A settings file others could write (or one on a volume with no access control) may hold hooks
+    someone else put there. The plan names each
+    one, and `--fix` keeps them only on a second, separate yes at a terminal for that file.
+  - An IDE whose record others could read is stopped. It is stopped only after its own ping, and
+    the operating system's socket table, prove which process it is. A pid read from a file is
+    never signalled. The IDE's embedded terminal sessions end with it.
+  - A workspace-trust record others could read or write is reset to not trusted. Re-trust in the
+    IDE.
+  - A file someone else owns is never changed, and nothing is rotated or adopted from it.
 - **Claude Code's worktree copy** of `settings.local.json` (`.worktreeinclude`) is made by Claude
-  Code, not mokata; `mokata doctor` lists each copy and `--fix` re-protects it.
+  Code, not mokata; `mokata doctor` lists each copy and `--fix` re-bakes it with the rest.
+- **Known limit: the IDE pairing token is in the launcher's command line.** On macOS and Linux
+  another account on the same machine can see a process's arguments (`ps`), so it can see the
+  pairing token while the IDE runs. On a shared machine, close the IDE when you are not using it.
+  A fix is planned for 0.0.30.
 - **Every durable write** to memory, code, config or a remote goes through **one** human gate: it
   is previewed, it needs explicit approval, it is secret-scanned and it is ledgered.
 
@@ -153,6 +181,39 @@ files that no command-line parser can name. The `secret-guard` matches `Bash` to
 *security* boundary holds there. Only the **Claude Code** harness declares the `hooks` capability;
 see [platform support](reference/platform-support.md).
 
+## Git hooks and git config
+
+A git hook runs as code the next time someone commits, merges or pushes, in their shell and with
+their credentials. Git's config names programs git runs (`core.hooksPath`, `core.fsmonitor`,
+filters, `core.sshCommand`). So an agent's write to either goes through the human gate
+(`git-control`):
+
+- a file in the repository's hooks directory (a linked worktree's hooks live in the main
+  checkout's git dir), and every directory `core.hooksPath` names;
+- this repository's git config files (`config`, `config.worktree`, and the same under
+  `modules/<name>/` and `worktrees/<name>/`), and a Bash `git config` that writes to them;
+- `git config --global` or `--system` setting `core.hooksPath`. The refusal names the file git
+  really writes (`$GIT_CONFIG_GLOBAL`, `~/.gitconfig` or the XDG `git/config`; `$GIT_CONFIG_SYSTEM`
+  or `/etc/gitconfig`), because that one setting decides which hooks every repository runs.
+
+A path is matched by name (case-folded on every OS) and by file identity, so a symlinked parent,
+a case alias or a hard link is the thing itself. The refusal records a proposal and says which
+command approves it: the human runs `mokata approve <id>` in their own terminal, which shows the
+write in full, and then the agent makes exactly the same call again. The approval is bound to the
+whole call, so approving one write never lets a different one through. mokata never writes a hook
+or a git config file itself.
+
+What this gate does not see:
+
+- A literal `cd`/`pushd` is followed, so a write after `cd .git/hooks` is judged inside the hooks directory; a computed one (`cd "$D"`, `cd -`, `popd`) is not, and only the run-state lane (in a pipeline session) refuses the write after it as unreadable.
+- A Bash command mokata cannot parse (variables, `eval`, heredoc-fed interpreters, `find -exec`, `xargs`) is not seen by this gate either.
+- `git config` is read through one level of `sh -c`; a `git config` after a `cd` into another repository is judged against this checkout's config (over-gating, never under).
+- Porcelain that writes config as a side effect (`git remote add`, `git push -u`, `git branch -u`) is not gated: it sets fixed keys, not arbitrary ones.
+- `.gitattributes`, `.git/info/attributes` and `.gitmodules` are not gated: they only select a filter/diff/merge driver, and a driver's program is defined in config, which is gated.
+- Of the global and system git config, only `core.hooksPath` is gated; other keys there (`core.sshCommand`, `core.fsmonitor`, `core.pager`) are not.
+- On a filesystem without file ids (FAT/exFAT, some SMB) the identity rule is off and only the name rule holds: a hard link to `.git/config` there is not seen.
+- The approval is SI.3's: whoever can run `mokata approve <id> --yes` in a shell (an agent with Bash, too) can approve. The gate makes the write visible and human-shaped; it does not make an agent with a shell unable to approve its own proposal.
+
 ## Approving from the IDE
 
 `mokata ide` shows each durable write an agent proposed as a card in the **waiting bar** under its
@@ -206,7 +267,9 @@ it is `mokata ide --trust` (TTY only, never inside a Claude Code session). It is
 ledger (`workspace_trust`) and in your own profile, never in the repo, so a checkout cannot ship its
 own trust and a clone at another path is another decision. Revoking (`--untrust`, or the window's
 Revoke) needs no code and stops every server — immediately, also when revoked from a terminal while
-the window runs (trust is re-read on every use). A `GET` never starts a server. The server map is
+the window runs (trust is re-read on every use). Revoking also stops serving what a server already
+answered: a kept answer fetched afterwards is asked afresh, and the code graph answers it.
+A `GET` never starts a server. The server map is
 mokata's built-ins plus **your own** `~/.mokata/lsp.json`; a repo's files never choose a server you
 configured, an argument, or `node` — but a repo **may** supply its own copy of a **built-in** server
 (its venv, its `node_modules`, a PATH entry you put inside it), which is what trusting it allows. The
@@ -214,6 +277,8 @@ prompt shows the exact command lines. Binaries are found in the project's venv, 
 `node_modules/<pkg>/package.json` `bin` (the realpath of `node_modules` inside the repo and the
 script's realpath inside `node_modules`, run as `node <script>`) or on
 your PATH (absolute entries only, never the current directory), **never installed** by mokata and
-never run through a shell — no `.cmd`/`.bat` is run or parsed. Each server runs in its own process
+never run through a shell — no `.cmd`/`.bat` is ever run. One shim is read as text, never run: a
+yarn v1 global install's `<name>.cmd`, followed to the script it names only when that script's
+realpath lies inside `yarn global dir` and that directory is owned by you (then `node <script>`). Each server runs in its own process
 group (POSIX) or Job Object (Windows), so stopping it — or its crash — stops everything it started.
 

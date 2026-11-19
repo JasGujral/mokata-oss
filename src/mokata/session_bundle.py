@@ -42,6 +42,7 @@ from .brainstorm import APPROACH_STATE_KEY, BRAINSTORM_PROGRESS_KEY, PIPELINE_PH
 from .engine.spec_gate import SPEC_STATE_KEY
 from .govern.resume import CHECKPOINT_PREFIX, PipelineCheckpoint
 from .errors import MokataError
+from .plugin_runtime import localize_commands
 
 BUNDLE_DIRNAME = "session-bundles"
 BUNDLE_KIND = "mokata-session-bundle"
@@ -600,8 +601,8 @@ class SessionPushPlan:
 
     def reason(self) -> str:
         if self.status == "empty":
-            return ("no session to package — nothing is in progress. Start with "
-                    "/mokata:brainstorm (a new problem) or /mokata:refine (existing code).")
+            return (localize_commands("no session to package — nothing is in progress. Start with "
+                    "/mokata:brainstorm (a new problem) or /mokata:refine (existing code).", None))
         if self.status == "new":
             return f"new session bundle '{self.tag}'"
         if self.status == "unchanged":
@@ -626,8 +627,13 @@ def plan_session_push(root: str, surface: Any, tag: str, run_id: Optional[str] =
     human gate stays at the SHARE boundary below. `requirements_only` (SS.S4 --requirements-only):
     build the cross-repo requirements-only bundle instead of the full session bundle."""
     if save_first:
-        from .session_save import save_session
-        save_session(surface)                    # UNGATED — re-affirm on-disk state atomically
+        from .session_save import failure_summary, save_session
+        saved = save_session(surface)            # UNGATED — re-affirm on-disk state atomically
+        if saved.failed:
+            # 0.0.29 G round 2 (M-2): never bundle a state the save could not affirm.
+            why = ", ".join(f"{k}: {failure_summary(e)}" for k, e in saved.failed.items())
+            raise SessionBundleError(f"the save before the push did not land ({why}) — nothing "
+                                     "was pushed; `mokata session save` says what failed")
     t = _transport(transport, root)
     path = t.location(tag)
     bundle = build_session_bundle(surface, run_id=run_id, author=author, now=now,

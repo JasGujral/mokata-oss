@@ -85,7 +85,9 @@ class TestTheFullExtra(unittest.TestCase):
         """`mokata[full]` = embeddings + graph-ts + code-review-graph + ide, spelled out (never a
         self-reference, which pip/pipx would re-resolve mokata for)."""
         ex = _extras()
-        want = set(ex["embeddings"]) | set(ex["graph-ts"]) | set(ex["ide"]) | {"code-review-graph"}
+        # 0.0.29 C1 (D15): code-review-graph is pinned to the release proven on mcp<2.
+        want = (set(ex["embeddings"]) | set(ex["graph-ts"]) | set(ex["ide"])
+                | {"code-review-graph==2.4.0"})
         self.assertEqual(want, set(ex["full"]))
         self.assertFalse(any(r.lower().startswith("mokata") for r in ex["full"]))
 
@@ -142,7 +144,9 @@ class TestInstallerSpecificLine(unittest.TestCase):
         with _Prefix() as p:
             plan = R.plan_extra_install("full", prefix=p, has_pip=True, executable="/v/bin/python",
                                         platform="linux", requires=REQUIRES)
-        self.assertEqual("/v/bin/python -m pip install 'model2vec>=0.3' code-review-graph",
+        # 0.0.29 C1 (D15): mokata's own mcp ceiling rides along, so pip cannot move it.
+        self.assertEqual("/v/bin/python -m pip install 'model2vec>=0.3' code-review-graph "
+                         "'mcp<2,>=1.30'",
                          plan.display)
         self.assertNotIn("mokata[", plan.display)
 
@@ -153,7 +157,8 @@ class TestInstallerSpecificLine(unittest.TestCase):
                                         executable=r"C:\Py 3\python.exe", platform="win32",
                                         requires=REQUIRES)
         self.assertNotIn("'", plan.display)
-        self.assertEqual(r'"C:\Py 3\python.exe" -m pip install "model2vec>=0.3"', plan.display)
+        self.assertEqual(r'"C:\Py 3\python.exe" -m pip install "model2vec>=0.3" "mcp<2,>=1.30"',
+                         plan.display)
         self.assertEqual("'mokata[full]'", R.quote_arg("mokata[full]", "linux"))
         self.assertEqual("uv", R.quote_arg("uv", "win32"))
 
@@ -180,9 +185,12 @@ class TestOutcomeCauses(unittest.TestCase):
         self.assertIn("tree-sitter-typescript", res.row("graph-ts").cause)
         table = A.render_outcome(res)
         self.assertEqual(1, table.count("LINE[full]"))
-        self.assertIn("then:  mokata setup claude --mode full", table)
-        self.assertEqual([], c["adopt"] + c["wire"], "nothing to wire for absent packages")
-        self.assertIn("PARTIALLY wired", A.render_quickstart("full", res))
+        # 0.0.29 C1 (#86): wired BEFORE the packages exist, so the install line is the one
+        # command left — no `then:` re-run, no "PARTIALLY wired".
+        self.assertNotIn("then:", table)
+        self.assertEqual(1, len(c["adopt"]), "code-review-graph pinned before it is installed")
+        self.assertEqual(1, len(c["wire"]), "embedder=auto written before model2vec is installed")
+        self.assertNotIn("PARTIALLY wired", A.render_quickstart("full", res))
 
     def test_a_blocked_model_download_says_why_and_still_wires_auto(self):
         from mokata.memory.embed import ModelUnavailable
@@ -267,7 +275,7 @@ class TestSetupNeverInstallsItself(unittest.TestCase):
                     redirect_stdout(io.StringIO()) as out:
                 self.assertEqual(0, S.cmd_setup(a))
         text = out.getvalue()
-        self.assertIn("full mode: optional dependencies", text)
+        self.assertRegex(text, r"full mode: (optional dependencies|wired — one command left)")
         self.assertNotIn("installing ", text)
 
     def test_setup_full_with_everything_missing_prints_the_line_and_spawns_nothing(self):
@@ -288,9 +296,10 @@ class TestSetupNeverInstallsItself(unittest.TestCase):
                     redirect_stdout(io.StringIO()) as out:
                 self.assertEqual(0, S.cmd_setup(a))
         text = out.getvalue()
-        self.assertEqual(1, text.count("one line installs everything full mode needs"), text)
-        self.assertIn(R.plan_extra_install("full").display, text)
-        self.assertIn("PARTIALLY wired", text)
+        self.assertEqual(1, text.count(R.plan_extra_install("full").display), text)
+        self.assertIn("one command left", text)
+        self.assertNotIn("then:", text)
+        self.assertNotIn("PARTIALLY wired", text)
 
 
     def test_setup_mode_resolves_profile_and_runs_detect_and_wire(self):
@@ -339,20 +348,23 @@ class TestDoctorSaysWhy(unittest.TestCase):
 class TestFirstSessionCommands(unittest.TestCase):
     def test_missing_packages_lead_with_the_install_line_and_never_join_with_ampersands(self):
         cmds = A.finish_commands_for("full", packages_missing=True, mokata_on_path=True,
-                                     install_line_fn=lambda e: f"LINE[{e}]")
+                                     unwired=True, install_line_fn=lambda e: f"LINE[{e}]")
         self.assertEqual(("LINE[full]", "mokata setup claude --mode full"), cmds)
+        wired = A.finish_commands_for("full", packages_missing=True, mokata_on_path=True,
+                                      unwired=False, install_line_fn=lambda e: f"LINE[{e}]")
+        self.assertEqual(("LINE[full]",), wired, "a wired repo: the install is the one command")
         line = A.FirstSessionCheck(mode="full", missing=("x",), commands=cmds).line
         self.assertNotIn("&&", line, "PowerShell 5.1 has no &&")
 
     def test_plugin_only_machine_gets_the_readme_line(self):
         cmds = A.finish_commands_for("full", packages_missing=True, mokata_on_path=False,
-                                     platform="win32")
+                                     unwired=True, platform="win32")
         self.assertEqual('uv tool install "mokata[full]"', cmds[0])
 
     def test_only_unwired_needs_only_setup(self):
         self.assertEqual(("mokata setup claude --mode memory",),
                          A.finish_commands_for("memory", packages_missing=False,
-                                               mokata_on_path=True))
+                                               mokata_on_path=True, unwired=True))
 
 
 if __name__ == "__main__":

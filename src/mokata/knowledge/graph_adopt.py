@@ -227,8 +227,9 @@ def offer_graph_at_setup(
 #: 0.0.25 I-01 — the STRUCTURAL CRG only. `code-review-graph[embeddings]` pulls
 #: sentence-transformers → torch (+ CUDA wheels on Linux): measured 5.8 GB vs 364 MB for the whole
 #: lean full set, 2026-10-18. CRG's own semantic index stays an explicit opt-in.
-CRG_SPEC = "code-review-graph"
-CRG_SEMANTIC_SPEC = "code-review-graph[embeddings]"
+#: 0.0.29 C1 (D15): the same pin as pyproject's `full` extra (`test_c_crg_holds_mcp` asserts it).
+CRG_SPEC = "code-review-graph==2.4.0"
+CRG_SEMANTIC_SPEC = CRG_SPEC.replace("code-review-graph", "code-review-graph[embeddings]", 1)
 
 
 def _crg_importable() -> bool:

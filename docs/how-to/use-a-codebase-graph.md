@@ -187,11 +187,12 @@ prints the languages it indexed and how many source files of other languages it 
 unsupported, so a TypeScript, JavaScript or Go repo never reads a "done" index as full coverage:
 
 ```text
-index: languages indexed: python; 40 file(s) skipped as unsupported (3 go, 37 javascript). Skipped files are counted only for javascript, go, rust, java; other languages are neither indexed nor counted
+index: languages indexed: python; 40 file(s) skipped as unsupported (3 go, 12 javascript, 25 typescript). Skipped files are counted only for go, java, javascript, rust, typescript; other languages are neither indexed nor counted
 ```
 
-The MCP `index_status` tool reports the same (`languages_indexed`, `unsupported_files`,
-`unsupported_by_language`).
+The MCP `index_status` tool reports the same (`languages_indexed`, `unsupported_files` with its
+`count` and the `counted_for_languages`, `unsupported_by_language`). `.pyi` stubs and upper-case
+`.PY` files are Python. Before a first `mokata index`, it says `not built` — never zeros.
 
 Run these whenever the code or the graph changes. Both operate over the **wired adapter when
 present and the grep floor when not** — same commands either way.

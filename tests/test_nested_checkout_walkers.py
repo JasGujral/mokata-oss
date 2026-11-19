@@ -47,6 +47,7 @@ import warnings
 from contextlib import redirect_stdout
 
 import _support
+import _hermetic_git  # noqa: E402  (0.0.29 D1: the one hermetic git door)
 from _support import is_checkout_boundary
 
 from mokata import repo_walk
@@ -270,8 +271,7 @@ class TestTheRealWorktreeShape(_Fixture):
         subprocess.run(
             ["git", *args], cwd=cwd, check=True,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull,
-                 "GIT_CONFIG_SYSTEM": os.devnull},
+            env=_hermetic_git.git_env(),
         )
 
     def test_a_real_git_worktree_at_a_non_dot_path_is_not_indexed(self):

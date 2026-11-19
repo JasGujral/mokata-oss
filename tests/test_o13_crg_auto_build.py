@@ -576,9 +576,13 @@ class TheIndexDirectoryIsNotSource(unittest.TestCase):
 
 
 # ======================================================================= real code-review-graph
-def _real_crg():
-    from mokata.detect import find_command
-    return find_command("code-review-graph")
+# 0.0.29 D4 `REAL-CRG-CLASSES-NEVER-RUN`: gated on the PACKAGE, not on `find_command` — which
+# honours the hermetic `MOKATA_CRG=off` and answered None in every run, so this class ran nowhere.
+# `real-crg.yml` runs it live (weekly) with `MOKATA_REQUIRE_REAL_CRG=1`, where a skip is a red.
+import importlib.util  # noqa: E402
+
+_HAS_CRG = importlib.util.find_spec("code_review_graph") is not None
+_REQUIRE_REAL_CRG = os.environ.get("MOKATA_REQUIRE_REAL_CRG") == "1"
 
 
 def _floor_callers(root, name):
@@ -586,11 +590,13 @@ def _floor_callers(root, name):
     return {r.symbol for r in AstBackend(root=root).query("callers", name).references}
 
 
-@unittest.skipUnless(_real_crg(), "code-review-graph is not installed in this environment")
+@unittest.skipUnless(_HAS_CRG or _REQUIRE_REAL_CRG,
+                     "code-review-graph is not installed in this environment")
 class ARealBuildOnATinyRepo(unittest.TestCase):
     """`/home/claude/venv` has code-review-graph 2.3.9: one real build, one real first-use build."""
 
     def setUp(self):
+        _support.real_crg(self)                    # the env's real tool, for THIS test only
         self.root = _repo(prefix="o13-real-")
         self.addCleanup(shutil.rmtree, self.root, True)
         # A name that is ONE node to the graph (`hub` is also the module `hub.py`: ambiguous).

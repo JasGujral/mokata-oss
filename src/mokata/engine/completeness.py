@@ -16,6 +16,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from ..brainstorm import load_approved_approach
 from ..pipeline import PHASE_GATES
+from ..plugin_runtime import localize_commands
 from ..refine import load_approved_refinements
 from .acmapper import MapResult, map_acceptance_criteria
 from .spec import Spec, TestRef
@@ -118,7 +119,7 @@ class GateResult:
             lines.append(f"  approved refinements: {self.refinements}")
         else:
             # The SHARED constant, not a second copy of it (SPEC-STANDALONE-SILENT).
-            lines.append(f"  {STANDALONE_NOTE}")
+            lines.append(f"  {localize_commands(STANDALONE_NOTE)}")
         if not self.passed:
             # Stage 54c — every block names the single next action that clears it.
             from ..legibility import unblock_hint
@@ -262,7 +263,7 @@ def standalone_note(result: GateResult) -> str:
 
     Pure, total and read-only: it reads two booleans off the result and returns a module constant.
     """
-    return "" if not result.standalone else STANDALONE_NOTE
+    return "" if not result.standalone else localize_commands(STANDALONE_NOTE)
 
 
 # Wire the executable check to the existing pipeline phase (single pipeline, no parallel).

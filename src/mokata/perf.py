@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import statistics
+import sys
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
@@ -59,28 +60,197 @@ HOOK_KINDS: Dict[str, str] = {
     "statusline": "context",
 }
 
-#: The paths MEASURED ABOVE their target after the 0.0.25 Lane HB work, keyed `<sub>@<fixture>`
-#: (`outside` a mokata repo / a mokata `repo` with no run / a session `bound` to a run). Each value
-#: is a CEILING (the measurement × ~1.5 headroom), NOT a target and NOT a claim of compliance — the
-#: gap is named in the HB report and owed. Everything not listed here is held to its kind's target.
-HOOK_BUDGET_GAPS_MS: Dict[str, float] = {
-    # Measured normalised p95 (the worse of two runs, 2026-10-19), ceiling ≈ ×1.5.
-    # (0.0.26 O3: the deferred OBSERVE ceilings are gone — the stdlib emitter holds dirty-track, stop,
-    # session-end and pre-compact to doc 109's 50 ms target; measured before/after in the O3 report.)
-    # run-bind stays SYNCHRONOUS (coordinator ruling on O3: the gate reads its binding on the next
-    # tool call). A session_save that registered nothing is answered on the stdlib (≤ 50); a REAL
-    # registration — the timed payload — binds inline through `run_intent.bind_from_hook`, whose
-    # imports (dataclasses in degrade/tdd_state/repo_identity/run_resolver, json, typing) are the gap.
-    "run-bind@repo": 130.0,         # measured 88 normalised (HEAD 112), 2026-10-21
-    "run-bind@bound": 120.0,        # measured 77 normalised (HEAD 94)
-    # context hooks (U14: 150): briefing, recall pack, badge — still engine-bound, gaps owed
-    "session-start@repo": 410.0,    # measured 272
-    "session-start@bound": 400.0,   # measured 269
-    "user-prompt-submit@repo": 260.0,   # measured 174
-    "user-prompt-submit@bound": 330.0,  # measured 221
-    "statusline@repo": 200.0,       # measured 128 — under 150, but too close to hold as a target
-    "statusline@bound": 220.0,      # measured 147–152
+#: 0.0.29 F (W5-HOOK-BUDGET-MARGIN-THIN, ALLOWED-REDS-A12-A9-O12-O12B) — ONE MEASURED CEILING per
+#: wired hook per fixture PER OS (`sys.platform`), keyed `<sub>@<fixture>`: `outside` a mokata repo,
+#: a mokata `repo` with no run, a session `bound` to a run; and SessionStart at the progress log's
+#: 8 MiB bound (`<fixture>-8mib-miss` — a fresh session and no stored next-step answer, the path real
+#: starts take — and `<fixture>-8mib-hit`). Re-derived per OS at the 0.0.29 wave-2 bookend (ruled by
+#: Jas 2026-11-16) from the worst NORMALISED p95 measured on that OS — darwin: a Mac and the mirror's
+#: macOS runner; linux and win32: the mirror's runners, both jsonschema legs:
+#:   * darwin: `ceiling_from(worst)` — 1.5x, up to 5 ms, never above the kind's target unless the key
+#:     is an owned gap (`HOOK_BUDGET_OWNED_GAPS`). A 2x regression reds.
+#:   * linux / win32: `ceiling_off_darwin(worst, darwin)` — 1.5x up to 5 ms, never below the darwin
+#:     ceiling x `OFF_DARWIN_BUFFER`. A 3x regression reds.
+#: The measurements are committed (`tests/data/hook_budget_measured.json`, with the runs they came
+#: from); a test re-derives every value here from them and reds on a typed or raised one (never edit
+#: by hand — re-measure: `python tests/test_f_hook_ceilings.py --from <hb log>...`).
+HOOK_BUDGET_CEILINGS_MS: Dict[str, Dict[str, float]] = {
+    "darwin": {
+        "dirty-track@bound": 50.0,
+        "dirty-track@outside": 50.0,
+        "dirty-track@repo": 45.0,
+        "gate-guard@bound": 115.0,
+        "gate-guard@outside": 100.0,
+        "gate-guard@repo": 95.0,
+        "pre-compact@bound": 50.0,
+        "pre-compact@outside": 45.0,
+        "pre-compact@repo": 50.0,
+        "run-bind@bound": 50.0,
+        "run-bind@outside": 45.0,
+        "run-bind@repo": 50.0,
+        "secret-guard@bound": 80.0,
+        "secret-guard@outside": 85.0,
+        "secret-guard@repo": 95.0,
+        "session-end@bound": 50.0,
+        "session-end@outside": 45.0,
+        "session-end@repo": 50.0,
+        "session-start@bound": 145.0,
+        "session-start@bound-8mib-hit": 290.0,
+        "session-start@bound-8mib-miss": 365.0,
+        "session-start@outside": 85.0,
+        "session-start@repo": 130.0,
+        "session-start@repo-8mib-hit": 125.0,
+        "session-start@repo-8mib-miss": 215.0,
+        "statusline@bound": 120.0,
+        "statusline@outside": 70.0,
+        "statusline@repo": 115.0,
+        "stop-gate@bound": 85.0,
+        "stop-gate@outside": 45.0,
+        "stop-gate@repo": 70.0,
+        "stop@bound": 45.0,
+        "stop@outside": 45.0,
+        "stop@repo": 45.0,
+        "subagent-start@bound": 70.0,
+        "subagent-start@outside": 55.0,
+        "subagent-start@repo": 80.0,
+        "subagent-stop@bound": 75.0,
+        "subagent-stop@outside": 50.0,
+        "subagent-stop@repo": 70.0,
+        "user-prompt-submit@bound": 150.0,
+        "user-prompt-submit@outside": 70.0,
+        "user-prompt-submit@repo": 150.0,
+    },
+    "linux": {
+        "dirty-track@bound": 100.0,
+        "dirty-track@outside": 100.0,
+        "dirty-track@repo": 90.0,
+        "gate-guard@bound": 230.0,
+        "gate-guard@outside": 200.0,
+        "gate-guard@repo": 190.0,
+        "pre-compact@bound": 100.0,
+        "pre-compact@outside": 90.0,
+        "pre-compact@repo": 100.0,
+        "run-bind@bound": 100.0,
+        "run-bind@outside": 90.0,
+        "run-bind@repo": 100.0,
+        "secret-guard@bound": 160.0,
+        "secret-guard@outside": 170.0,
+        "secret-guard@repo": 190.0,
+        "session-end@bound": 100.0,
+        "session-end@outside": 90.0,
+        "session-end@repo": 100.0,
+        "session-start@bound": 290.0,
+        "session-start@bound-8mib-hit": 580.0,
+        "session-start@bound-8mib-miss": 730.0,
+        "session-start@outside": 170.0,
+        "session-start@repo": 260.0,
+        "session-start@repo-8mib-hit": 250.0,
+        "session-start@repo-8mib-miss": 430.0,
+        "statusline@bound": 240.0,
+        "statusline@outside": 140.0,
+        "statusline@repo": 230.0,
+        "stop-gate@bound": 170.0,
+        "stop-gate@outside": 90.0,
+        "stop-gate@repo": 140.0,
+        "stop@bound": 90.0,
+        "stop@outside": 90.0,
+        "stop@repo": 90.0,
+        "subagent-start@bound": 140.0,
+        "subagent-start@outside": 110.0,
+        "subagent-start@repo": 160.0,
+        "subagent-stop@bound": 150.0,
+        "subagent-stop@outside": 100.0,
+        "subagent-stop@repo": 140.0,
+        "user-prompt-submit@bound": 300.0,
+        "user-prompt-submit@outside": 140.0,
+        "user-prompt-submit@repo": 300.0,
+    },
+    "win32": {
+        "dirty-track@bound": 100.0,
+        "dirty-track@outside": 100.0,
+        "dirty-track@repo": 90.0,
+        "gate-guard@bound": 230.0,
+        "gate-guard@outside": 200.0,
+        "gate-guard@repo": 190.0,
+        "pre-compact@bound": 105.0,
+        "pre-compact@outside": 90.0,
+        "pre-compact@repo": 100.0,
+        "run-bind@bound": 115.0,
+        "run-bind@outside": 90.0,
+        "run-bind@repo": 115.0,
+        "secret-guard@bound": 160.0,
+        "secret-guard@outside": 170.0,
+        "secret-guard@repo": 190.0,
+        "session-end@bound": 100.0,
+        "session-end@outside": 90.0,
+        "session-end@repo": 100.0,
+        "session-start@bound": 290.0,
+        "session-start@bound-8mib-hit": 580.0,
+        "session-start@bound-8mib-miss": 730.0,
+        "session-start@outside": 170.0,
+        "session-start@repo": 260.0,
+        "session-start@repo-8mib-hit": 250.0,
+        "session-start@repo-8mib-miss": 430.0,
+        "statusline@bound": 240.0,
+        "statusline@outside": 140.0,
+        "statusline@repo": 230.0,
+        "stop-gate@bound": 170.0,
+        "stop-gate@outside": 90.0,
+        "stop-gate@repo": 140.0,
+        "stop@bound": 95.0,
+        "stop@outside": 90.0,
+        "stop@repo": 90.0,
+        "subagent-start@bound": 140.0,
+        "subagent-start@outside": 110.0,
+        "subagent-start@repo": 160.0,
+        "subagent-stop@bound": 150.0,
+        "subagent-stop@outside": 100.0,
+        "subagent-stop@repo": 140.0,
+        "user-prompt-submit@bound": 300.0,
+        "user-prompt-submit@outside": 140.0,
+        "user-prompt-submit@repo": 300.0,
+    },
 }
+
+#: The keys whose ceiling may exceed the kind's target — each owned, with its doc 84 row. Nothing
+#: else may: a ceiling above its target with no owner is a typed number wearing a measurement.
+HOOK_BUDGET_OWNED_GAPS: Dict[str, str] = {
+    "session-start@bound-8mib-miss": "SESSIONSTART-DERIVE-AT-LOG-BOUND (doc 84) — the next-step "
+                                     "derivation walks the 8 MiB log on a miss; owner: hints",
+    "session-start@repo-8mib-miss": "SESSIONSTART-DERIVE-AT-LOG-BOUND (doc 84) — owner: hints",
+    "session-start@bound-8mib-hit": "SESSIONSTART-REANCHOR-AT-LOG-BOUND (doc 84) — `/compact` "
+                                    "re-anchors from the 8 MiB log even when the next step is a "
+                                    "stored hit; owner: reanchor",
+}
+
+#: The ceiling rule's two numbers (the 0.0.25 HB rule, re-applied in 0.0.29 F).
+CEILING_HEADROOM = 1.5
+CEILING_STEP_MS = 5.0
+
+#: o12 and the SessionStart 8 MiB cells assert at this fraction of their bound, not at it: a cell
+#: that passes at 399 of 400 is a cell that flakes on the runners (F-Q5).
+MARGIN = 0.9
+
+#: The first hook after an install (or a new plugin version) compiles mokata's modules into the
+#: empty bytecode cache — measured 242 ms on the prompt hook (warm: 107). Graded, not unbounded
+#: (F-Q3): 4× the measured cold cost, so a hook that starts compiling the package reds.
+FIRST_RUN_BUDGET_MS = 1000.0
+
+
+def ceiling_from(worst_p95_ms: float, kind_target_ms: float, owned: bool = False) -> float:
+    """The ceiling a measured worst normalised p95 derives: 1.5×, up to the next 5 ms, capped at the
+    kind's target unless `owned` (an owned gap)."""
+    import math
+    raw = math.ceil(worst_p95_ms * CEILING_HEADROOM / CEILING_STEP_MS) * CEILING_STEP_MS
+    return float(raw if owned else min(raw, kind_target_ms))
+
+
+def margin_relax() -> float:
+    """The relax applied to the hook-budget cells: ALWAYS 1.0 (0.0.29 F, HOOK-BUDGET-CI-RELAXED).
+    Each cell divides by the bare interpreter measured interleaved with it
+    (`interpreter_factor`), which is what runner noise moves; a 4× CI multiplier on top let the
+    8 MiB cell pass at 1,476 ms. A probe leg that reds records its factor and a doc 84 row."""
+    return 1.0
 
 #: `python -c pass` p50 wall on the Linux bed the targets were measured on, idle (0.0.25 Lane HB:
 #: 15.5–16.1 ms). The budget test measures the same bare interpreter in the same minute and scales by
@@ -96,13 +266,42 @@ HOOK_BUDGET_P95_MS: Dict[str, float] = {
 }
 
 
+#: The floor off darwin (ruled by Jas 2026-11-16): a linux or win32 ceiling is never below the darwin
+#: ceiling times this, whatever that OS measured; and a platform with no measured column is graded
+#: at exactly darwin x this. One named number — no skip, no relax.
+OFF_DARWIN_BUFFER = 2.0
+
+
+def ceiling_off_darwin(worst_p95_ms: float, darwin_ceiling_ms: float) -> float:
+    """The ceiling a measured worst normalised p95 derives on a measured OS other than darwin: 1.5x,
+    up to the next 5 ms, never below the darwin ceiling x `OFF_DARWIN_BUFFER`. No target cap there:
+    the buffer already puts every off-darwin ceiling past it (the ruling, not a measurement)."""
+    import math
+    raw = math.ceil(worst_p95_ms * CEILING_HEADROOM / CEILING_STEP_MS) * CEILING_STEP_MS
+    return float(max(raw, darwin_ceiling_ms * OFF_DARWIN_BUFFER))
+
+
 def hook_budget_ms(sub: str, fixture: str) -> "tuple":
-    """`(ms, is_target)` for one wired hook on one fixture: the named gap ceiling where one exists,
-    else its kind's doc 109 target."""
-    gap = HOOK_BUDGET_GAPS_MS.get(f"{sub}@{fixture}")
-    if gap is not None:
-        return gap, False
-    return HOOK_BUDGET_TARGETS_MS[HOOK_KINDS[sub]], True
+    """`(ms, is_target)` for one wired hook on one fixture on THIS OS: its measured ceiling in this
+    platform's column of `HOOK_BUDGET_CEILINGS_MS`; a platform with no column (or a key missing from
+    it) is graded at the darwin ceiling x `OFF_DARWIN_BUFFER`. `is_target` True only when that
+    ceiling IS the kind's target. A key with no darwin measurement falls to the target (a test reds
+    on any key left unmeasured)."""
+    target = HOOK_BUDGET_TARGETS_MS[HOOK_KINDS[sub]]
+    key = f"{sub}@{fixture}"
+    darwin = HOOK_BUDGET_CEILINGS_MS["darwin"].get(key, target)
+    if sys.platform == "darwin":
+        ceiling = darwin
+    else:
+        ceiling = HOOK_BUDGET_CEILINGS_MS.get(sys.platform, {}).get(key,
+                                                                    darwin * OFF_DARWIN_BUFFER)
+    return ceiling, ceiling == target
+
+
+def hook_budget_holds(sub: str, fixture: str, p95_norm_ms: float) -> bool:
+    """The hook-budget gate the hb cells grade with: the normalised p95 is within this OS's
+    ceiling (`hook_budget_ms`) times `margin_relax()` (always 1.0). No platform is exempt."""
+    return p95_norm_ms <= hook_budget_ms(sub, fixture)[0] * margin_relax()
 
 
 def interpreter_factor(floor_p50_ms: float) -> float:

@@ -54,7 +54,8 @@ def detect_install_method(home: Optional[str] = None,
         root = None
     if root:
         src = os.path.abspath(os.path.join(root, "src"))
-        if pkg == os.path.join(src, "mokata") or pkg.startswith(src + os.sep):
+        from .fs_identity import require_inside
+        if require_inside(pkg, src):                     # ALLOW side (a label): identity (0.0.29 H3)
             return "plugin"
     # SELF-PROTECT (0.0.16 stage 3): this WAS the codebase's only site-/dist-packages predicate,
     # inline and cosmetic. It is now single-sourced in `selfprotect.in_installed_tree`, where it is

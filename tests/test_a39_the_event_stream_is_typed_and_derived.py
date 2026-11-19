@@ -971,6 +971,8 @@ _PRINT_REGISTER = {
     "degrade.py": "the ONE stderr sink for every classed degrade notice (D5)",
     "deprecation.py": "the ONE stderr sink for deprecation/removal notices",
     "notify.py": "the ONE stderr sink for attention notifications",
+    "ide/bus.py": "0.0.29 H4 — `preferred_port`'s one stderr line naming a REFUSED bridge record "
+                  "and `mokata doctor --fix` as the window opens (absent is not refused)",
     "ide/server.py": "`python -m mokata.ide.server`'s install line on stderr — a process entry point (0.0.22 E2)",
     "memory/_sqlite.py": "the WAL-declined notice — once per process, loud by design",
     "session_flow.py": "note_persist_failure's loud, secret-safe warning (D5 added it)",

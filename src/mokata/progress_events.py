@@ -41,6 +41,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .errors import MokataError
+from .plugin_runtime import localize_commands
 
 # The log lives beside the pipeline run-state (StateStore.root =
 # .mokata/temp_local/state/), so a reader that already holds `surface.state` finds it
@@ -1152,11 +1153,11 @@ def review_read_error_unblock(path: str) -> str:
     """The remedy, which is the whole point of distinguishing this answer: repair the LOG. One
     wording for all three fault kinds — the operator's next action is the same in each, and moving
     the log aside (never deleting it) keeps the damaged evidence available to diagnose."""
-    return (f"repair the log, not the review: inspect `{path}` (a torn LAST line is the usual "
+    return (localize_commands(f"repair the log, not the review: inspect `{path}` (a torn LAST line is the usual "
             f"casualty) and fix its permissions or remove the damaged line(s), then re-read "
             f"`mokata progress review-status`. If it is beyond repair, move it aside "
             f"(`mv {path} {path}.corrupt`) and re-run /mokata:review to record a fresh verdict — "
-            f"re-running review alone will NOT fix a log mokata cannot read")
+            f"re-running review alone will NOT fix a log mokata cannot read", None))
 
 
 def _read_fault_for(surface: Any) -> Optional[str]:
@@ -1220,8 +1221,8 @@ def _plan_ship_block(surface: Any, run_id: str, verdict: Dict[str, Any],
     if not att.ok:
         return ReviewGate(present=True, passed=False, independent=independent, blocks=True,
                           message=f"ship refused — {att.reason}",
-                          unblock="re-approve the plan (/mokata:spec, or `spec_amend`), then "
-                                  "re-run /mokata:review against it")
+                          unblock=localize_commands("re-approve the plan (/mokata:spec, or `spec_amend`), then "
+                                  "re-run /mokata:review against it", surface.root))
     reviewed = verdict.get("plan_hash")
     if reviewed != att.approved:
         what = (f"a different plan ({reviewed[:19]}…)" if isinstance(reviewed, str) and reviewed
@@ -1229,7 +1230,7 @@ def _plan_ship_block(surface: Any, run_id: str, verdict: Dict[str, Any],
         return ReviewGate(present=True, passed=False, independent=independent, blocks=True,
                           message=f"the passing review was of {what}, not the approved plan "
                                   f"({att.approved[:19]}…)",
-                          unblock="re-run /mokata:review against the approved plan")
+                          unblock=localize_commands("re-run /mokata:review against the approved plan", surface.root))
     return None
 
 
@@ -1262,9 +1263,9 @@ def ship_review_gate(surface: Any, run_id: Optional[str] = None) -> ReviewGate:
             present=False, passed=False, independent=False, blocks=True,
             message="review evidence has no run to attribute it to — mokata will not read "
                     "another run's verdict",
-            unblock="name the run: `mokata progress review-status --run <run id>` "
+            unblock=localize_commands("name the run: `mokata progress review-status --run <run id>` "
                     "(`mokata sessions` lists them), recording the verdict under the same "
-                    "`--run`; or start a tracked run with /mokata:brainstorm")
+                    "`--run`; or start a tracked run with /mokata:brainstorm", surface.root))
     event = latest_review_verdict_event(surface, run_id=run_id)
     v = event.get("data") if event else None
     if not isinstance(v, dict):
@@ -1283,14 +1284,14 @@ def ship_review_gate(surface: Any, run_id: Optional[str] = None) -> ReviewGate:
                               message=review_read_error_message(fault, path),
                               unblock=review_read_error_unblock(path))
         return ReviewGate(present=False, passed=False, independent=False, blocks=True,
-                          message="review hasn't run — run /mokata:review first",
-                          unblock="run /mokata:review first")
+                          message=localize_commands("review hasn't run — run /mokata:review first", surface.root),
+                          unblock=localize_commands("run /mokata:review first", surface.root))
     passed = bool(v.get("passed"))
     independent = bool(v.get("independent"))
     if not passed:
         return ReviewGate(present=True, passed=False, independent=independent, blocks=True,
                           message="review failed — findings are unresolved",
-                          unblock="run /mokata:review and address its findings")
+                          unblock=localize_commands("run /mokata:review and address its findings", surface.root))
     # REVIEW-FIX.R2 — a PASS that is too old is not evidence about the code being shipped. Checked
     # AFTER the failed branch so a stale FAIL keeps its more specific message (both remedies are the
     # same command). `passed=False` here is deliberate: the field is what the GATE concluded, and a
@@ -1302,10 +1303,10 @@ def ship_review_gate(surface: Any, run_id: Optional[str] = None) -> ReviewGate:
         when = ts if isinstance(ts, str) and ts else "at an unknown time"
         return ReviewGate(
             present=True, passed=False, independent=independent, blocks=True,
-            message=f"review evidence is stale (recorded {when}); re-run /mokata:review",
-            unblock=f"run /mokata:review again — the verdict is older than the "
+            message=localize_commands(f"review evidence is stale (recorded {when}); re-run /mokata:review", surface.root),
+            unblock=localize_commands(f"run /mokata:review again — the verdict is older than the "
                     f"{bound:g}h freshness bound (`mokata config set "
-                    f"settings.review.verdict_max_age_hours <hours>` changes it; `off` disables)")
+                    f"settings.review.verdict_max_age_hours <hours>` changes it; `off` disables)", surface.root))
     # R2 (0.0.26) — ship attests the plan: the spec on record must still hash to its approved
     # value, and the passing review must have been OF that plan (its stamped hash). Both BLOCK;
     # the remedies differ (re-approve the plan / re-run review against it).

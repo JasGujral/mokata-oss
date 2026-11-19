@@ -26,6 +26,7 @@ from .registry import _mokata_dir, _surface, _tool
 from .response_format import LazyRender, apply_response_format
 from .tool_annotations import Field
 from .validation import ValidationError, validate_comma_list, validate_enum
+from ..plugin_runtime import localize_commands
 
 # MCP-R.D1d — the allowed `kind` values of the `query` tool, grounded on the router it feeds:
 # `knowledge.layer.run_query` handles `semantic` itself and delegates every other kind to the
@@ -150,8 +151,8 @@ Errors: refused (invalid_input) for a `memory_type` outside persistent, decision
                    "subject": i.subject, "value": i.value}
                   for i in items]}, "items"),
         "items", (f"no active memory with subject '{subject}'." if subject
-                  else "no active memory yet — capture some with `/mokata:onboard` or the "
-                  "`remember` tool.")))
+                  else localize_commands("no active memory yet — capture some with `/mokata:onboard` or the "
+                  "`remember` tool.", _surface(path).root))))
 
 
 def _empty_says(resp: Dict[str, Any], list_key: str, message: str) -> Dict[str, Any]:
@@ -550,11 +551,11 @@ Errors: refused (invalid_input) for an unknown `response_format`.
 def index_status(path: _Path = ".") -> Dict[str, Any]:
     """Report the code index's freshness: files tracked and what changed since the last build.
 
-Read-only: nothing is rebuilt or written (`mokata index` rebuilds). Names the graph backend, the
-languages indexed, and how many source files were skipped as unsupported (Python only).
+Read-only: nothing is rebuilt or written (`mokata index` rebuilds).
 
-Returns: `built`, `tracked`, `added`, `removed`, `changed`, `coverage`, `backend`; before a first
-build, `built: false` with a `note`.
+Returns: `built`, `tracked`, `added`, `removed`, `changed`, `coverage`, `backend`,
+`languages_indexed`, `unsupported_files` (`count`, `counted_for_languages`); before a first
+build, `built: false`, `coverage` and a `note` (no counts).
 Errors: fails if `path` is not a mokata repo.
     """
     from ..knowledge import KnowledgeIndex, KnowledgeLayer
@@ -564,7 +565,7 @@ Errors: fails if `path` is not a mokata repo.
     backend = {"uses_graph": layer.uses_graph, "backend": layer.backend_name}
     data = surface.state.read("knowledge_index")
     if data is None:
-        return {"built": False, "tracked": 0,
+        return {"built": False, "coverage": "index: not built — run `mokata index`",
                 "note": "no index yet — run `mokata index` to build it (a durable write). "
                         "The index covers Python files only; other languages are not indexed.",
                 **backend}
@@ -574,9 +575,9 @@ Errors: fails if `path` is not a mokata repo.
     return {"built": True, "tracked": len(idx.entries), "added": len(d["added"]),
             "removed": len(d["removed"]), "changed": len(d["changed"]),
             "languages_indexed": sorted(cov["indexed"]),
-            "unsupported_files": cov["unsupported_total"],
+            "unsupported_files": {"count": cov["unsupported_total"],
+                                  "counted_for_languages": cov["counted"]},
             "unsupported_by_language": cov["unsupported"],
-            "unsupported_counted_languages": cov["counted"],
             "coverage": coverage_line(cov), **backend}
 
 
@@ -632,22 +633,22 @@ Errors: refused (invalid_input) when `files` or `symbols` has no usable entries 
             "comment_body": res.comment_body()}
 
 
-# Stage 34B. MCP-R.D0 R7 — the subprocess is capped far below its 600s terminal bound so a read tool
-# never blocks stdio for ten minutes; the CLI path keeps the longer default. P22 response_format.
+# Stage 34B; 0.0.29 lane G (#82-1b) — no wall clock: the reply budget answers `running`, the suite runs on.
 @_tool("baseline", "read")
 def baseline(path: _Path = ".",
-             cmd: Annotated[str, Field(description="Test command to run instead of the configured "
-                                       "one (default: the project's own).")] = "",
+             cmd: Annotated[str, Field(description="Test command to run (default: the "
+                                       "project's own).")] = "",
              response_format: _Format = "concise") -> Dict[str, Any]:
     """Run the test suite once and report green or red, so a later failure is attributable to your change.
 
-Runs the existing suite and writes nothing. If no test command is known it says so; mokata never
-guesses a framework. `concise` answers with `ok`; `detailed` adds the rendered `report`.
+Writes nothing; never guesses a framework. Past the reply budget it answers `running` and runs on
+until exit or `settings.baseline.silence_seconds` of silence; re-call with the same arguments.
+`detailed` adds `report`.
 
 Returns: `ok` and, if detailed, `report`.
 Errors: refused (invalid_input) for an unknown `response_format`.
     """
-    from ..baseline import baseline_command, baseline_status, mcp_test_timeout
+    from ..baseline import baseline_command, baseline_status, silence_seconds
     from ..config import ConfigError
     manifest = None
     if Surface.is_initialized(path):
@@ -659,12 +660,11 @@ Errors: refused (invalid_input) for an unknown `response_format`.
             # back to the explicit `cmd` override or reports that no test command is known — mokata
             # never guesses a framework, so the degrade is visible in the baseline report itself.
             manifest = None
-    # MCP-R.D0 · R7 — cap the subprocess far below its 600s terminal bound: on the MCP surface a
-    # read tool must never block stdio for 10 minutes of silence (the `_serve` wall-clock backstops
-    # it too). The CLI/`mokata baseline` path keeps the longer default.
+    # 0.0.29 lane G — no clock on the run (the reply budget is the server's, not the suite's);
+    # it ends on silence (the repo's knob), the derived spool bound, a cancel, or exit.
     from ..project_env import settings_python
     result = baseline_status(baseline_command(manifest, override=cmd or None), cwd=path,
-                             timeout=mcp_test_timeout(manifest),
+                             silence=silence_seconds(manifest),
                              settings_python=settings_python(manifest))
     return apply_response_format(response_format,
                                  {"ok": result.ok, "report": LazyRender(result.render)})
@@ -687,7 +687,7 @@ Errors: none expected; a negative `limit` or `offset` is clamped.
                                   "complete": s.complete, "active": s.active,
                                   "resume_phase": s.resume_phase, "last_passed": s.last_passed}
                                  for s in rows], key="sessions", limit=limit, offset=offset),
-                       "sessions", "no runs in this repo yet — `/mokata:brainstorm` starts one.")
+                       "sessions", localize_commands("no runs in this repo yet — `/mokata:brainstorm` starts one.", _surface(path).root))
 
 
 # MS.S2 — each Claude Code window is its own MCP process; the caller's own window self-registers
@@ -760,6 +760,13 @@ Errors: none expected.
 # SS.S0 — UNGATED by design (a local save is the user's own transient state, P2-exempt; the human gate
 # sits at the SHARE boundary, `session_push`). Writes what the resume stack reads: `brainstorm_progress`
 # (+ `approved_approach`) + the run checkpoint, atomically under this window's MS.S2 scope.
+def _save_loss_message(res: Any) -> str:
+    """0.0.29 lane G (#83) — what a `session_save` that did not fully land says (the shared
+    `session_save.loss_message`, with this tool's own retry road)."""
+    from ..session_save import loss_message
+    return loss_message(res, "Re-call `session_save` with the same session")
+
+
 # SS.S1 — routes through `SessionFlow` (the one production seam); degrade-clean, a persist failure warns
 # once and returns a degraded marker. SS.S2 — `turn=True` is a per-turn brainstorm-only autosave via
 # `SessionFlow.turn()`; `passed`/`run_id` are ignored on that path. RUN-REG — `register=True` registers
@@ -781,11 +788,12 @@ def session_save(path: _Path = ".",
                  ) -> Dict[str, Any]:
     """Snapshot this session's in-flight brainstorm and run state so an interrupted session can be resumed.
 
-Saves locally with no approval: it is your own transient state; sharing is the gated `session_push`.
-Call it at each milestone, and with `turn=true` after each answered question. `register=true` starts
-tracking the run. A persist failure returns a degraded marker instead of raising.
+Saves locally with no approval (your own transient state); sharing is the gated `session_push`.
+Call it at each milestone, and with `turn=true` after each answer. `register=true` starts
+tracking the run. A write that did not land answers `ok: false`.
 
-Returns: the keys and counts saved (never the content), `registered` when set, or `degraded: true`.
+Returns: keys and counts saved (never content), `registered` when set; on a loss `failed`,
+`approval_persisted`, the remedy.
 Errors: refused (invalid_input) for arguments of the wrong type.
     """
     from ..session_flow import SessionFlow
@@ -804,28 +812,24 @@ Errors: refused (invalid_input) for arguments of the wrong type.
         res = flow.checkpoint(
             brainstorm=brainstorm, passed=passed, run_id=run_id or None, moment="session_save")
     if res is None:
-        out = {"ok": True, "empty": True, "degraded": True,
-               "message": "local state persist degraded (see the warning) — your work is not "
-                          "blocked; retry once the disk/permissions recover"}
-        # 0.0.24 (OSS #82/#83) — an MCP client never sees the stderr warning, so the result names
-        # the failure itself: the exception TYPE and errno/winerror, never its text (secret-safe,
-        # as `note_persist_failure`).
+        # 0.0.29 lane G (#83) — raised before any write: NOTHING was saved, and the answer says so.
+        from ..session_save import failure_summary
         err = getattr(flow, "last_error", None)
-        if err is not None:
-            out["error"] = type(err).__name__
-            for attr in ("winerror", "errno"):
-                code = getattr(err, attr, None)
-                if isinstance(code, int):
-                    out["error"] += f" [{attr} {code}]"
-                    break
-            if isinstance(err, PermissionError):
-                out["message"] += (". On Windows a PermissionError here was another mokata process "
-                                   "holding the state file; current mokata retries that — upgrade "
-                                   "(`uv tool install --upgrade mokata`) if this persists")
+        what = failure_summary(err) if err is not None else "unknown"
+        if isinstance(err, OSError):
+            remedy = ("Re-call `session_save` with the same session; if it fails again, `mokata "
+                      "doctor` names the state directory's problem")
+        else:
+            remedy = "the session as sent could not be read; fix it and call `session_save` again"
+        # `empty` unknown, never `true`: nothing was saved, and what is on disk was not read.
+        out = {"ok": False, "status": "degraded", "empty": None, "error": what,
+               "message": f"nothing was saved ({what}) — {remedy}"}
         if registered:
             out["registered"] = registered
         return out
     out = res.to_dict()
+    if res.failed:
+        out["message"] = _save_loss_message(res)
     if registered:
         out["registered"] = registered
     return out
@@ -1002,8 +1006,8 @@ Errors: refused (invalid_input) for an unknown `response_format`.
     spec = load_emitted_spec(_evidence_store(surface, path)[0])
     if spec is None or not spec.criteria:
         return {"available": False, "subtasks": [],
-                "note": "no emitted spec with acceptance criteria — run /mokata:spec first; "
-                        "the split is derived from the approved ACs."}
+                "note": localize_commands("no emitted spec with acceptance criteria — run /mokata:spec first; "
+                        "the split is derived from the approved ACs.", surface.root)}
     plan = _decompose(spec, layer=KnowledgeLayer.from_surface(surface))
     out = plan.to_dict()
     out["available"] = True
@@ -1053,7 +1057,8 @@ Errors: refused (invalid_input) for an unknown `response_format`.
                 "criteria": [], "note": err}
     if run_id is None:
         return {"available": False, "reason": "no-run", "run": None,
-                "criteria": [], "note": NO_TRACKED_RUN_RECOVERY}
+                "criteria": [],
+                "note": localize_commands(NO_TRACKED_RUN_RECOVERY, surface.root)}
     # D5's distinction, carried onto this surface: "no spec" and "a spec that cannot be read" are
     # different facts with different remedies. Collapsing them would send a caller to rewrite a spec
     # they already have while the real fault (a torn write, a hand-edit) goes uninvestigated.
@@ -1063,7 +1068,7 @@ Errors: refused (invalid_input) for an unknown `response_format`.
         rows = SH.spec_versions(store, run_id)
         return {"available": bool(rows), "run": run_id, "current_version": current,
                 "versions": rows, "criteria": [],
-                **({} if rows else {"reason": "no-spec", "note": NO_SPEC_RECOVERY})}
+                **({} if rows else {"reason": "no-spec", "note": localize_commands(NO_SPEC_RECOVERY, surface.root)})}
     if version and version != current:
         row = SH.spec_at_version(store, run_id, int(version))
         spec, malformed = row["spec"], row["malformed"]
@@ -1078,10 +1083,12 @@ Errors: refused (invalid_input) for an unknown `response_format`.
         shown = current
     if malformed:
         return {"available": False, "reason": "malformed", "run": run_id,
-                "criteria": [], "note": SPEC_MALFORMED_MESSAGE}
+                "criteria": [],
+                "note": localize_commands(SPEC_MALFORMED_MESSAGE, surface.root)}
     if spec is None:
         return {"available": False, "reason": "no-spec", "run": run_id,
-                "criteria": [], "note": NO_SPEC_RECOVERY}
+                "criteria": [],
+                "note": localize_commands(NO_SPEC_RECOVERY, surface.root)}
     out: Dict[str, Any] = {
         "available": True, "run": run_id, "version": shown or 1, "current_version": current,
         "superseded": bool(shown and shown != current), "title": spec.title,

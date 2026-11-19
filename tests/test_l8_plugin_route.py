@@ -121,6 +121,7 @@ class TheMcpServerRecordsItsRuntime(unittest.TestCase):
         fake_state = mock.Mock(usable=True)
         with mock.patch.object(server, "_public_module") as pub, \
                 mock.patch.object(server, "_register_this_window"), \
+                mock.patch("mokata.quiet_spawn.enable_lifeline", return_value=True), \
                 mock.patch("mokata.plugin_runtime.record_runtime",
                            side_effect=lambda *a, **k: calls.append("recorded")):
             pub.return_value.sdk_state.return_value = fake_state

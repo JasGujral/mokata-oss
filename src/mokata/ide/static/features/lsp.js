@@ -245,7 +245,9 @@
     es.addEventListener("bus", (ev) => {
       let e; try { e = JSON.parse(ev.data); } catch (_x) { return; }
       if (!e || e.kind !== "lsp") return;
-      if (e.what === "crashed" && S.serversBox) say(S.serversBox, "error", `${e.server} (${e.language}) crashed (exit ${e.exit_code}) — it restarts at the next ask`);
+      // An exit the watcher could not learn is "exit code unknown" — never a number (verify-A r5 R5-2).
+      const exit = e.exit_unknown ? "exit code unknown" : `exit ${e.exit_code}`;
+      if (e.what === "crashed" && S.serversBox) say(S.serversBox, "error", `${e.server} (${e.language}) crashed (${exit}) — it restarts at the next ask`);
       if (S.status) refresh();
     });
   });

@@ -57,6 +57,7 @@ import tempfile
 import unittest
 
 import _support  # noqa: F401  (puts src/ on the path)
+import _hermetic_git  # noqa: E402  (0.0.29 D1: the one hermetic git door)
 from _release_retry import (
     RETRY_GUARDS,
     case_arms,
@@ -73,9 +74,6 @@ RELEASE_SH = os.path.join(_REPO, "scripts", "release.sh")
 
 _MISSING = [t for t in ("bash", "rsync", "git") if shutil.which(t) is None]
 
-_GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull,
-            "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
-            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
 
 VER = "9.9.9"
 BRANCH = f"release/{VER}"
@@ -293,8 +291,8 @@ class TestTheScriptsObeyTheRules(unittest.TestCase):
     # exist to catch. ⭐ It shipped on its first run; `test_b1`'s mirror census caught it, with
     # three classes of `test_a32` reporting GRADED in a mirror where they should have been absent
     # by design. 27 → 28 internal paths, 31 → 32 excludes.
-    INTERNAL_PATHS_SHA1 = "80c8a7ed5528"   # 0.0.26 cut: + .venv* (dev virtualenvs)
-    EXCLUDE_SHA1 = "814753ce8f8b"         # 0.0.26 cut: + /.venv*/
+    INTERNAL_PATHS_SHA1 = "cb15f2d6c170"   # 0.0.29 D9: + .worktreeinclude (lane C)
+    EXCLUDE_SHA1 = "41d442c04463"         # 0.0.29 D9: + /.worktreeinclude
 
     def test_the_public_boundary_controls_are_byte_identical(self):
         block = re.search(r"INTERNAL_PATHS=\(\n(.*?)\n\)\n", self.sync, re.S)
@@ -302,8 +300,8 @@ class TestTheScriptsObeyTheRules(unittest.TestCase):
         names = [t for ln in block.group(1).splitlines()
                  if not ln.strip().startswith("#") for t in ln.split()]
         excludes = re.findall(r"--exclude='([^']*)'", self.sync)
-        self.assertEqual(len(names), 29)
-        self.assertEqual(len(excludes), 33)
+        self.assertEqual(len(names), 30)
+        self.assertEqual(len(excludes), 34)
         self.assertEqual(hashlib.sha1(" ".join(names).encode()).hexdigest()[:12],
                          self.INTERNAL_PATHS_SHA1,
                          "INTERNAL_PATHS changed — update this hash in the same commit, or "
@@ -356,7 +354,7 @@ class _Harness:
 
     def git(self, *args, cwd, check=True):
         return subprocess.run(["git", *args], cwd=cwd, check=check, capture_output=True,
-                              text=True, env={**os.environ, **_GIT_ENV})
+                              text=True, env=_hermetic_git.git_env())
 
     def sha(self, ref, cwd):
         return self.git("rev-parse", ref, cwd=cwd).stdout.strip()
@@ -436,7 +434,7 @@ class _Harness:
             # at that prompt. A new session has no tty: the confirm fails CLOSED, which is the
             # refusal these tests grade.
             start_new_session=True,
-            env={**os.environ, **_GIT_ENV,
+            env={**_hermetic_git.git_env(),
                  "GIT_AUTHOR_DATE": stamp, "GIT_COMMITTER_DATE": stamp})
         self.assertEqual(proc.returncode, expect_rc,
                          f"sync-public.sh rc={proc.returncode}\n--- stdout ---\n{proc.stdout}"
@@ -597,7 +595,7 @@ class TestN6N7TagsConvergeOrRefuseButNeverMove(_Harness, unittest.TestCase):
         reason. Pinning the clock to a different value per call makes re-creation observable.
         """
         funcs = self.funcs()
-        env = {**os.environ, **_GIT_ENV}
+        env = _hermetic_git.git_env()
         if when:
             env["GIT_COMMITTER_DATE"] = when       # annotated tags take the tagger time from this
         proc = subprocess.run(
@@ -646,7 +644,7 @@ class TestN6N7TagsConvergeOrRefuseButNeverMove(_Harness, unittest.TestCase):
         self.git("tag", "-a", TAG, "-m", f"mokata {VER}", cwd=dest)
         first = self.sha(f"refs/tags/{TAG}", cwd=dest)
         self.git("tag", "-d", TAG, cwd=dest)
-        env = {**os.environ, **_GIT_ENV, "GIT_COMMITTER_DATE": "2030-01-01T00:00:00+0000"}
+        env = {**_hermetic_git.git_env(), "GIT_COMMITTER_DATE": "2030-01-01T00:00:00+0000"}
         subprocess.run(["git", "tag", "-a", TAG, "-m", f"mokata {VER}"], cwd=dest, check=True,
                        capture_output=True, env=env)
         self.assertNotEqual(self.sha(f"refs/tags/{TAG}", cwd=dest), first)

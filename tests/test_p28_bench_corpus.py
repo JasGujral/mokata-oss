@@ -86,6 +86,37 @@ class TheNumbers(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_GIT, "git is not installed")
+class QuickOpenGuard(unittest.TestCase):
+    """0.0.29 E `IDE-BENCH-GUARD-UNTESTED` — the ⌘P clock stops only on the answer to THIS query."""
+
+    URL = "http://127.0.0.1:9/api/quickopen"
+
+    def test_the_answer_to_the_query_stops_the_clock(self):
+        self.assertTrue(B._answers_query(self.URL, json.dumps({"q": "checker.ts", "changed": []}),
+                                         "checker.ts"))
+
+    def test_a_stale_empty_query_answer_does_not_stop_the_clock(self):
+        self.assertFalse(B._answers_query(self.URL, json.dumps({"q": "", "changed": []}),
+                                          "checker.ts"))
+
+    def test_a_prefix_or_a_longer_query_does_not_stop_it_either(self):
+        for q in ("checker.t", "checker.tsx", "src/checker.ts"):
+            self.assertFalse(B._answers_query(self.URL, json.dumps({"q": q}), "checker.ts"), q)
+
+    def test_another_endpoint_or_an_unreadable_body_does_not(self):
+        self.assertFalse(B._answers_query("http://127.0.0.1:9/api/search",
+                                          json.dumps({"q": "checker.ts"}), "checker.ts"))
+        self.assertFalse(B._answers_query(self.URL, None, "checker.ts"))
+        self.assertFalse(B._answers_query(self.URL, "q=checker.ts", "checker.ts"))
+
+    def test_the_quick_open_step_uses_the_guard(self):
+        with open(os.path.join(ROOT, SCRIPT_RELPATH), encoding="utf-8") as fh:
+            src = fh.read()
+        body = src[src.index("    def quick(_i: int)"):src.index('_step(res, "ide.quick_open_s"')]
+        self.assertIn("_answers_query(r.url, r.request.post_data, spec[\"fuzzy\"])", body)
+        self.assertIn("page.expect_response(asked", body)
+
+
 class ThePin(unittest.TestCase):
     """The corpus is the commit named — even when the branch has since moved on."""
 

@@ -43,6 +43,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import unicodedata
 from collections import OrderedDict, deque
 from contextlib import ExitStack
 from typing import Any, Callable, Deque, Dict, Iterator, List, Optional, Tuple
@@ -111,7 +112,12 @@ def guard_cell(text: str) -> str:
     `=`, `+`, `-`, `@`, a tab or a carriage return) gets a leading apostrophe, so Excel / Sheets /
     LibreOffice show it as text. A plain number such as `-12.5` is left alone — it is not a formula
     and a data export that rewrote every negative number would be wrong."""
-    if text and text[0] in "=+-@\t\r" and not _NUMBER.match(text):
+    if not text:
+        return text
+    # 0.0.29 E (F10): what a spreadsheet sees FIRST — leading spaces are skipped by some, and the
+    # full-width ＝＋－＠ fold to =+-@ under NFKC (Excel's own parser does the same).
+    lead = unicodedata.normalize("NFKC", text.lstrip(" \u3000"))[:1]
+    if text[0] in "\t\r" or (lead and lead in "=+-@" and not _NUMBER.match(text.strip())):
         return "'" + text
     return text
 
@@ -174,10 +180,24 @@ def sniff(path: str, sample: bytes, enc: str = "utf-8") -> Tuple[str, str]:
 
 
 # ============================================================================ records
+def _utf32_units(head: bytes) -> bool:
+    """0.0.29 E (F9) — `FF FE 00 00` is the UTF-32 LE byte-order mark AND a UTF-16 LE file whose
+    first character is U+0000. UTF-32 only when the bytes after it are 4-byte units whose high
+    half is zero (every character of a UTF-32 text file is below U+10000 in practice; the high
+    half of a UTF-16 text's units is its NEXT character, almost never NUL twice in a row)."""
+    le = head.startswith(b"\xff\xfe")
+    body = head[4:4 + 4096]
+    units = [body[i:i + 4] for i in range(0, len(body) - 3, 4)]
+    if not units:
+        return True
+    hi = (lambda u: u[2:]) if le else (lambda u: u[:2])
+    return all(hi(u) == b"\x00\x00" for u in units)
+
+
 def detect(head: bytes) -> Tuple[str, int]:
     """(encoding, BOM length) from the first bytes. UTF-32 and a BOM-less file with NULs are not
     tables we can read honestly, so they are refused here, by name."""
-    if head.startswith((b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")):
+    if head.startswith((b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff")) and _utf32_units(head):
         raise NotATable("unsupported", "this file is UTF-32 — save it as UTF-8 or UTF-16 to view it")
     if head.startswith(BOM):
         return "utf-8", len(BOM)
@@ -428,7 +448,9 @@ class Table:
                 self._head_done = True
 
     def count(self) -> Dict[str, Any]:
-        """Walk the whole file (a job): rows, ragged rows, bad bytes. Cancellable per step."""
+        """Walk the whole file (a job): rows, ragged rows, bad bytes. Cancellable per step.
+        0.0.29 E (F8): a file that changed while it was counted (its size or mtime moved) is
+        never called complete — the count says so instead."""
         while True:
             checkpoint()
             more = self.step()
@@ -436,7 +458,12 @@ class Table:
                    note=f"{max(self.scanned - 1, 0):,} rows so far")
             if not more:
                 break
-        return self.summary()
+        out = self.summary()
+        if not self.fresh():                  # compared with the size/mtime it was opened at
+            out["complete"] = False
+            out["rows"] = None
+            out["changed"] = "the file changed while it was counted — count it again"
+        return out
 
     # -- reading ------------------------------------------------------------------------------
     def total(self) -> Optional[int]:

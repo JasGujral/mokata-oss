@@ -34,6 +34,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from .manifest import Manifest
 from .profiles import build_manifest_data
 from .errors import MokataError
+from .plugin_runtime import localize_commands
 
 # The curated catalog is versioned so a consumer can reason about compatibility. This is the
 # INDEX format version (not a mokata release); it changes only if the index shape changes.
@@ -255,25 +256,35 @@ def frameworks_of_package(pkg: Optional[Dict[str, Any]]) -> Tuple[str, ...]:
 
 def nearest_package_dir(root: str, path: str) -> Optional[str]:
     """The closest directory at or above `path` (relative to `root`, or absolute under it) that
-    holds a `package.json`, never climbing above `root`. None when there is none."""
-    from .repo_paths import escapes_root, name_of, path_of
-    if not root:
+    holds a `package.json`, never climbing above `root`. None when there is none.
+
+    0.0.29 H3: a loop over the path's OWN components below `root`, never a prefix test of two
+    spellings. A relative `path` is normalised and one that climbs out names nothing; an absolute one
+    is placed under `root` by the disk (`fs_identity.disk_rel`, identity: a case-flipped spelling of
+    the root is the root, a link out of it is outside)."""
+    if not root or not path:
         return None
     root_abs = os.path.abspath(root)
-    p = path if os.path.isabs(path) else path_of(root_abs, path)
-    cur = os.path.dirname(os.path.abspath(p))
-    while True:
+    if os.path.isabs(path):
+        from .fs_identity import disk_rel
         try:
-            name = name_of(cur, root_abs)
-        except ValueError:                    # another drive on Windows — not under the repo
+            got = disk_rel(root_abs, path)
+        except (OSError, ValueError):
             return None
-        if name != "." and escapes_root(name):
+        if got is None:
             return None                       # outside the repo — never read above the root
+        parts = got[0] + got[1]
+    else:
+        from .repo_walk import _below
+        parts = _below(path)
+        if parts is None:
+            return None                       # climbs out of the repo — never read above the root
+    dirs = parts[:-1]
+    for i in range(len(dirs), -1, -1):
+        cur = os.path.join(root_abs, *dirs[:i])
         if os.path.isfile(os.path.join(cur, PACKAGE_JSON)):
             return cur
-        if cur == root_abs:
-            return None
-        cur = os.path.dirname(cur)
+    return None
 
 
 def frameworks_for_file(root: str, path: str,
@@ -656,9 +667,9 @@ def install_stack(root: str, name: str, *, source: Optional[str] = None,
 
     stack_meta = (data.get("settings") or {}).get("stack") or {}
     fw = stack_meta.get("framework") or name
-    emit(f"stacks install — wired the '{name}' stack ({fw}): governed config + "
+    emit(localize_commands(f"stacks install — wired the '{name}' stack ({fw}): governed config + "
          f"{len(stack_meta.get('guardrails') or [])} curated guardrail(s) + "
          f"{len(stack_meta.get('skills') or [])} recommended skill(s), recorded in your "
-         f"manifest's settings.stack (reviewable; promote to enforced via /mokata:onboard).")
+         f"manifest's settings.stack (reviewable; promote to enforced via /mokata:onboard).", root))
     emit("reversible: this is an audited config write — re-import a prior stack to undo.")
     return InstallResult(True, name=name, path=result.path, message="installed")

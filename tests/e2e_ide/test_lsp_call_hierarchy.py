@@ -32,6 +32,9 @@ def _lsp_fixture(knobs, home_box):
             fh.write("#!%s -I\nimport runpy, sys\nsys.argv = [%r] + %r\nrunpy.run_path(%r, run_name='__main__')\n"
                      % (sys.executable, FAKE, list(knobs), FAKE))
         os.chmod(exe, os.stat(exe).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        # 0.0.29 A: a call the graph puts on a line that does not name it (a chain's first line) —
+        # its callee row cannot know its column, so it must not expand
+        H._write(repo, "shop/chain.py", "def chained(x):\n    return (x\n            .strip()\n            )\n")
         if "--hub" in knobs:
             H._write(repo, "shop/hub.py", "".join("def caller_%d(): return slugify('x')\n" % i
                                                    for i in range(HUB_LINES)))
@@ -378,11 +381,47 @@ class IndexingShowsTheGraph(H.IdeFlow):
         self.palette("Find Callers")
         p.locator(".p4-usages [role=treeitem][aria-level='2']").first.wait_for()
         head = self.text_until(".p4-usages .p4-calls-head", "indexing", "the indexing banner")
-        self.assertIn("the graph shows callers meanwhile", head)
+        self.assertIn("the call graph answers meanwhile", head)
         self.assertIn("call graph", head)
+
+    def test_2_while_indexing_the_call_graph_answers_callees_and_a_callee_row_expands(self):
+        """0.0.29 A `LSP-CALLS-GRAPH-CALLEES`: on title_slug, Find Callees lists slugify from the call
+        graph, labelled; → on it asks the call graph what slugify calls (level 3); focus stays on it."""
+        p = self.page
+        self.open_file("shop/text.py")
+        self.row(5).click()
         self.palette("Find Callees")
-        self.text_until(".p4-usages .p4-calls-head", "need the language server", "callees' reason")
-        self.assertEqual(0, p.locator(".p4-usages [role=treeitem][aria-level='2']").count())
+        row = p.locator(".p4-usages [role=treeitem][aria-level='2'][data-name='slugify']")
+        row.wait_for()
+        head = self.text_until(".p4-usages .p4-calls-head", "indexing", "the indexing banner")
+        self.assertIn("call graph", head)
+        self.assertNotIn("need the language server", head)
+        self.assertIn("call graph", row.text_content())
+        self.assertEqual("false", row.get_attribute("aria-expanded"))
+        row.focus()
+        self.press("ArrowRight")
+        p.locator(".p4-usages [role=treeitem][aria-level='3'][data-name='split']").wait_for()
+        self.assertEqual("true", row.get_attribute("aria-expanded"))
+        self.until("document.activeElement && document.activeElement.dataset.name === 'slugify'",
+                   "focus to stay on the expanded callee")
+        self.not_body("the callee expanded")
+
+    def test_3_a_callee_row_whose_column_is_unknown_offers_no_expansion(self):
+        """A call the graph places on a line that does not name it: the row has no ▸ and no
+        `aria-expanded`, and → on it asks nothing (focus stays on it)."""
+        p = self.page
+        self.open_file("shop/chain.py")
+        self.row(2).click()
+        self.palette("Find Callees")
+        row = p.locator(".p4-usages [role=treeitem][aria-level='2'][data-name='strip']")
+        row.wait_for()
+        self.assertIsNone(row.get_attribute("aria-expanded"))
+        self.assertEqual("", row.locator(".p4-exp").text_content())
+        row.focus()
+        self.press("ArrowRight")
+        self.assertEqual(0, p.locator(".p4-usages [role=treeitem][aria-level='3']").count())
+        self.until("document.activeElement && document.activeElement.dataset.name === 'strip'",
+                   "focus to stay on the row")
 
 
 @_lsp_flow

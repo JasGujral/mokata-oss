@@ -310,7 +310,8 @@ def memory_export(path: _Path = ".",
     Errors: refused when `proposal_id` is not a live human approval of this exact call."""
     from ..memory import default_backup_path, export_memory, export_payload
     surface = _surface(path)
-    store = MemoryStore.from_surface(surface)
+    # a read: the export never loads (or fetches) the model (0.0.29 C1 verify M2)
+    store = MemoryStore.from_surface(surface, knowledge=False, load_model=False)
     data = export_memory(store)             # read-only; scans + computes the items without writing
     # dest: an explicit --file wins; otherwise the timestamped backup default. The timestamp is
     # minted ONCE, at propose time, and RECOVERED from the approved proposal on redeem — so the two

@@ -18,6 +18,30 @@ default shown. A closed set of values is listed under *Allowed*; any other value
 - **`refused` with `reason_code: "not-initialized"`.** mokata is not set up in that repo. The
   refusal's `remedyCommand` is `mokata init`; run it in the repo root, then call again.
 - **`error`.** A real fault on mokata's side, with a hint naming its fix.
+- **`refused` with `reason_code: "cancelled"`.** The work stopped at its next checkpoint because
+  the call was cancelled; the reason says what, if anything, it had already recorded.
+
+## Long work and cancel
+
+A call that is still working after the reply budget answers `status: "running"` and the work
+goes on, held by the server. A re-call with exactly the same arguments joins it and receives its
+result; cancelling that re-call (when it is the only one attached) stops the work and ends every
+process it started. Cancelling a call stops its work unless another call is attached to the same
+work. When the server exits, all of its work is stopped. A result that describes the working tree
+(`baseline`, `ci_check`, `coverage`, `lat_check`) is only handed to a call made on the same tree.
+
+**A cancelled write is never run twice.** The next identical call collects what the cancelled one
+did (committed, refused, or "nothing changed"), marked `collected`; only the call after that starts
+it again. A result collected after it finished carries `kept.ran_at` and `kept.age_s`: when it ran.
+
+The server holds at most 256 such uncollected write results. Past that the oldest is dropped and a
+note stays in its place, so the next identical call is told `already_ran`: when the write ran and
+whether it succeeded, without its full result, and the write is not run again. These notes are kept
+for 7 days (at most 4096 of them). After that, an identical call is a new request and runs.
+
+Under MCP, git and ssh never prompt for credentials, so a credential that only an askpass helper
+supplies (VS Code's, for example) is not used by `commit_push` or `worktree_merge`. Configure a git
+credential helper (or an ssh key in an agent) for those pushes.
 
 Arrays and objects may be sent as a JSON string of the same value; integers and numbers as their
 decimal text; booleans as `"true"`/`"false"`.
@@ -142,8 +166,9 @@ Example: `audit_share({})`
 
 Run the test suite once and report green or red, so a later failure is attributable to your change.
 
-Runs the existing suite and writes nothing. If no test command is known it says so; mokata never
-guesses a framework. `concise` answers with `ok`; `detailed` adds the rendered `report`.
+Writes nothing; never guesses a framework. Past the reply budget it answers `running` and runs on
+until exit or `settings.baseline.silence_seconds` of silence; re-call with the same arguments.
+`detailed` adds `report`.
 
 Returns: `ok` and, if detailed, `report`.
 Errors: refused (invalid_input) for an unknown `response_format`.
@@ -151,7 +176,7 @@ Errors: refused (invalid_input) for an unknown `response_format`.
 | Parameter | Type | Required | Default | Allowed | Meaning |
 |---|---|---|---|---|---|
 | `path` | string |  | "." |  | Repo root the tool operates on (default: the server's working directory). |
-| `cmd` | string |  | "" |  | Test command to run instead of the configured one (default: the project's own). |
+| `cmd` | string |  | "" |  | Test command to run (default: the project's own). |
 | `response_format` | string |  | "concise" | concise, detailed | `concise` (default) returns the structured answer; `detailed` adds the rendered text view. |
 
 Example: `baseline({})`
@@ -594,11 +619,11 @@ Example: `import_stack({"file": "<string>"})`
 
 Report the code index's freshness: files tracked and what changed since the last build.
 
-Read-only: nothing is rebuilt or written (`mokata index` rebuilds). Names the graph backend, the
-languages indexed, and how many source files were skipped as unsupported (Python only).
+Read-only: nothing is rebuilt or written (`mokata index` rebuilds).
 
-Returns: `built`, `tracked`, `added`, `removed`, `changed`, `coverage`, `backend`; before a first
-build, `built: false` with a `note`.
+Returns: `built`, `tracked`, `added`, `removed`, `changed`, `coverage`, `backend`,
+`languages_indexed`, `unsupported_files` (`count`, `counted_for_languages`); before a first
+build, `built: false`, `coverage` and a `note` (no counts).
 Errors: fails if `path` is not a mokata repo.
 
 | Parameter | Type | Required | Default | Allowed | Meaning |
@@ -1129,11 +1154,12 @@ Example: `session_push({"tag": "<string>"})`
 
 Snapshot this session's in-flight brainstorm and run state so an interrupted session can be resumed.
 
-Saves locally with no approval: it is your own transient state; sharing is the gated `session_push`.
-Call it at each milestone, and with `turn=true` after each answered question. `register=true` starts
-tracking the run. A persist failure returns a degraded marker instead of raising.
+Saves locally with no approval (your own transient state); sharing is the gated `session_push`.
+Call it at each milestone, and with `turn=true` after each answer. `register=true` starts
+tracking the run. A write that did not land answers `ok: false`.
 
-Returns: the keys and counts saved (never the content), `registered` when set, or `degraded: true`.
+Returns: keys and counts saved (never content), `registered` when set; on a loss `failed`,
+`approval_persisted`, the remedy.
 Errors: refused (invalid_input) for arguments of the wrong type.
 
 | Parameter | Type | Required | Default | Allowed | Meaning |

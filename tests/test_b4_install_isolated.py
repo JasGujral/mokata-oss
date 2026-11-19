@@ -133,14 +133,17 @@ class ReadsTheSiblingCheaply(unittest.TestCase):
 
         def fake_run(argv, **kw):
             seen.update(kw, argv=argv)
-            return SimpleNamespace(stdout="mokata 0.0.21\n", stderr="")
-        with mock.patch.object(II.subprocess, "run", side_effect=fake_run):
+            return 0, "mokata 0.0.21\n", ""
+        # 0.0.29 R-B9: through the process door, bounded at ≥4× a cold Windows launcher.
+        from mokata import quiet_spawn
+        with mock.patch.object(quiet_spawn, "run_jobbed", side_effect=fake_run):
             self.assertEqual(II._ask_version("/opt/x/mokata"), "0.0.21")
-        self.assertEqual(seen["timeout"], 3)
+        self.assertEqual(seen["timeout"], 30)
         self.assertEqual(seen["argv"], ["/opt/x/mokata", "--version"])
 
     def test_version_call_timeout_is_silence(self):
-        with mock.patch.object(II.subprocess, "run",
+        from mokata import quiet_spawn
+        with mock.patch.object(quiet_spawn, "run_jobbed",
                                side_effect=II.subprocess.TimeoutExpired("m", 3)):
             self.assertIsNone(II._ask_version("/opt/x/mokata"))
 

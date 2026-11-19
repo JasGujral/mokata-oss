@@ -76,6 +76,11 @@ AMEND_FINISH_CMD = "mokata spec amend --file <your-spec.json>"
 # names a remedy must name one that works at a shell (§7g's closing rule).
 EMIT_FINISH_CMD = "mokata spec emit --file <your-spec.json>"
 
+# 0.0.29 lane G (#82-2) — the NON-OVERRIDE road to a RED the user already has. The TDD gate used to
+# name only the override; this is the command that records a failing test it can count. Spelled
+# exactly as `hints.py`'s C_NEVER_RUN remedy (pinned equal by a test; hints is not edited).
+TEST_RUN_RED_CMD = 'mokata progress test-run --failed --command "<your test command>" --test <id>'
+
 # What is TRUE and was never said: the human has done everything asked of them and the amendment is
 # still not in. Said in the human's terms, not the model's — "re-call the tool with proposal_id" is
 # the model's instruction and it is why this looked like a server problem rather than a missing step.
@@ -283,27 +288,22 @@ def _approved_lines(tool: str, pid: str) -> List[str]:
 
 
 def liveness_lines() -> List[str]:
-    """The doctor liveness line (UX-STUCK): a statement that MCP calls are BOUNDED, quoting D0's
-    actual budgets.
+    """The doctor liveness line (UX-STUCK): how long an MCP call takes to ANSWER, quoting D0's actual
+    reply budget, and how a long `baseline` ends (0.0.29 lane G: no wall clock ends a suite).
 
-    This deliberately measures nothing and probes nothing — D0 already delivered the never-hang
-    half (the R1 wall-clock cap on every served call, plus `baseline`'s own named bound), and
-    rebuilding it here as a latency probe would be a second authority on a question D0 already
-    answers. What was missing was only that a human staring at a slow call had no way to know a
-    bound existed at all. So this READS D0's constants rather than restating them: if a budget is
-    ever retuned, this line moves with it and cannot drift.
-
-    Informational; never raises, never affects doctor's exit."""
+    This READS the constants rather than restating them: if the budget or the silence default is
+    ever retuned, this line moves with it. Informational; never raises, never affects doctor's exit."""
     try:
-        from .baseline import BASELINE_MCP_TIMEOUT_SECONDS
+        from .baseline import BASELINE_SILENCE_SECONDS
         from .mcp.server import MCP_SURFACE_TIMEOUT_SECONDS
         return [
-            f"mokata liveness: every MCP call is BOUNDED — "
-            f"{MCP_SURFACE_TIMEOUT_SECONDS:g}s interactive budget, "
-            f"{BASELINE_MCP_TIMEOUT_SECONDS:g}s for `baseline` (it runs the test suite).",
-            "  A call still working at its budget answers status `running` naming the operation; "
-            "re-call it with the same arguments to join the work (never run twice) — mokata "
-            "never answers with silence, so silence is the harness, not the server.",
+            f"mokata liveness: every MCP call answers within {MCP_SURFACE_TIMEOUT_SECONDS:g}s; work "
+            "still going answers `running` with its progress and continues — re-call it with the "
+            "same arguments to join it (never run twice).",
+            "  `baseline` has no wall clock: it ends on exit, after "
+            "`settings.baseline.silence_seconds` "
+            f"(default {BASELINE_SILENCE_SECONDS:g}s) with no output, or when stopped — mokata never "
+            "answers with silence, so silence is the harness, not the server.",
         ]
     except Exception as exc:                 # informational path — never raise
         return [f"mokata liveness: budget check skipped ({exc})."]

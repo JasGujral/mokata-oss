@@ -170,18 +170,72 @@ class GitGoesSilent(Quiet):
 
     def test_a_slow_read_that_keeps_progressing_is_not_cut(self):
         """Each chunk arrives inside the stall bound; the whole takes longer than it. Size and
-        total time are not what the clock bounds. Slack: the stall bound is 10x the gap between
-        chunks, so a runner that delays a chunk by several gaps still does not look silent; the
-        speed floor is dropped to 1 B/s because it is not the subject here."""
-        gap = 0.1
+        total time are not what the clock bounds. EVENT-DRIVEN (X1, CI 43869782006 macOS: a 1 s
+        stall bound against sleep-paced 0.1 s chunks was cut on a loaded runner): every chunk is
+        already there when it is asked for, and the time between chunks is a clock the test
+        advances - `gap` of the product's own clock passes per chunk, ten chunks' worth exceed the
+        stall bound, and the real wait for any one chunk is nil. The stall bound stays at its
+        production size, so only a read bounded by TOTAL time could be cut here, on any runner.
+        The speed floor is off: it is not the subject."""
         chunks = [self.data[i:i + 10] for i in range(0, len(self.data), 10)]
-        script = [(gap, c) for c in chunks]
-        with mock.patch.object(IM, "STALL_SECS", gap * 10), mock.patch.object(IM, "MIN_BPS", 1):
+        with mock.patch.object(IM, "STALL_SECS", 60.0), mock.patch.object(IM, "MIN_BPS", 0):
+            gap = IM.STALL_SECS / 2
             self.assertGreater(gap * len(chunks), IM.STALL_SECS, "the read must outlast one stall")
-            self.stub(script, end=True)
-            mime, got = IM.read_image(self.d, "a.png", "HEAD")
+            self.fake = SteppedGit(chunks, gap)
+            with mock.patch.object(IM, "_popen", lambda *a, **k: self.fake), \
+                    mock.patch.object(IM, "time", self.fake.clock):
+                mime, got = IM.read_image(self.d, "a.png", "HEAD")
         self.assertEqual(self.data, got)
+        self.assertGreaterEqual(self.fake.reads, len(chunks), "one read per chunk")
+        self.assertGreater(self.fake.clock.now, IM.STALL_SECS, "the product's clock ran past a stall")
         self.assertFalse(self.fake.killed)
+
+
+class _Clock:
+    """The product's `time` module, as far as `_git_chunks` reads it: a clock the test moves."""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def monotonic(self):
+        return self.now
+
+
+class SteppedGit:
+    """A `git cat-file blob` whose stdout answers each `read1` with the next chunk at once, and
+    moves `clock` on by `gap` first (that chunk arrived `gap` after the one before). Nothing here
+    waits on a wall clock, so no runner can make it look silent."""
+
+    def __init__(self, chunks, gap):
+        self.clock = _Clock()
+        self._chunks = list(chunks)
+        self._gap = gap
+        self.reads = 0
+        self.killed = False
+        self.ended = False
+        self.stdout = self
+
+    def read1(self, _n=-1):
+        self.reads += 1
+        if not self._chunks:
+            self.ended = True
+            return b""
+        self.clock.now += self._gap
+        chunk = self._chunks.pop(0)
+        self.ended = not self._chunks          # the whole blob written: git exits (as `FakeGit`)
+        return chunk
+
+    def close(self):
+        pass
+
+    def poll(self):
+        return 0 if (self.killed or self.ended) else None
+
+    def kill(self):
+        self.killed = True
+
+    def wait(self, timeout=None):
+        return 0
 
 
 class TheRouteAnswers(Quiet):

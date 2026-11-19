@@ -581,6 +581,28 @@ DECLARED_NONCONFORMING = {
         frozenset(set(CONTRACT) - {TOTAL_MATCHES_CALL_SITES}),
 }
 
+# 0.0.29 lane A's round batches (wave-1 bookend): one-mutant-per-call scripts that capture each
+# verdict into a `mutants-<n>.txt` beside them and count nothing — the 03a/04/05 shape plus no
+# non-zero abort. Evidence only, never re-run; declared rather than rewritten so the evidence stays
+# the bytes the verifier read. Filed as `HANDOFF-MUTANT-DRIVERS-UNCOUNTED-0029-A` (doc 84, Low):
+# later lanes drive mutants through `tests/_run_mutants.sh`.
+_LANE_A_0029_DRIVERS = tuple(
+    "docs/build/handoff/0029-evidence/A/mutants%s.sh" % n
+    for n in ("", "2", "3", "4", "5", "6", "7", "8", "9", "10", "10b", "11"))
+for _name in _LANE_A_0029_DRIVERS:
+    DECLARED_INTERNAL_DRIVERS[_name] = "0.0.29 lane A round batch, filed in its evidence directory"
+    DECLARED_NONCONFORMING[_name] = frozenset({
+        NONZERO_ABORTS, RUN_COUNTED, VERDICT_COUNTED, NO_VERDICT_ABORTS, TOTAL_DECLARED})
+del _name
+DECLARED_INTERNAL_DRIVERS["docs/build/handoff/0029-evidence/H-a/h-a-mutants.sh"] = (
+    "0.0.29 lane H-a batch (rounds 1 and 2), filed in its evidence directory. CONFORMS — it is in "
+    "this table for its LOCATION only, and NOT in DECLARED_NONCONFORMING.")
+
+# 0.0.29 lane G's batch: it IMPLEMENTS the contract (copied from `tests/_run_mutants.sh`), so it is
+# declared for its LOCATION only and is NOT in DECLARED_NONCONFORMING.
+DECLARED_INTERNAL_DRIVERS["docs/build/handoff/0029-evidence/G/mutants.sh"] = (
+    "0.0.29 lane G batch, filed beside its report in the evidence directory; CONFORMS")
+
 
 # ---- MUTANT-DRIVER-HEADER-OVER-CLAIMED-BY-FOUR's structural remedy (0.0.22 B2) ---------------------
 # doc 84 :746 — a driver header DESCRIBED 29 mutants while the file held 25, and `TOTAL=25` agreed

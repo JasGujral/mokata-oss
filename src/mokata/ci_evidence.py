@@ -125,7 +125,8 @@ def path_link(root: str, ref: str, link: LinkContext,
         return f"path withheld (not a safe repo-relative path): {code_span(raw, tally)}"
     real_root = os.path.realpath(root)
     full = os.path.realpath(os.path.join(real_root, *rel.split("/")))
-    if not (full == real_root or full.startswith(real_root.rstrip(os.sep) + os.sep)):
+    from .fs_identity import require_inside
+    if not require_inside(full, real_root):              # ALLOW side: identity (0.0.29 H3)
         return f"path withheld (resolves outside the repository): {code_span(raw, tally)}"
     if not os.path.exists(full):
         return f"path withheld (not in this checkout): {code_span(raw, tally)}"

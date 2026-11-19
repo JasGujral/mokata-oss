@@ -21,6 +21,7 @@ import tempfile
 import unittest
 
 from _support import iter_tracked_files  # also applies the `src/` path fix on import
+import _hermetic_git  # noqa: E402  (0.0.29 D1: the one hermetic git door)
 
 from mokata import __version__
 from mokata.packaging import (
@@ -100,7 +101,7 @@ def _git(*args, cwd):
     subprocess.run(
         ["git", *args], cwd=cwd, check=True,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull},
+        env=_hermetic_git.git_env(),
     )
 
 

@@ -49,6 +49,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Dict, Iterator, Optional, Tuple
 
+from .fs_identity import same_entry
 from .repo_identity import (canonical_repo_root, is_initialized, state_root, worktree_label,
                             worktree_toplevel)
 
@@ -126,7 +127,7 @@ def scope_for(path: str = ".", *, lookup: Any = None, pid: Optional[int] = None)
             if not b:
                 return TreeScope(tree=ap, main=ap, session=sid)
             bp = str(b.get("path") or "")
-            if _live_worktree(bp) and os.path.realpath(_main_of(bp)) == os.path.realpath(_main_of(ap)):
+            if _live_worktree(bp) and same_entry(_main_of(bp), _main_of(ap)):
                 return TreeScope(tree=worktree_toplevel(bp) or bp, main=_main_of(ap),
                                  basis=BASIS_SESSION, session=sid)
             return TreeScope(tree=ap, main=ap, basis=BASIS_GONE, session=sid,
@@ -171,13 +172,13 @@ def code_tree_for(root: str) -> Optional[Tuple[str, str]]:
             # Only when the worktree SHARES an initialized main checkout's mokata state (P31): a
             # worktree whose main checkout is not a mokata repo (it may hold its own `.mokata/`)
             # is a repo in its own right and is answered as one, exactly as before.
-            if os.path.realpath(main) != os.path.realpath(wt) and is_initialized(main) and \
-                    os.path.realpath(state_root(wt)) == os.path.realpath(main):
+            if not same_entry(main, wt) and is_initialized(main) and \
+                    same_entry(state_root(wt), main):
                 return wt, main
             return None
         sc = current()
         if sc is not None and sc.is_worktree and \
-                os.path.realpath(sc.main) == os.path.realpath(_main_of(ap)):
+                same_entry(sc.main, _main_of(ap)):
             return sc.tree, sc.main
     except (OSError, ValueError):
         return None

@@ -189,7 +189,7 @@ def _index_bytes(root: str) -> int:
     return total
 
 
-def disk_shortfall(root: str, need: Optional[int] = None) -> str:
+def disk_shortfall(root: str, need: Optional[int] = None, asked_full: bool = False) -> str:
     """"" when the disk holding the index has room for a second copy of it (plus a margin), else
     why not — a build beside the index is then REFUSED (the graph in use is kept), never run
     until the disk is full."""
@@ -203,8 +203,9 @@ def disk_shortfall(root: str, need: Optional[int] = None) -> str:
         return ""
     gb = 1024 ** 3
     return (f"not enough free disk to rebuild the code graph beside the one in use: needs "
-            f"{need / gb:.1f} GB, {free / gb:.1f} GB free — the graph in use is kept; free some "
-            f"space and it is repaired on the next update")
+            f"{need / gb:.1f} GB, {free / gb:.1f} GB free — the graph in use is kept; " +
+            ("free some space, then run `mokata graph build --full` again" if asked_full else
+             "free some space and it is repaired on the next update"))
 
 
 def _seed_beside(root: str) -> str:
@@ -847,7 +848,7 @@ def build_now(root: str, *, on_progress: Optional[Callable[[str], None]] = None,
                                               or had_complete_build(db_path(root))):
                 # R39: rebuild BESIDE the index in use; it is replaced only when the rebuild is
                 # complete. A cancel (or a failure) leaves the old graph COMPLETE.
-                short = disk_shortfall(root)
+                short = disk_shortfall(root, asked_full=full and not repair)
                 if short:
                     res = BuildResult(ok=False, error=short)
                     res.incremental = incremental

@@ -63,7 +63,9 @@ def opt_in_surfaces(flag: str) -> List[Dict[str, Any]]:
 
 
 _VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
-_TIMEOUT_SECS = 3.0
+#: `claude --version` answers at once (measured 0.00 s, a native binary); this bound is ≥4× a cold
+#: Windows launcher and only ever costs anything for a launcher that hangs (0.0.29 R-B9).
+_TIMEOUT_SECS = 30.0
 
 
 def parse(text: Optional[str]) -> Optional[Version]:
@@ -87,12 +89,13 @@ def installed_version() -> Optional[Version]:
     exe = shutil.which("claude")
     if not exe:
         return None
+    from .quiet_spawn import run_jobbed
     try:
-        p = subprocess.run([exe, "--version"], capture_output=True, text=True, encoding="utf-8",
-                           errors="replace", timeout=_TIMEOUT_SECS, stdin=subprocess.DEVNULL)
+        # 0.0.29 R-B9: through the process door — a grandchild holding the output cannot hang it.
+        _rc, out, err = run_jobbed([exe, "--version"], timeout=_TIMEOUT_SECS)
     except (OSError, subprocess.SubprocessError):
         return None
-    return parse(p.stdout) or parse(p.stderr)
+    return parse(out) or parse(err)
 
 
 @dataclass(frozen=True)

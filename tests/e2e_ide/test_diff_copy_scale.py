@@ -143,6 +143,45 @@ class CopyAndCiteAreSelectionBound(H.IdeFlow):
     def test_2_a_30000_line_single_hunk(self):
         self.check("h30k.txt")
 
+    def test_3_a_unified_cite_walks_the_selected_rows_only(self):
+        """0.0.29 E (`DIFF-UNIFIED-CITE-O-ROWS`): in Unified the cite walked every row of the table
+        (`t.querySelectorAll("tr")` + `containsNode`); it now walks from each range's first row to
+        its last. 3 rows selected deep in a 60,000-row table -> at most 3 + 2 rows visited, and the
+        cite names exactly those lines."""
+        name = "h30k.txt"
+        p = self.page
+        p.set_viewport_size({"width": 1280, "height": 1400})
+        self.go("review")
+        p.wait_for_selector("#nav-list li", state="attached")
+        p.locator("#nav-list li", has_text=name).first.click()
+        self.until("!!document.querySelector('#diff section.hunk table.d td.tx[data-i]') && "
+                   "MK.ui.files[MK.ui.sel] && MK.ui.files[MK.ui.sel].path === %r" % name,
+                   "%s to draw" % name)
+        if p.evaluate("MK.dv.mode") != "unified":
+            p.click(".dv-tools [data-mode='unified']")
+        self.until("!document.querySelector('#diff table.d.split') && "
+                   "document.querySelectorAll('#diff table.d td.tx').length >= 3000",
+                   "the unified rows of %s" % name)
+        p.evaluate("document.querySelectorAll('#diff tbody').forEach((tb) => { if (tb._fill && !tb._done) tb._fill(); })")
+        rows = p.evaluate("document.querySelectorAll('#diff table.d tr').length")
+        self.assertGreaterEqual(rows, 2 * FILES[name], "every row of the hunk is in the table")
+        got = p.evaluate("""() => {
+            const adds = document.querySelectorAll('#diff table.d tr.add td.tx');
+            const a = adds[20000], b = adds[20002];
+            window.getSelection().setBaseAndExtent(a.firstChild || a, 0, b.firstChild || b,
+                                                   (b.firstChild || b).textContent.length);
+            // the rows the cite TESTS, counted at the browser's own door: a cite that walks the whole
+            // table asks `containsNode` of every row, whatever counter it keeps (verifier: M11)
+            const S = Selection.prototype, real = S.containsNode;
+            let asked = 0;
+            S.containsNode = function (...a) { asked++; return real.apply(this, a); };
+            let cite;
+            try { MK.dv.visits = 0; cite = MK.dv.selectionCite(); } finally { S.containsNode = real; }
+            return [cite, MK.dv.visits, asked]; }""")
+        self.assertEqual("%s:20001-20003" % name, got[0])
+        self.assertLessEqual(got[1], 3 + 2, "the cite visited %d rows for a 3-row selection" % got[1])
+        self.assertLessEqual(got[2], 3 + 2, "the cite tested %d rows for a 3-row selection" % got[2])
+
 
 if __name__ == "__main__":
     unittest.main()

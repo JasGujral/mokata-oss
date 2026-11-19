@@ -36,6 +36,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..repo_paths import name_of
 from ..test_runs import mapped_tests
 from .server import BadRequest
+from ..plugin_runtime import localize_commands
 
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 SOURCES = ("local", "team")
@@ -132,8 +133,8 @@ def _approach_view(store: Any) -> Dict[str, Any]:
         return {"state": "malformed", "note": f"the approved approach is present but unreadable "
                 f"({type(exc).__name__}) — it is kept, not lost"}
     if h is None:
-        return {"state": "absent", "note": "no approved approach on this run — the plan is "
-                "written when a brainstorm is approved (/mokata:brainstorm)"}
+        return {"state": "absent", "note": localize_commands("no approved approach on this run — the plan is "
+                "written when a brainstorm is approved (/mokata:brainstorm)", None)}
     a = h.approach
     return {
         "state": "ok", "topic": _clip(h.topic), "name": _clip(a.name), "summary": _clip(a.summary),
@@ -202,10 +203,10 @@ def _spec_view(store: Any, run_id: str, version: int, *, history: bool,
         shown = current
     if malformed:
         from ..engine.spec_gate import SPEC_MALFORMED_MESSAGE
-        return {"state": "malformed", "current_version": current, "note": SPEC_MALFORMED_MESSAGE}
+        return {"state": "malformed", "current_version": current, "note": localize_commands(SPEC_MALFORMED_MESSAGE)}
     if spec is None:
         from ..cli_commands.spec import NO_SPEC_RECOVERY
-        return {"state": "absent", "current_version": current, "note": NO_SPEC_RECOVERY}
+        return {"state": "absent", "current_version": current, "note": localize_commands(NO_SPEC_RECOVERY)}
     red, green = tests if tests is not None else (set(), set())
     crit = []
     for c in spec.criteria:
@@ -349,7 +350,8 @@ def _saved_file(root: str, where: str, slug: str) -> Optional[str]:
     try:
         if os.path.islink(path) or not os.path.isfile(path):
             return None
-        if os.path.dirname(os.path.realpath(path)) != os.path.realpath(base):
+        from ..fs_identity import same_entry
+        if not same_entry(os.path.dirname(os.path.realpath(path)), base):   # equality: identity (H3)
             return None
     except OSError:
         return None

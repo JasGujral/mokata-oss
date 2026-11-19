@@ -267,8 +267,17 @@ def default_cache_dir() -> str:
     """Where `mokata branch-protection-check` keeps the last-read documents.
 
     `$XDG_CACHE_HOME/mokata/branch-protection`, else `~/.cache/mokata/branch-protection`. A cache
-    is a fact about THIS machine's reads, so it lives with the user's caches and never in a repo."""
-    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+    is a fact about THIS machine's reads, so it lives with the user's caches and never in a repo.
+
+    The base is `pycache.user_cache_base()` — mokata's ONE rule (0.0.29 F): a RELATIVE
+    `XDG_CACHE_HOME` or home is ignored (it named a directory under wherever the command ran). With
+    no absolute base at all, the system temp dir: a cache there is lost sooner — a later MISS, which
+    refuses — and is never written into the user's project."""
+    from .pycache import user_cache_base
+    base = user_cache_base()
+    if base is None:
+        import tempfile
+        base = tempfile.gettempdir()
     return os.path.join(base, "mokata", "branch-protection")
 
 

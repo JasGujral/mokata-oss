@@ -1024,6 +1024,9 @@ async function refresh() {
   if (MK.onRefresh) MK.onRefresh();
 }
 MK.refresh = refresh;
+// A command a page names, as THIS route installed it (server-rendered in /api/state). Until the
+// first state arrives, the namespaced form: it is the one that is always valid.
+MK.cmd = (name) => ((ui.state && ui.state.commands && ui.state.commands[name]) || "/mokata:" + name);
 
 // The Viewing session's files when Review shows another source (search scope, R28).
 async function loadSessionPaths(sid) {

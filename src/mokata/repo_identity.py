@@ -34,6 +34,21 @@ from typing import Optional
 _GIT = ".git"
 
 
+def same_entry(a: str, b: str) -> bool:
+    """Are `a` and `b` one directory entry on disk? (0.0.29 H3: identity, never two spellings.) The
+    common case — both stat-able with a real index — is answered here by `samestat`, so the hook's cheap
+    read (`test_si_2_tdd_persistence.TestCheapRead`) never pays `fs_identity`'s import (~4 ms); anything
+    else goes to THE door, `fs_identity.same_entry`."""
+    try:
+        sa, sb = os.stat(a), os.stat(b)
+        if sa.st_ino and sb.st_ino:
+            return os.path.samestat(sa, sb)
+    except (OSError, ValueError):
+        pass
+    from .fs_identity import same_entry as _door
+    return _door(a, b)
+
+
 def _common_from_gitfile(gitfile: str) -> Optional[str]:
     """The git COMMON DIR reached from a worktree's `.git` FILE, by pure file reads. Returns the
     realpath of the common dir, or None on any parse/IO error (degrade-clean). Handles both a
@@ -200,7 +215,7 @@ def resolve_mokata_root(start: str = ".") -> RootResolution:
     canon = canonical_repo_root(found if found else start)
 
     if found is not None:
-        if os.path.realpath(canon) == os.path.realpath(found):
+        if same_entry(canon, found):
             return RootResolution(found)                       # main checkout: byte-identical
         # (2) the manifest we found is a worktree's checked-out COPY of committed config.
         canon_found = _walk_up_for(canon, MOKATA_DIR, MANIFEST_FILENAME)
@@ -209,7 +224,7 @@ def resolve_mokata_root(start: str = ".") -> RootResolution:
         return RootResolution(found)     # the main checkout has none — the tree's copy is all there is
 
     # (3) nothing in this tree — the manifest was never committed, so a worktree has no `.mokata/`.
-    if os.path.realpath(canon) != os.path.realpath(os.path.abspath(start)):
+    if not same_entry(canon, os.path.abspath(start)):
         canon_found = _walk_up_for(canon, MOKATA_DIR, MANIFEST_FILENAME)
         if canon_found is not None:
             return RootResolution(canon_found, via_worktree=True)
@@ -275,7 +290,7 @@ def canonical_mokata_dir(mokata_dir: str) -> str:
         given = os.path.abspath(mokata_dir)
         tree = os.path.dirname(given)
         canon = canonical_repo_root(tree)
-        if os.path.realpath(canon) == os.path.realpath(tree):
+        if same_entry(canon, tree):
             return mokata_dir                                  # main checkout / non-git: unchanged
         redirected = os.path.join(canon, os.path.basename(given))
         return redirected if os.path.isdir(redirected) else mokata_dir
@@ -292,7 +307,7 @@ def worktree_label(root: str) -> str:
     except OSError:
         return "main"
     canon = os.path.realpath(canonical_repo_root(root))
-    if ar == canon:
+    if same_entry(ar, canon):
         return "main"
     try:
         return os.path.relpath(ar, canon)
@@ -330,7 +345,7 @@ def worktree_toplevel(path: str) -> Optional[str]:
             if os.path.isfile(gp):
                 common = _common_from_gitfile(gp)
                 if common and os.path.basename(common) == _GIT and \
-                        os.path.realpath(os.path.dirname(common)) != os.path.realpath(cur):
+                        not same_entry(os.path.dirname(common), cur):
                     return cur
                 return None
         except OSError:
@@ -374,6 +389,6 @@ def tree_temp_local_dir(root: str) -> str:
     written inside the worktree itself."""
     shared = temp_local_dir(root)
     tree = worktree_toplevel(root)
-    if tree is None or os.path.realpath(state_root(root)) == os.path.realpath(tree):
+    if tree is None or same_entry(state_root(root), tree):
         return shared
     return os.path.join(shared, TREES_DIRNAME, tree_key(tree))

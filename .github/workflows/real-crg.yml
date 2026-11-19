@@ -3,8 +3,13 @@ name: real-crg (opt-in)
 # GR.S2-FU — the OPT-IN real code-review-graph leg. The GR.S2 contract suite runs on a full
 # fake-CRG double; the raw MCP-stdio wire (`knowledge/crg_client.py:_McpStdioSession`) is only
 # exercisable against a real `code-review-graph serve`. This job installs the real tool and
-# drives that wire end-to-end. It is MANUAL-only (`workflow_dispatch`) so it NEVER blocks normal
-# CI — dispatch it deliberately when validating the real integration.
+# drives that wire end-to-end. It runs on dispatch and on a weekly cron, and NEVER blocks normal CI
+# (nothing here triggers on push or pull_request).
+#
+# 0.0.29 D4 `REAL-CRG-CLASSES-NEVER-RUN` (ruling D-Q4): dispatch-only is what let two test classes
+# that drive the REAL code-review-graph (`test_o13`'s `ARealBuildOnATinyRepo`, `test_p39`'s
+# `InTheBrowser_RealIde`) run NOWHERE for a release. They now run here, weekly, live — the leg
+# that never runs was the row. Never required, never blocking (the `embeddings-leg.yml` shape).
 #
 # Note: mokata carries no dependency on code-review-graph and does NOT durably adopt it here.
 # `graph adopt` pins the manifest through the human WriteGate, which fails CLOSED off a TTY (P2 —
@@ -14,26 +19,29 @@ name: real-crg (opt-in)
 
 on:
   workflow_dispatch:
+  schedule:
+    # Saturdays 04:29 UTC — off the hour, and on a day no other weekly leg uses.
+    - cron: "29 4 * * 6"
 
 permissions:
   contents: read
 
 jobs:
   real-crg:
-    name: real code-review-graph wire (manual)
-    runs-on: ubuntu-latest
+    name: real code-review-graph wire (dispatch + weekly)
+    # ubuntu-24.04, not -latest: `ubuntu-latest` is Ubuntu 26, where the pinned playwright refuses
+    # to install chromium ("does not support chromium on ubuntu26.04-x64" — the 0.0.29 D probe run
+    # 43412521207), and p39's real-IDE class needs that browser. Same pin as ci.yml's e2e legs.
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
-    # CI-JOBS-WITHOUT-A-TIMEOUT (0.0.19 stage 09). ⚠ THIS JOB HAS NEVER COMPLETED SUCCESSFULLY,
-    # and the ceiling is named rather than guessed. Its ONE run (31951931766, 2026-08-16) failed
-    # at step 9 of 10 after 27s, so 27s is a LOWER BOUND on a green run, not the basis for one.
-    # What it is defensible against: the 27s that did complete, plus a strict upper bound on the
-    # single unrun step — that step is `unittest discover -p test_gr_s2_*.py`, and the slowest
-    # ever completed run of an UNFILTERED `unittest discover` on ubuntu in this repo is 865s
-    # (release.yml `test (3.10, absent)`, run 32210447005). (27s + 865s) x 1.5 = 1338s -> **23**.
-    # Generous by design: with no green run to derive from, the ceiling errs toward not cutting
-    # the first one — and 23 is still 15x below the 360 it replaces.
-    timeout-minutes: 23
+    # CI-JOBS-WITHOUT-A-TIMEOUT (0.0.19 stage 09). Re-derived at 0.0.29 wave 4 from this leg's
+    # FIRST green run (mirror 44246035988, 2026-11-18, all six steps incl. o13, p39 and V-SCALE):
+    # the job ran 61 s (05:41:59 -> 05:43:00), and `scripts/ci_ceiling.py`'s rule (slowest
+    # completed run x 1.5, rounded up) gives **2**. It replaces 23, which was derived with no
+    # green run (27 s lower bound + the 865 s unfiltered-discover upper bound, x 1.5). One sample:
+    # re-derive from the slowest green run if a weekly run is ever cancelled at the ceiling.
+    timeout-minutes: 2
     defaults:
       run:
         shell: bash
@@ -51,6 +59,16 @@ jobs:
         # `import _support` below exits 2 in `_provisioning` and no test runs. Pinned by
         # `_preflight_parity.workflow_jobs_missing` over EVERY workflow, not only ci.yml.
         run: pip install --require-hashes -r requirements/ci.txt
+
+      - name: Install the browser the real-IDE class drives (p39 `InTheBrowser_RealIde`)
+        # Same hash-pinned set and the same install as ci.yml's ide-e2e job. Order no longer matters
+        # (0.0.29 C1 D15, `CRG-PULLS-MCP-2`): that set pins `mcp==1.30.0`, and the CRG step below
+        # installs `CRG_SPEC` (2.4.0, fastmcp 3.4.x) through a seam that holds mokata's `mcp<2`, so
+        # neither step should move `mcp` (first green run 44246035988 installed 1.30.0 here and passed
+        # every real-CRG step after the CRG install).
+        run: |
+          pip install --require-hashes -r requirements/e2e.txt
+          python -m playwright install chromium
 
       - name: Install code-review-graph through the SHIPPED install seam (DB.S4)
         # GR.S2-FU — this used to be a bare `pip install code-review-graph`, i.e. CI proving a
@@ -71,9 +89,10 @@ jobs:
           python - <<'PY'
           import sys
           from mokata.extras_install import install_extra
-          from mokata.knowledge.graph_adopt import _crg_importable
+          from mokata.knowledge.graph_adopt import CRG_SPEC, _crg_importable
 
-          res = install_extra("code-review-graph", verify=_crg_importable)
+          # CRG_SPEC, not a bare name: the pinned spec the shipped offer installs (0.0.29 wave 4).
+          res = install_extra(CRG_SPEC, verify=_crg_importable)
           print(f"install_extra -> ok={res.ok} ran={res.ran} verified={res.verified}: {res.message}")
           if not res.ok:
               print("::error::the SHIPPED install seam (extras_install.install_extra) failed to "
@@ -121,8 +140,14 @@ jobs:
             || { echo "::error::the real wire did not resolve the known caller"; exit 1; }
           echo "ok — the real _McpStdioSession query wire round-tripped"
 
-      - name: GR.S2 contract suite (regression under the real binary present)
+      - name: GR.S2 contract suite + the real-CRG classes (regression under the real binary present)
         env:
           MOKATA_TEST_REAL_CRG: "1"   # O15: the suite runs with the graph off unless asked
+          MOKATA_REQUIRE_REAL_CRG: "1"   # 0.0.29 D4: a real-CRG class that SKIPS here is a red
         run: |
           python -m unittest discover -s tests -t tests -p "test_gr_s2_*.py" -v
+          python -m unittest discover -s tests -t tests -p "test_o13_crg_auto_build.py" -v
+          python -m unittest discover -s tests -t tests -p "test_p39_ide_first_run.py" -v
+          # 0.0.29 wave 4 (`REAL-CRG-NOT-RUN-AT-CUT`): V-SCALE's `TheRealToolOnACopiedRepo` drives
+          # the real tool's `--full` rebuild of a `cp -R` checkout, and ran nowhere for a release.
+          python -m unittest discover -s tests -t tests -p "test_vscale_full_rebuild_of_a_copied_repo.py" -v

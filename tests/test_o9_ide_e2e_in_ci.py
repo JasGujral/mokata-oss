@@ -218,7 +218,10 @@ class TheHarnessNamesItsBrowser(unittest.TestCase):
         self.assertIn("GRANTS=0", self._harness({"MOKATA_E2E_BROWSER": "firefox"}, code).stdout)
 
     def test_firefoxs_own_abort_of_the_live_stream_is_noise_and_nothing_else_is(self):
+        # 0.0.29 D6: exempt only while a harness navigation is in flight (`_navigating`);
+        # the unit-side grade of that term is test_d6_e2e_harness_doors.
         code = ("import _harness as H\n"
+                "H.IdeFlow._navigating = 1\n"
                 "f = H.IdeFlow._expected_console\n"
                 "msg = 'The connection to http://127.0.0.1:1/api/events?client=x was interrupted "
                 "while the page was loading.'\n"

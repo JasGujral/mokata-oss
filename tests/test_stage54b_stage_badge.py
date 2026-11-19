@@ -21,6 +21,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -287,6 +288,51 @@ class TestStatuslineCommand(unittest.TestCase):
     def test_dispatch_via_main(self):
         with _stdin(""), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(hook_cli.main(["statusline"]), 0)
+
+
+class TestStatuslineNoPayloadDefault(unittest.TestCase):
+    """0.0.29 D5 `W5-STATUSLINE-NO-PAYLOAD-DEFAULT-UNGRADED`: with no usable payload the badge is
+    for the PROCESS cwd (`hook_cli._cwd_and_session_name`). Every row above names its cwd in the
+    payload, so the default — and the empty / `{}` / garbage payloads — were graded for the badge by
+    nothing. FIRING CONTROL: the default replaced by a fixed path (no badge in these rows)."""
+
+    def _cwd(self, d):
+        """chdir into `d` for this test. The chdir-back cleanup is registered AFTER the tempdir's
+        removal, so it RUNS FIRST (cleanups are LIFO): Windows cannot delete the process cwd."""
+        old = os.getcwd()
+        os.chdir(d)
+        self.addCleanup(os.chdir, old)
+
+    def _tmp(self):
+        d = tempfile.mkdtemp(prefix="mk-54b-cwd-")
+        self.addCleanup(shutil.rmtree, d, True)
+        return os.path.realpath(d)
+
+    def _active_repo(self):
+        d = self._tmp()
+        surface = _repo(d)
+        PipelineCheckpoint(surface.state, "run-a").mark_passed("brainstorm")
+        return d
+
+    def test_no_usable_payload_shows_the_badge_for_the_process_cwd(self):
+        self._cwd(self._active_repo())
+        for label, stdin in (("empty stdin", ""), ("{}", "{}"), ("non-JSON", "this is not json")):
+            with self.subTest(label):
+                rc, out = _run_statusline(stdin)
+                self.assertEqual(rc, 0)
+                self.assertIn("mokata", out)
+                self.assertIn("›spec‹", out)
+
+    def test_an_uninitialised_process_cwd_prints_nothing(self):
+        self._cwd(self._tmp())
+        rc, out = _run_statusline("")
+        self.assertEqual((rc, out), (0, ""))
+
+    def test_a_payload_cwd_wins_over_the_process_cwd(self):
+        self._cwd(self._active_repo())                 # the process sits in an active repo ...
+        elsewhere = self._tmp()                        # ... the payload names an uninitialised one
+        rc, out = _run_statusline(json.dumps({"cwd": elsewhere}))
+        self.assertEqual((rc, out), (0, ""), "the process cwd was used although the payload named one")
 
 
 # ======================================================================== setup wiring

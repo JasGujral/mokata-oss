@@ -50,6 +50,12 @@ _RUNNABLE = (".exe", ".com")
 #: What Windows starts through cmd.exe / a script host — found to SAY so, never run.
 _BATCH = (".cmd", ".bat")
 _SHIMS = (".cmd", ".bat", ".ps1")
+#: Windows programs that RE-PARSE the command line they are handed (0.0.29 R-B10): a test runner
+#: that is one of these would let the repo's own text become a second command. Read as Win32 reads
+#: a name (any case, trailing dots/spaces stripped), with `.exe`/`.com`/no extension. `bash`/`sh`
+#: are deliberately NOT here: Git-for-Windows' bash is how a `.sh` suite runs on Windows.
+SHELL_HOSTS = frozenset({"cmd", "powershell", "powershell_ise", "pwsh", "wsl", "cscript",
+                         "wscript", "mshta"})
 
 #: CPython 3.13 `ntpath._isreservedname`'s sets, COPIED (the floor is 3.10, so it is not called):
 #: DOS device names (incl. the superscript COM/LPT digits Windows also reserves) and the characters
@@ -83,8 +89,10 @@ def win_name(name: str) -> str:
 def win_refusal(name: str) -> "Optional[Tuple[str, str]]":
     """`(kind, why)` when Windows must not be asked to start `name` as a program, else None (the
     name, read as Win32 reads it, ends `.exe`/`.com` or has no extension). `kind` is one of
-    `verbatim`, `unc`, `drive-relative`, `stream`, `device`, `batch` (cmd.exe), `script`
-    (PowerShell, a script host, anything else). Only the NAME is judged — no file is touched."""
+    `verbatim`, `unc`, `drive-relative`, `stream`, `device`, `shell` (a program that re-parses
+    its command line: `SHELL_HOSTS`), `batch` (cmd.exe), `script` (PowerShell, a script host,
+    anything else). Only the NAME is judged — no file is touched (`win_runnable` also judges an
+    explicit path after resolving links)."""
     raw = name.replace("/", "\\")
     if raw.startswith(("\\\\?\\", "\\\\.\\", "\\??\\")):
         return "verbatim", (f"`{name}` is a `\\\\?\\` / `\\\\.\\` path — Windows does not "
@@ -104,6 +112,10 @@ def win_refusal(name: str) -> "Optional[Tuple[str, str]]":
     if base and base.partition(".")[0].rstrip(" ").upper() in _RESERVED_NAMES:
         return "device", f"`{name}` is a Windows device name (`{base}`), not a program file"
     ext = os.path.splitext(base)[1].lower()
+    stem = os.path.splitext(base)[0] if ext else base
+    if (not ext or ext in _RUNNABLE) and stem.rstrip(" ").lower() in SHELL_HOSTS:
+        return "shell", (f"`{name}` is a Windows command host ({stem.rstrip(' ')}) that would re-parse "
+                         f"the command line — name the test program itself")
     if not ext or ext in _RUNNABLE:
         return None
     if ext in _BATCH:
@@ -121,6 +133,14 @@ def win_runnable(path: str) -> "Tuple[Optional[str], str]":
     bad = win_refusal(path)
     if bad is not None:
         return None, bad[1]
+    try:
+        real = os.path.realpath(path)          # a symlink / junction / 8.3 name (probe #45 F7–F9)
+    except (OSError, ValueError):
+        real = path
+    if real != path:
+        bad = win_refusal(real)
+        if bad is not None and bad[0] == "shell":
+            return None, f"`{path}` is a link to `{real}`: {bad[1]}"
     p = win_name(path)
     if os.path.splitext(p)[1].lower() in _RUNNABLE:
         return p, ""
@@ -195,5 +215,51 @@ def which_in(name: str, dirs: Sequence[str], nt: Optional[bool] = None,
     return None
 
 
-__all__ = ["path_dirs", "which_in", "win_name", "win_refusal", "win_reserved_name",
+def which_for_cmd(name: str, dirs: Sequence[str], pathext: Optional[str],
+                  cwd: str) -> "Tuple[Optional[str], Optional[str]]":
+    """`(found, planted)` for a program of a `cmd /c` line (0.0.29 R-B10): `found` is the first
+    hit in `dirs` (the user's absolute PATH; never the cwd ITSELF, however spelled — that is cmd's
+    implicit search, the one this exists to replace), with PATHEXT — `.cmd`/`.bat` count here,
+    because cmd runs a PATH batch file itself; `planted` is the file name cmd would have taken from
+    `cwd` instead (only when nothing was found). A PATH directory BELOW the cwd counts (round 4):
+    the project env's `Scripts\\` that `project_env.activated` put on PATH by name is where the
+    baseline's `pytest` is meant to come from — refusing it would refuse every repo-local venv now
+    that a program found nowhere is refused rather than passed to cmd. Names are tried as cmd
+    tries them: as written when the extension is in PATHEXT, then with each PATHEXT suffix."""
+    exts = [e for e in (pathext or ".COM;.EXE;.BAT;.CMD").split(";") if e]
+    low = {e.lower() for e in exts}
+    names = ([name] if os.path.splitext(name)[1].lower() in low else []) + [name + e for e in exts]
+    here = os.getcwd()
+    for d in dirs:
+        if not d or not os.path.isabs(d) or not os.path.isdir(d):
+            continue
+        if same_entry(d, here) or same_entry(d, cwd):
+            continue
+        for n in names:
+            cand = _folded_file(d, n)
+            if cand and not same_entry(os.path.dirname(os.path.realpath(cand)), cwd):
+                return cand, None                      # (a link back into the cwd is the cwd)
+    for n in names:
+        cand = _folded_file(cwd, n)
+        if cand:
+            return None, os.path.basename(cand)
+    return None, None
+
+
+def _folded_file(d: str, n: str) -> Optional[str]:
+    """The file `n` in `d` matched as cmd matches it — case folded — spelled as the disk spells
+    it. Windows folds case by itself; folding here keeps the rule the same where a test injects
+    it on a case-sensitive file system."""
+    try:
+        entries = os.listdir(d)
+    except OSError:
+        return None
+    for entry in entries:
+        if entry.lower() == n.lower():
+            p = os.path.join(d, entry)
+            return p if os.path.isfile(p) else None
+    return None
+
+
+__all__ = ["SHELL_HOSTS", "path_dirs", "which_for_cmd", "which_in", "win_name", "win_refusal", "win_reserved_name",
            "win_runnable"]

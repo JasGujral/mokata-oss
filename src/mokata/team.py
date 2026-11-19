@@ -39,6 +39,7 @@ from .govern.trust import (CLI_SURFACE, policy_approved, policy_surface,
                            policy_tool, policy_trust)
 from .manifest import Manifest
 from .profiles import TOOL_CATALOG
+from .plugin_runtime import localize_commands
 
 # A valid env-var NAME (the ONLY form the DSN pointer may take — never an inline DSN value).
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -795,8 +796,8 @@ def _join_vault(root: str, vault_ref: Optional[str], *, assume_yes, confirm, out
 def _join_onboard(out: Callable[[str], None]) -> JoinStep:
     # /mokata:onboard is a GUIDED, interactive capture — mokata can't complete it non-interactively;
     # it hands the teammate the single next command (honest about the mechanism).
-    msg = ("run `/mokata:onboard` to capture the project's rules, guardrails, conventions & "
-           "domain context into typed, human-gated memory (guided).")
+    msg = (localize_commands("run `/mokata:onboard` to capture the project's rules, guardrails, conventions & "
+           "domain context into typed, human-gated memory (guided).", None))
     out("  " + msg)
     return JoinStep("onboard", "pending", msg)
 

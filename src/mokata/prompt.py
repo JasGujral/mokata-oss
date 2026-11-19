@@ -138,15 +138,71 @@ def decline_notice(decision: ConsentDecision, *, flag: str = "--yes") -> str:
     return "you declined"
 
 
+#: The environment variable Claude Code sets in the shells its agent runs (0.0.29 H-a: ONE definition in
+#: src/, read by `doctor --fix`, `gate override`, the IDE approve codes and `mokata ide --terminal`).
+#: The variable the Claude app's own Terminal panel sets is NOT a marker (Jas, 2026-11-16, "Drop"): it
+#: marks the HUMAN's shell, where `doctor --fix` must ask and `gate override` must ask.
+#: ⚠ DEFENSE IN DEPTH ONLY: an agent can strip
+#: its own environment (`env -u`), so no gate may rest on this. `doctor --fix` rests on a human answer
+#: typed at a real terminal (`_stdin_is_tty`); this only lets it refuse earlier, with a clearer line.
+AGENT_SHELL_SIGNALS = ("CLAUDECODE",)
+
+
+def agent_shell(environ=None) -> str:
+    """The variable that marks this as an agent's shell, or "" outside one. ANY non-empty value counts
+    (`CLAUDECODE=true` is as much an agent's shell as `CLAUDECODE=1`); an empty one does not — which is
+    why this is never the gate itself."""
+    import os
+    env = os.environ if environ is None else environ
+    return next((k for k in AGENT_SHELL_SIGNALS if env.get(k)), "")
+
+
 def _stdin_is_tty() -> bool:
     """True only when stdin is a real interactive terminal. Fail-closed and never raises: a
     missing stdin (None) or an isatty() that itself errors counts as non-interactive."""
-    stdin = getattr(sys, "stdin", None)
-    if stdin is None:
+    return real_terminal(getattr(sys, "stdin", None))
+
+
+def real_terminal(stream) -> bool:
+    """Is `stream` a terminal a human types at? Fail-closed, never raises.
+
+    ⚠ WINDOWS (0.0.29 H-a xplat): `isatty()` is True for EVERY character device, the `NUL` device
+    included — so `mokata doctor --fix < NUL` (or a child spawned with stdin=DEVNULL) looked like a
+    terminal and was asked a question nobody could answer. There a stream counts only when the
+    console answers `GetConsoleMode` for its handle. A stream with no OS handle (a test double) is
+    judged by its own `isatty()`."""
+    if stream is None:
         return False
     try:
-        return bool(stdin.isatty())
-    except (OSError, ValueError):
+        if not stream.isatty():
+            return False
+    except (OSError, ValueError, AttributeError):
+        return False
+    if not CONSOLE_CHECK:
+        return True
+    try:
+        fd = stream.fileno()
+    except (OSError, ValueError, AttributeError):
+        return True                         # no OS handle: its own isatty() is all there is
+    return _console_answers(fd)
+
+
+#: Windows only: is a "terminal" confirmed by the console itself (see `real_terminal`)?
+CONSOLE_CHECK = sys.platform == "win32"
+
+
+def _console_answers(fd: int) -> bool:
+    """Does the Windows console accept `GetConsoleMode` for `fd`'s handle? False on any failure."""
+    try:
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+        k.GetConsoleMode.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD)]
+        k.GetConsoleMode.restype = wintypes.BOOL
+        mode = wintypes.DWORD(0)
+        return bool(k.GetConsoleMode(msvcrt.get_osfhandle(fd), ctypes.byref(mode)))
+    except Exception:                       # noqa: BLE001 — fail closed: not a console
         return False
 
 

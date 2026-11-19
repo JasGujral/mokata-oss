@@ -67,6 +67,14 @@ DIST = "mokata"
 #: client). Their executables must be exposed, not just their modules (0.0.25 I-02, measured).
 EXPOSE_EXECUTABLES = ("code-review-graph",)
 
+#: 0.0.29 C1 (D15 `CRG-PULLS-MCP-2`) — mokata's own base requirements a resolver must never move.
+#: `mcp`: code-review-graph 2.4.0 takes `fastmcp<5`, fastmcp 4.x needs mcp 2.x, and mcp 2 removed
+#: the module mokata's server is built on. A joint `mokata[...]` install carries mokata's own
+#: `mcp>=1.30,<2`; a NON-joint install (pip / uv pip / pipx inject of requirements into mokata's
+#: environment) does not, and resolved mcp 2.3.0 (`0029-evidence/C1/d15-*.txt`). So every such
+#: argv carries it too.
+HELD = ("mcp",)
+
 _UV_RECEIPT = "uv-receipt.toml"
 _PIPX_METADATA = "pipx_metadata.json"
 
@@ -152,6 +160,34 @@ def extra_requirements(extra: str, requires: Optional[Sequence[str]] = None) -> 
         rest = re.sub(r"^(and|or)\s+|\s+(and|or)$", "", rest).strip()
         out.append(req.strip() + (f"; {rest}" if rest else ""))
     return out
+
+
+def held_requirements(requires: Optional[Sequence[str]] = None) -> List[str]:
+    """mokata's own base (non-extra) `Requires-Dist` lines for `HELD`, read from the installed
+    metadata so they cannot drift from pyproject; a source tree with no metadata falls back to the
+    server's own `SDK_REQUIREMENT` (asserted equal to pyproject by `test_mcp_sdk_2_breaks_the_server`)."""
+    if requires is None:
+        try:
+            requires = _md.requires(DIST) or []
+        except _md.PackageNotFoundError:
+            requires = []
+    out: List[str] = []
+    for line in requires:
+        req, _, marker = line.partition(";")
+        if _EXTRA_CLAUSE.search(marker):
+            continue
+        name = re.split(r"[\[<>=!~;\s]", req.strip(), 1)[0]
+        if _canon(name) in {_canon(h) for h in HELD}:
+            out.append(req.strip().replace(" ", ""))
+    if not out:
+        from .mcp.server import SDK_REQUIREMENT
+        out.append(SDK_REQUIREMENT)
+    return out
+
+
+def _with_held(reqs: Sequence[str], requires: Optional[Sequence[str]] = None) -> List[str]:
+    reqs = list(reqs)
+    return reqs + [h for h in held_requirements(requires) if h not in reqs]
 
 
 _SELF_EXTRA = re.compile(r"^\s*mokata\s*\[([^\]]+)\]\s*$", re.I)
@@ -326,10 +362,14 @@ def plan_install(specs: Sequence[str], *,
         apps = [r for r in reqs if _canon(re.split(r"[\[<>=!~;@ ]", r, 1)[0]) in exposed]
         libs = [r for r in reqs if r not in apps]
         cmds = []
+        # D15: `pipx inject` installs each named package on its own (a held `mcp` named beside
+        # code-review-graph is skipped as "already installed" AFTER code-review-graph pulled mcp
+        # 2.3 — measured), so the hold rides in `--pip-args`, inside every pip run.
+        hold = "--pip-args=" + " ".join(held_requirements(requires))
         if libs:
-            cmds.append([pipx or "pipx", "inject", DIST, *libs])
+            cmds.append([pipx or "pipx", "inject", DIST, *libs, hold])
         if apps:
-            cmds.append([pipx or "pipx", "inject", "--include-apps", DIST, *apps])
+            cmds.append([pipx or "pipx", "inject", "--include-apps", DIST, *apps, hold])
         shown = " && ".join(_display(c, platform) for c in cmds)
         if not pipx:
             return InstallPlan(PIPX, specs, None, shown,
@@ -337,11 +377,12 @@ def plan_install(specs: Sequence[str], *,
         return InstallPlan(PIPX, specs, cmds[0], shown, then=cmds[1:])
 
     if inst == PIP:
-        argv = [executable, "-m", "pip", "install", *reqs]
+        argv = [executable, "-m", "pip", "install", *_with_held(reqs, requires)]
         return InstallPlan(PIP, specs, argv, _display(argv, platform))
 
     if inst == UV_PIP:
-        argv = [which("uv") or "uv", "pip", "install", "--python", executable, *reqs]
+        argv = [which("uv") or "uv", "pip", "install", "--python", executable,
+                *_with_held(reqs, requires)]
         return InstallPlan(UV_PIP, specs, argv, _display(argv, platform))
 
     show = [executable, "-m", "ensurepip"]
@@ -449,10 +490,11 @@ def plan_extra_install(extra: str, *,
         reqs = [r for r in reqs if _canon(re.split(r"[<>=!~;\[\s]", r, 1)[0]) in want] or reqs
     if inst == UV_PIP and reqs:
         return InstallPlan(UV_PIP, [me], None, _display(
-            ["uv", "pip", "install", "--python", executable, *reqs], platform))
+            ["uv", "pip", "install", "--python", executable, *_with_held(reqs, requires)],
+            platform))
     if inst == PIP and reqs:
         return InstallPlan(PIP, [me], None, _display(
-            [executable, "-m", "pip", "install", *reqs], platform))
+            [executable, "-m", "pip", "install", *_with_held(reqs, requires)], platform))
     # No readable metadata (a source tree on PYTHONPATH), or no installer at all: the documented
     # line. It names mokata itself, which is right for a fresh environment.
     return InstallPlan(inst, [me], None, _display([executable, "-m", "pip", "install", me], platform),

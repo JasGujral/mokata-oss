@@ -324,8 +324,9 @@ class TheImageDiffWorks(H.IdeFlow):
         self.assertIn("<script>", p.text_content("#diff"), "the SVG's source is in the line diff, as TEXT")
         # opened DIRECTLY (a new tab on the image route): still inert
         base = "{0.scheme}://{0.netloc}".format(urlsplit(self.server.url))
-        other = self.browser.new_context()
+        other = self.new_context()          # the harness door: locale pin + listeners (0.0.29 D6)
         tab = other.new_page()
+        heard = len(self.errors)
         try:
             tab.goto(self.server.url)                       # pair this fresh context too
             resp = tab.goto(base + "/api/image/raw?path=img/evil.svg")
@@ -337,6 +338,20 @@ class TheImageDiffWorks(H.IdeFlow):
         finally:
             other.close()
         self.assertEqual([], HITS, "still nothing fetched")
+        # Since the door, this tab is HEARD (0.0.29 D6): the browser reports each script it refused
+        # to run and each external fetch the CSP refused — the inertness above, in the browser's
+        # own words. They are this step's evidence, not the flow's console errors: taken out of
+        # the flow's list here, and every one must be that kind (anything else stays a red).
+        refused = self.errors[heard:]
+        del self.errors[heard:]
+        blocked = [e for e in refused if "Blocked script execution" in e and "evil.svg" in e]
+        # Chromium: "... violates the following Content Security Policy directive"; Firefox:
+        # "Content-Security-Policy: The page's settings blocked the loading of a resource ..."
+        # (also the browser's own favicon fetch for the sandboxed document).
+        csp = [e for e in refused if "violates the following Content Security Policy" in e
+               or "Content-Security-Policy: The page" in e]
+        self.assertEqual(sorted(refused), sorted(blocked + csp), "an error the direct tab caused "
+                         "that is not the sandbox refusing the SVG")
 
     def test_9_a_binary_that_is_not_an_image_keeps_binary(self):
         p = self.page

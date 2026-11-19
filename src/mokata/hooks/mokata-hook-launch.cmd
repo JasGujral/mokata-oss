@@ -35,12 +35,20 @@ for /f "tokens=2 delims==" %%v in ('findstr /b /c:"__version__" "%MOKATA_SRC_DIR
 if defined MOKATA_VER set "MOKATA_VER=%MOKATA_VER: =%"
 if defined MOKATA_VER set "MOKATA_VER=%MOKATA_VER:"=%"
 
-rem BYTECODE (0.0.28 W5, verifier M1) - the sh launcher's rule, same reasons: the hook's Python
-rem caches its bytecode in mokata's per-user cache (%XDG_CACHE_HOME%, else %USERPROFILE%\.cache,
-rem then mokata\pycache - `branch_protection.default_cache_dir`'s base), never beside the sources,
-rem and an inherited PYTHONDONTWRITEBYTECODE is dropped for it. No cache to name: left alone.
-set "MOKATA_CACHE=%XDG_CACHE_HOME%"
-if not defined MOKATA_CACHE if defined USERPROFILE set "MOKATA_CACHE=%USERPROFILE%\.cache"
+rem BYTECODE - mokata's ONE cache rule (`mokata.pycache.user_cache_base`, 0.0.29 F), as the sh
+rem launcher applies it: %XDG_CACHE_HOME% if ABSOLUTE, else %USERPROFILE%\.cache if absolute, then
+rem mokata\pycache; never beside the sources, never under a relative path. Absolute here is
+rem Windows' own rule: a drive WITH a root (C:\x, C:/x) or a UNC head (\\srv\s) - `:mk_abs`.
+rem No absolute base: PYTHONDONTWRITEBYTECODE is left alone and nothing is written.
+set "MOKATA_CACHE="
+set "MOKATA_T=%XDG_CACHE_HOME%"
+call :mk_abs
+if defined MOKATA_ABS set "MOKATA_CACHE=%XDG_CACHE_HOME%"
+if defined MOKATA_CACHE goto :mk_cache_named
+set "MOKATA_T=%USERPROFILE%"
+call :mk_abs
+if defined MOKATA_ABS set "MOKATA_CACHE=%USERPROFILE%\.cache"
+:mk_cache_named
 if defined MOKATA_CACHE set "PYTHONPYCACHEPREFIX=%MOKATA_CACHE%\mokata\pycache"
 if defined MOKATA_CACHE set "PYTHONDONTWRITEBYTECODE="
 
@@ -82,6 +90,16 @@ rem 0 = at the floor (use it) · 7 = an older Python 3 (remember it) · anything
 %* -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 7 if sys.version_info[0] == 3 else 1)" >nul 2>&1
 if "%ERRORLEVEL%"=="0" set "MOKATA_PY=%*"
 if "%ERRORLEVEL%"=="7" if not defined MOKATA_OLD set "MOKATA_OLD=%*"
+exit /b 0
+
+:mk_abs
+rem MOKATA_ABS=1 when %MOKATA_T% is absolute by Windows' own rule (see BYTECODE above).
+set "MOKATA_ABS="
+if not defined MOKATA_T exit /b 0
+if "%MOKATA_T:~1,2%"==":\" set "MOKATA_ABS=1"
+if "%MOKATA_T:~1,2%"==":/" set "MOKATA_ABS=1"
+if "%MOKATA_T:~0,2%"=="\\" if not "%MOKATA_T:~2,1%"=="" set "MOKATA_ABS=1"
+if "%MOKATA_T:~0,2%"=="//" if not "%MOKATA_T:~2,1%"=="" set "MOKATA_ABS=1"
 exit /b 0
 
 :try_uvx

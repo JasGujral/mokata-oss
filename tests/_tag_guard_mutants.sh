@@ -304,8 +304,9 @@ mutant "C07 ★★ the TAG-TIME invocation loses PYTHONPATH — the remedy stops
 
 # ==== D. which package answered =================================================================
 
+# re-anchored 0.0.29 H-b xplat: the boundary goes through fs_identity.require_inside since H3
 mutant "D01 ★★★ every package reads as in-root — release-check never refuses again" "$PKG" \
-  '    state = ANSWERED_IN_ROOT if _within(package_dir, resolved_root) else ANSWERED_OUT_OF_ROOT' \
+  '    state = ANSWERED_IN_ROOT if require_inside(package_dir, resolved_root) else ANSWERED_OUT_OF_ROOT' \
   '    state = ANSWERED_IN_ROOT' "$T"
 
 # ⚠ D02 WAS ONE MUTANT AND IT CAME BACK GREEN — the FIRST batch's only survivor. `_within` resolved
@@ -320,9 +321,10 @@ mutant "D02b ★★ the PACKAGE path stops being resolved — a symlinked src/ i
   '    package_dir = os.path.realpath(os.path.dirname(package_file))' \
   '    package_dir = os.path.abspath(os.path.dirname(package_file))' "$T"
 
+# re-anchored 0.0.29 H-b xplat: the boundary goes through fs_identity.require_inside since H3
 mutant "D03 ★★ the boundary is a bare prefix — mokata-oss counts as inside mokata" "$PKG" \
-  '    return child == parent or child.startswith(parent.rstrip(os.sep) + os.sep)' \
-  '    return child == parent or child.startswith(parent)' "$T"
+  '    state = ANSWERED_IN_ROOT if require_inside(package_dir, resolved_root) else ANSWERED_OUT_OF_ROOT' \
+  '    state = ANSWERED_IN_ROOT if package_dir.startswith(resolved_root) else ANSWERED_OUT_OF_ROOT' "$T"
 
 mutant "D04 ★★ a package with no __file__ reads as the checkout's own (§7g)" "$PKG" \
   '        return PackageProvenance(ANSWERED_UNRESOLVABLE, resolved_root, None, version, field_count)' \

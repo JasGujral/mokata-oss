@@ -3,9 +3,12 @@
 Business rules — what must be true for the user:
   * Every Claude Code tool call runs mokata's gate hooks, and every turn runs its observability hooks,
     each as a fresh Python process. A gate hook answers within doc 109's 150 ms p95 and an
-    observability hook within 50 ms p95 (Linux, measured here; the macOS/Windows legs are CI's, with
-    `perf.relax_factor()` for shared runners). Where a path still misses its target, the gap is a
-    NAMED ceiling in `perf.HOOK_BUDGET_GAPS_MS`, never a silent pass.
+    observability hook within 50 ms p95 — and, since 0.0.29 F, inside ONE MEASURED CEILING per hook
+    per fixture (`perf.HOOK_BUDGET_CEILINGS_MS`: 1.5x the worst normalised p95 measured on the
+    probe's OSes and a Mac, never above the target unless an owned gap), so a 2x regression in any
+    hook reds on every OS. No CI relax (`perf.margin_relax()` is 1): each cell divides by the bare
+    interpreter measured beside it. Every timed case prints an `[HB-MEASURE]` row (raw samples, the
+    floor, the load) — the measurements the ceilings are re-derived from.
   * The speed-up changes no verdict: the gate/secret modules are the contract and stay green; the
     lazy package re-exports give back exactly the objects the eager ones did; the manifest verdict
     is the built-in validator's, with or without `jsonschema`; the session draft is byte-identical.
@@ -24,6 +27,7 @@ import importlib
 import json
 import os
 import random
+import re
 import subprocess
 import sys
 import tempfile
@@ -352,11 +356,27 @@ class TheFastPathIsSoundAgainstTheResolver(unittest.TestCase):
                                   "last_assistant_message": "done"})
             env = dict(os.environ, PYTHONPATH=SRC)
             env["MOKATA_HOOK_SPOOL"] = os.path.join(d, "spool")
-            p = subprocess.run([sys.executable, "-m", "mokata_emit", "stop", "--via-plugin"],
-                               input=payload, cwd=d, env=env, text=True, encoding="utf-8",
-                               capture_output=True, timeout=60, **hidden())
-            self.assertEqual(0, p.returncode, p.stderr)
-            _wait_drained(env["MOKATA_HOOK_SPOOL"])
+            # HB-STOP-SPOOL-CLEANUP-RACE-WINDOWS (0.0.29 F, B-Q2) — the hook runs as a door tree, so
+            # the test can wait for the drainer it started to EXIT (Windows: the drainer is in the
+            # hook's Job Object; ACTIVE_PROCESS_ZERO is the event) before the tree it held is
+            # removed. Before, the temp dir went right after the spool emptied, while the drainer
+            # still had one directory listing to make: a PermissionError on Windows.
+            from mokata.quiet_spawn import spawn_jobbed
+            err = os.path.join(d, "hook.err")
+            with open(err, "wb") as fe:
+                tree = spawn_jobbed([sys.executable, "-m", "mokata_emit", "stop", "--via-plugin"],
+                                    stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=fe,
+                                    cwd=d, env=env)
+                try:
+                    tree.proc.stdin.write(payload.encode("utf-8"))
+                    tree.proc.stdin.close()
+                    rc = tree.wait_exit()            # the hook's own exit (an event, no clock)
+                    _wait_drained(env["MOKATA_HOOK_SPOOL"])
+                    tree.wait_empty()                # every process of the hook's tree has exited
+                finally:
+                    tree.close()
+            with open(err, encoding="utf-8", errors="replace") as fh:
+                self.assertEqual(0, rc, fh.read())
             drafts = H.drafts(d)
             self.assertEqual(1, len(drafts))
             self.assertIn("- last word: done", drafts[0].value)
@@ -441,24 +461,94 @@ def _wait_drained(spool: str, timeout: float = 60.0) -> None:
     raise AssertionError(f"spool not drained in {timeout}s: {os.listdir(spool)}")
 
 
-def _wait_refreshed(root: str, timeout: float = 60.0) -> None:
-    """Block until SessionStart's detached briefing refresher (0.0.26 O12b) has released its lock.
-    Like the drain, it is off the harness's clock, so it is let finish between calls, untimed."""
-    import time
-    lock = os.path.join(root, ".mokata", "temp_local", "briefing", "refresh.lock")
-    deadline = time.monotonic() + 1.0
-    while not os.path.exists(lock) and time.monotonic() < deadline:
-        if not os.path.isdir(os.path.dirname(lock)):
+def _refresh_mark(root: str):
+    """What SessionStart's refresher will have changed once it has run: the briefing cache's
+    `lines.json` (`briefing_cache.store`, written by every refresh before it releases its lock)."""
+    try:
+        return os.stat(os.path.join(root, ".mokata", "temp_local", "briefing",
+                                    "lines.json")).st_mtime_ns
+    except OSError:
+        return None
+
+
+def _confirmed(measure, holds, batches: int) -> list:
+    """THE BREACH RULE (0.0.29 F round 3, verifier r2 M2) — a breach must CONFIRM itself before a
+    cell fails: a batch that meets the bound ends the case green; a batch that breaches it is
+    re-measured in a FRESH batch (new processes, its own interleaved interpreter floor), up to
+    `batches`, and the case is red only when EVERY batch breached. A real regression (a hook 2x
+    slower) is slow in every batch; a load spike is not. The cells grade `min` of what was seen.
+    Graded at a load average below ~8 (the 0.0.29 F evidence records `uptime` around each run)."""
+    seen = []
+    for _ in range(batches):
+        seen.append(measure())
+        if holds(seen[-1][0]):
             break
-        time.sleep(0.01)
-    deadline = time.monotonic() + timeout
-    while os.path.exists(lock) and time.monotonic() < deadline:
+    return seen
+
+
+class TheBreachConfirmsItself(unittest.TestCase):
+    """guard — the rule above, on scripted measurements (no clock): one noisy breach then a pass is
+    green after two batches; a breach in every batch is red after all of them; a pass is one batch."""
+
+    def _run(self, values):
+        it = iter(values)
+        seen = _confirmed(lambda: (next(it),), lambda v: v <= 100, 3)
+        return [v for (v,) in seen], min(seen)[0] <= 100
+
+    def test_a_noisy_breach_is_re_measured_and_passes(self):
+        self.assertEqual(([180, 90], True), self._run([180, 90, 999]))
+
+    def test_a_breach_in_every_batch_is_red(self):
+        self.assertEqual(([180, 170, 190], False), self._run([180, 170, 190]))
+
+    def test_a_pass_is_one_batch(self):
+        self.assertEqual(([50], True), self._run([50, 999, 999]))
+
+
+def _wait_refreshed(root: str, mark, guard: float = 600.0) -> None:
+    """Block until SessionStart's detached briefing refresher (0.0.26 O12b) has RUN and released its
+    lock — an event (0.0.29 F): `lines.json` moved past `mark` and `refresh.lock` is gone. Before,
+    this gave the lock one second to appear and returned if it had not, so a refresher still
+    starting raced the next timed run (and, in the miss cell, re-stored the answer the cell had just
+    deleted). Like the drain, it is off the harness's clock. Outside a mokata repo there is none.
+    `guard` is a hang guard (a refresher that never finishes), not a grade."""
+    import time
+    base = os.path.join(root, ".mokata", "temp_local", "briefing")
+    from mokata.config import Surface
+    if not Surface.is_initialized(root):
+        return                  # no refresher outside a mokata repo (other hooks may still have
+                                # made `.mokata/temp_local` there: the directory is not the test)
+    lock = os.path.join(base, "refresh.lock")
+    deadline = time.monotonic() + guard
+    while time.monotonic() < deadline:
+        if _refresh_mark(root) != mark and not os.path.exists(lock):
+            return
         time.sleep(0.02)
+    raise AssertionError(f"SessionStart's refresher did not finish in {guard:g}s ({base})")
 
 
 def _p95(xs):
     xs = sorted(xs)
     return xs[max(0, int(round(0.95 * len(xs))) - 1)]
+
+
+def _load() -> "list":
+    try:
+        return [round(x, 2) for x in os.getloadavg()]
+    except (AttributeError, OSError):
+        return []
+
+
+def _measure_row(key: str, seen: list, samples: list, floor: list) -> None:
+    """One `[HB-MEASURE]` line (stderr): what `tests/data/hook_budget_measured.json` is derived
+    from — the graded value (best batch, normalised), every batch, the raw samples and floor of the
+    last batch, and the load average beside it (siblings building in parallel move it)."""
+    best = min(seen)
+    sys.stderr.write("\n[HB-MEASURE] " + json.dumps({
+        "key": key, "os": sys.platform, "p95_norm": round(best[0], 1),
+        "batches": [[round(a, 1), round(b, 1), round(c, 1)] for a, b, c in seen],
+        "samples": [round(x, 1) for x in samples], "floor": [round(x, 1) for x in floor],
+        "load": _load()}, sort_keys=True) + "\n")
 
 
 class HookBudgetHoldsForEveryWiredHook(unittest.TestCase):
@@ -499,19 +589,21 @@ class HookBudgetHoldsForEveryWiredHook(unittest.TestCase):
             cls.dirs[name] = d
         PipelineCheckpoint(Surface.load(cls.dirs["bound"]).state, "r1").ensure_registered()
         RI.bind_registered(cls.dirs["bound"], "S1", "r1")
-        cls.relax = perf.relax_factor()
+        cls.relax = perf.margin_relax()
         cls.rows = []
 
     @classmethod
     def tearDownClass(cls):
         if cls.rows:
-            sys.stderr.write("\n[HOOK-BUDGET] cold-process p95 ms (Linux; relax x%g):\n" % cls.relax
+            sys.stderr.write("\n[HOOK-BUDGET] cold-process p95 ms (%s; relax x%g):\n"
+                             % (sys.platform, cls.relax)
                              + "".join(f"  {r}\n" for r in cls.rows))
         cls._t.cleanup()
 
-    def _batch(self, sub: str, d: str, body: bytes) -> "tuple":
+    def _batch(self, sub: str, d: str, body, before=None) -> "tuple":
         """(hook p95, bare-interpreter p50) — the floor runs INTERLEAVED with the hook, so both see
-        the same box at the same moment (`perf.interpreter_factor`)."""
+        the same box at the same moment (`perf.interpreter_factor`). `body` is the payload, or a
+        callable giving run `i`'s; `before(i)` runs untimed ahead of run `i` (the miss cell)."""
         import statistics
         import time
         spool = os.path.join(self._t.name, "spool")
@@ -519,21 +611,28 @@ class HookBudgetHoldsForEveryWiredHook(unittest.TestCase):
             sub, "--via-plugin",
             env=dict(os.environ, PYTHONPATH=SRC, CLAUDE_PROJECT_DIR=d, MOKATA_HOOK_SPOOL=spool),
             home=os.path.join(self._t.name, "home"))
-        xs, floor = [], []
+        xs, floor, outs = [], [], []
         for i in range(self.N + 2):
+            if before is not None:
+                before(i)
+            payload = body(i) if callable(body) else body
+            mark = _refresh_mark(d) if sub == "session-start" else None
             t0 = time.perf_counter()
-            subprocess.run(argv, input=body, cwd=d,
-                           env=env, capture_output=True, timeout=60, **hidden())
+            p = subprocess.run(argv, input=payload, cwd=d,
+                               env=env, capture_output=True, timeout=60, **hidden())
             t1 = time.perf_counter()
             _wait_drained(spool)
             if sub == "session-start":
-                _wait_refreshed(d)             # O12b: SessionStart's detached refresher, untimed
+                _wait_refreshed(d, mark)       # O12b: SessionStart's detached refresher, untimed
             t1b = time.perf_counter()
             subprocess.run(self.FLOOR, stdin=subprocess.DEVNULL, capture_output=True, timeout=60,
                            **hidden())
             if i >= 2:
                 xs.append((t1 - t0) * 1000.0)
                 floor.append((time.perf_counter() - t1b) * 1000.0)
+                outs.append(p.stdout.decode("utf-8", "replace"))
+        self._last = (xs, floor)
+        self._outs = outs
         return _p95(xs), statistics.median(floor)
 
     def _check(self, fixture: str, subs) -> None:
@@ -543,18 +642,17 @@ class HookBudgetHoldsForEveryWiredHook(unittest.TestCase):
         for sub in subs:
             budget, is_target = perf.hook_budget_ms(sub, fixture)
             body = json.dumps(payloads[sub]).encode("utf-8")
-            seen = []
-            for _ in range(self.BATCHES):
+            def measure(sub=sub, body=body):
                 p95, floor = self._batch(sub, d, body)
-                factor = perf.interpreter_factor(floor)
-                seen.append((p95 / factor, p95, floor))
-                if seen[-1][0] <= budget * self.relax:
-                    break
+                return (p95 / perf.interpreter_factor(floor), p95, floor)
+            seen = _confirmed(measure, lambda v, sub=sub: perf.hook_budget_holds(sub, fixture, v),
+                              self.BATCHES)
             best = min(seen)
-            label = "target" if is_target else "GAP ceiling"
+            _measure_row(f"{sub}@{fixture}", seen, *self._last)
+            label = "target" if is_target else "measured ceiling"
             self.rows.append(f"{fixture:<8} {sub:<19} p95 {best[0]:7.1f} normalised ({best[1]:.1f} "
                              f"raw, floor {best[2]:.1f})  {label} {budget:g}")
-            if best[0] > budget * self.relax:
+            if not perf.hook_budget_holds(sub, fixture, best[0]):   # this OS's measured column
                 over.append(f"{sub} @ {fixture}: {best[0]:.1f} > {budget * self.relax:g} {seen}")
         self.assertEqual([], over)
 
@@ -571,11 +669,6 @@ class HookBudgetHoldsForEveryWiredHook(unittest.TestCase):
         self.assertEqual(set(DEFERRED) | set(SYNC_OBSERVE),
                          {s for s, k in perf.HOOK_KINDS.items() if k == "observe"})
         self.assertEqual(("run-bind",), SYNC_OBSERVE)
-        for key, ceiling in perf.HOOK_BUDGET_GAPS_MS.items():
-            sub, fixture = key.split("@")
-            self.assertIn(fixture, ("outside", "repo", "bound"), key)
-            self.assertGreater(ceiling, perf.HOOK_BUDGET_TARGETS_MS[perf.HOOK_KINDS[sub]],
-                               f"{key}: a 'gap' at or under its target is just the target")
 
     def test_outside_a_mokata_repo(self):
         self._check("outside", list(perf.HOOK_KINDS))
@@ -637,10 +730,18 @@ class SessionStartHoldsOnEverySourceAtTheLogBound(unittest.TestCase):
     reader walks all of it) of WORST-CASE lines (`WORST_LINE_BYTES`, 64.5k of them) and a full
     timeline (`TIMELINE_KEEP` lines), measured exactly as above, on both fixtures that read it:
     `bound` (the session bound to a run: re-anchor, working set, current stage, the next-step
-    derivation) and `repo` (no run). Each source must hold at `MARGIN` of its ceiling, not at the
-    ceiling: a cell that passes at 399 of 400 is a cell that flakes on the runners."""
+    derivation) and `repo` (no run). Each source must hold at `perf.MARGIN` of its ceiling, not at
+    the ceiling: a cell that passes at 399 of 400 is a cell that flakes on the runners.
 
-    MARGIN = 0.9
+    0.0.29 F (refute H2) — TWO cells. HIT: one session id and one Claude process, `/clear` and
+    `/compact` (the starts the stored answer is for), the refresher's stored next-step answer left
+    in place, so every timed start is served from the store (asserted by state, per source: a
+    hit's line says how old it is). MISS: a fresh session id per run AND the stored answer
+    deleted before each, so the derivation walks the 8 MiB log every time — the path a real start in
+    a new Claude process takes. Each has its own measured ceiling (`session-start@<fixture>-8mib-
+    <cell>`); the miss ceilings are the owned gaps (`perf.HOOK_BUDGET_OWNED_GAPS`)."""
+
+    MARGIN = perf.MARGIN
     N = HookBudgetHoldsForEveryWiredHook.N
     BATCHES = HookBudgetHoldsForEveryWiredHook.BATCHES
     FLOOR = HookBudgetHoldsForEveryWiredHook.FLOOR
@@ -687,41 +788,72 @@ class SessionStartHoldsOnEverySourceAtTheLogBound(unittest.TestCase):
                                          "kind": "after" if i % 2 else "before", "sha": "a" * 40,
                                          "state": "ok", "size": 1234}) + "\n")
             cls.dirs[fixture] = d
-        cls.relax = perf.relax_factor()
+        cls.relax = perf.margin_relax()
 
     @classmethod
     def tearDownClass(cls):
         cls._t.cleanup()
 
-    def _fixture(self, fixture):
-        ceiling, _target = perf.hook_budget_ms("session-start", fixture)
+    def _fixture(self, fixture, cell):
+        from mokata import briefing_cache as BC
+        key = f"{fixture}-8mib-{cell}"
+        ceiling, _target = perf.hook_budget_ms("session-start", key)
         allowed = ceiling * self.MARGIN * self.relax
         d = self.dirs[fixture]
-        over, rows = [], []
-        for source in ("startup", "resume", "clear", "compact"):
-            body = json.dumps({"session_id": "S1", "cwd": d, "transcript_path": "",
-                               "hook_event_name": "SessionStart", "source": source}).encode()
-            seen = []
-            for _ in range(self.BATCHES):
-                p95, floor = self._batch("session-start", d, body)
-                seen.append((p95 / perf.interpreter_factor(floor), p95, floor))
-                if seen[-1][0] <= allowed:
-                    break
+        resume = os.path.join(BC.cache_dir(d), BC.RESUME_FILENAME)
+        over, rows, said = [], [], []
+        # the hit is claimed only inside one Claude process — `/clear`, `/compact` (note §3e:
+        # `startup`/`resume` are a new process, whose pid fact flips: they are the miss cell's)
+        sources = ("clear", "compact") if cell == "hit" else ("startup", "resume", "clear",
+                                                               "compact")
+        for source in sources:
+            def body(i, source=source):
+                sid = "S1" if cell == "hit" else f"S-miss-{source}-{i}-{os.getpid()}"
+                return json.dumps({"session_id": sid, "cwd": d, "transcript_path": "",
+                                   "hook_event_name": "SessionStart", "source": source}).encode()
+
+            def drop(_i):
+                if os.path.exists(resume):
+                    os.remove(resume)              # the next start finds no stored answer
+            def measure(body=body, drop=drop):
+                p95, floor = self._batch("session-start", d, body,
+                                         before=drop if cell == "miss" else None)
+                said.extend((source, o) for o in self._outs)
+                return (p95 / perf.interpreter_factor(floor), p95, floor)
+            seen = _confirmed(measure, lambda v: v <= allowed, self.BATCHES)
             best = min(seen)
+            _measure_row(f"session-start@{key}:{source}", seen, *self._last)
             rows.append(f"{source:<8} p95 {best[0]:7.1f} normalised ({best[1]:.1f} raw, floor "
                         f"{best[2]:.1f})  allowed {allowed:g} ({self.MARGIN:g} x ceiling "
                         f"{ceiling * self.relax:g})")
             if best[0] > allowed:
                 over.append(f"{source}: {best[0]:.1f} > {allowed:g} {seen}")
         sys.stderr.write(f"\n[HOOK-BUDGET 8 MiB x {WORST_LINE_BYTES} B lines] session-start @ "
-                         f"{fixture}:\n" + "".join(f"  {r}\n" for r in rows))
+                         f"{key}:\n" + "".join(f"  {r}\n" for r in rows))
+        if fixture == "bound":
+            # the cell is what it says by STATE: a stored answer is said with its age, a derived
+            # one never is (`bootstrap._cached_resume_hint`)
+            aged = re.compile(r"[Nn]ext step[^\n]*\(derived [^()]* ago\)")
+            got = sorted({(src, bool(aged.search(o))) for src, o in said})
+            if cell == "hit":
+                self.assertEqual([(s, True) for s in sorted({s for s, _ in said})], got,
+                                 "a timed start in the hit cell derived instead of hitting")
+            else:
+                self.assertEqual([(s, False) for s in sorted({s for s, _ in said})], got,
+                                 "the miss cell was served a stored answer")
         self.assertEqual([], over)
 
-    def test_every_source_holds_its_margin_bound(self):
-        self._fixture("bound")
+    def test_every_source_holds_its_margin_bound_miss(self):
+        self._fixture("bound", "miss")
 
-    def test_every_source_holds_its_margin_repo(self):
-        self._fixture("repo")
+    def test_every_source_holds_its_margin_bound_hit(self):
+        self._fixture("bound", "hit")
+
+    def test_every_source_holds_its_margin_repo_miss(self):
+        self._fixture("repo", "miss")
+
+    def test_every_source_holds_its_margin_repo_hit(self):
+        self._fixture("repo", "hit")
 
 if __name__ == "__main__":
     unittest.main()

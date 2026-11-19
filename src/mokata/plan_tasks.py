@@ -67,6 +67,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .spec_scope import _matches, _rel
+from .plugin_runtime import localize_commands
 
 # ======================================================================================
 # keys + numbers
@@ -374,17 +375,17 @@ def attest(data: Any) -> PlanAttestation:
     if not isinstance(approved, str) or not approved or not isinstance(tasks, list) or not tasks:
         return PlanAttestation(
             ATTEST_UNSEALED,
-            "this run's spec was approved WITHOUT a task plan and plan hash (it predates "
+            localize_commands("this run's spec was approved WITHOUT a task plan and plan hash (it predates "
             "mokata 0.0.26's tasks[] + plan attestation) — run `mokata spec migrate <run>` "
             "(`mokata doctor` names the run) to approve a one-task plan, or re-emit it with "
-            "tasks[] (/mokata:spec, or `spec_amend` once work is in flight)")
+            "tasks[] (/mokata:spec, or `spec_amend` once work is in flight)", None))
     actual = plan_hash(data)
     if actual != approved:
         return PlanAttestation(
             ATTEST_MISMATCH,
-            f"the plan CHANGED after approval — the spec on record hashes to {actual[:19]}…, the "
+            localize_commands(f"the plan CHANGED after approval — the spec on record hashes to {actual[:19]}…, the "
             f"approved plan was {approved[:19]}…. Nothing may proceed against an unapproved plan: "
-            f"re-approve it (re-emit through /mokata:spec, or `spec_amend` once work is in flight)",
+            f"re-approve it (re-emit through /mokata:spec, or `spec_amend` once work is in flight)", None),
             approved=approved, actual=actual)
     return PlanAttestation(ATTEST_OK, "the plan matches its approved hash", approved=approved,
                            actual=actual)

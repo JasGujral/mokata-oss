@@ -118,6 +118,68 @@ if os.environ.get("MOKATA_TEST_REAL_CRG") == "1":
 else:
     os.environ["MOKATA_CRG"] = "off"
 
+# --- 0.0.29 D1 `TESTS-INHERIT-HOST-GIT-CONFIG`: THE HOST'S GIT ENVIRONMENT NEVER REACHES A TEST ----
+# The Claude desktop app exports `GIT_CONFIG_PARAMETERS` ('safe.bareRepository=explicit' ...) to
+# every shell it opens; 37 tests that spread `os.environ` into a git child went red there and green
+# in CI. The third member of the PATH / `MOKATA_CRG` family above: every `GIT_*` (the predicate is
+# `mokata.git_safe.scrubbed_env`, through `_hermetic_git`) is DELETED from this process at import,
+# so every child that spreads `os.environ` inherits a clean env. Not `GIT_TERMINAL_PROMPT=0` either:
+# a test process holds no `GIT_*` it did not set itself. A test that wants a hostile git variable
+# arranges it inside the test with `mock.patch.dict(os.environ, ...)` (p21, o12, p28 do), which
+# restores to this scrubbed state. NAMES only are recorded — a value can carry a token.
+import _hermetic_git  # noqa: E402
+
+#: The host `GIT_*` names the scrub dropped at import (empty on a clean machine). Never values.
+HERMETIC_GIT_SCRUBBED = _hermetic_git.host_git_names(os.environ)
+for _name in HERMETIC_GIT_SCRUBBED:
+    del os.environ[_name]
+
+# --- 0.0.29 wave-1 bookend `SUITE-HANGS-ON-A-HOST-STDIN-THAT-NEVER-ENDS`: NO TEST READS THE HOST'S
+# STDIN. The wave-1 suite hung nine hours in the app terminal: a test that calls a hook without a
+# stdin double left a reader thread blocked on the terminal, and `mokata-mcp`'s fd-0 park (`dup2`
+# onto fd 0) waits on macOS for that read. fd 0 is pointed at the null device here, so a stray read
+# gets EOF at once and every child inherits the same. ⚠ AT THE DESCRIPTOR, NOT `sys.stdin`: the
+# tty-prompt sweep decides "ambient stdin" by the identity of the `sys.stdin` object, and a test's
+# own stdin double is still installed the way it always was.
+def _null_fd0():
+    try:
+        null = os.open(os.devnull, os.O_RDONLY)
+    except OSError:
+        return False
+    try:
+        if null != 0:
+            os.dup2(null, 0)
+    except OSError:
+        return False
+    finally:
+        if null != 0:
+            os.close(null)
+    return True
+
+
+#: True once fd 0 is the null device in this process (and so in every child it spawns).
+HERMETIC_STDIN = _null_fd0()
+
+# --- 0.0.29 D9 (lane F `HOOK-PYCACHE-TESTS-WRITE-REAL-CACHE`): NO TEST WRITES THE REAL CACHE ------
+# A test that runs a hook launcher compiled bytecode into the developer's real
+# `$XDG_CACHE_HOME/mokata` (or `~/.cache/mokata`). Every test process gets a per-process temp
+# `XDG_CACHE_HOME`, removed at exit. ⚠ Other tools resolve THEIR caches from the same variable (uv
+# on POSIX, Hugging Face everywhere, Playwright's browsers and pip on Linux): each is pinned to the
+# location it resolved to BEFORE the redirect (only when the user did not set it), so a browser,
+# a model or a wheel the developer already has is found, not re-downloaded into a temp dir.
+_USER_CACHE = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+if os.name != "nt":                                   # uv on Windows: %LOCALAPPDATA%, not XDG
+    os.environ.setdefault("UV_CACHE_DIR", os.path.join(_USER_CACHE, "uv"))
+os.environ.setdefault("HF_HOME", os.path.join(_USER_CACHE, "huggingface"))
+if sys.platform.startswith("linux"):
+    os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", os.path.join(_USER_CACHE, "ms-playwright"))
+    os.environ.setdefault("PIP_CACHE_DIR", os.path.join(_USER_CACHE, "pip"))
+#: The per-process cache every test (and every child it spawns) writes instead of the user's.
+TEST_CACHE_HOME = _tempfile.mkdtemp(prefix="mokata-test-cache-")
+import atexit as _atexit  # noqa: E402
+_atexit.register(shutil.rmtree, TEST_CACHE_HOME, True)
+os.environ["XDG_CACHE_HOME"] = TEST_CACHE_HOME
+
 
 def real_crg(testcase):
     """Opt THIS test into the environment's real code-review-graph resolution (MOKATA_CRG unset
@@ -178,6 +240,52 @@ _subprocess.Popen.__init__ = _guarded_popen_init
 WATCHDOG_S = float(os.environ.get("MOKATA_TEST_WATCHDOG_S", "900") or 0)
 
 
+# --- 0.0.29 wave-1 bookend `TEST-LEAVES-THE-LIFELINE-ARMED`: the process lifeline (lane B,
+# `quiet_spawn.enable_lifeline`) is process-global by design — `mokata-mcp` arms it once. A test
+# that drives `server.main` in-process armed it for every test after it (`test_p24` then saw
+# `pass_fds` it never asked for). A test that arms it and returns leaves it disarmed here.
+def _lifeline_armed():
+    q = sys.modules.get("mokata.quiet_spawn")
+    return bool(q is not None and getattr(q, "_LIFELINE", None))
+
+
+def _disarm_lifeline(test):
+    q = sys.modules.get("mokata.quiet_spawn")
+    fds = list(getattr(q, "_LIFELINE", None) or ()) if q is not None else []
+    if not fds:
+        return
+    del q._LIFELINE[:]
+    for fd in fds:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+# The door's live-tree registry (`quiet_spawn._LIVE`, what Ctrl-C and the server's exit end) is
+# process-global too: a test that spawns through a MOCKED `Popen` (p24's Windows-order rows) left
+# Mock trees in it, and `test_b29` then ended three trees where it started one. Entries a test added
+# and did not remove are forgotten after it — removed from the registry, never signalled.
+def _live_trees():
+    q = sys.modules.get("mokata.quiet_spawn")
+    live = getattr(q, "_LIVE", None) if q is not None else None
+    if live is None:
+        return None
+    with q._LIVE_LOCK:
+        return set(live)
+
+
+def _forget_trees_added_since(before):
+    q = sys.modules.get("mokata.quiet_spawn")
+    live = getattr(q, "_LIVE", None) if q is not None else None
+    if live is None:
+        return
+    with q._LIVE_LOCK:
+        for tree in list(live):
+            if before is None or tree not in before:
+                live.discard(tree)
+
+
 def _install_watchdog():
     import unittest
     if getattr(unittest.TestCase.run, "_mokata_watchdog", False) or WATCHDOG_S <= 0:
@@ -193,11 +301,16 @@ def _install_watchdog():
                 _faulthandler.dump_traceback_later(WATCHDOG_S, repeat=True, file=stream)
             except (ValueError, OSError, AttributeError):
                 armed = False
+        lifeline_before = _lifeline_armed()
+        live_before = _live_trees()
         try:
             return real_run(self, result)
         finally:
             if armed:
                 _faulthandler.cancel_dump_traceback_later()
+            if not lifeline_before:
+                _disarm_lifeline(self)
+            _forget_trees_added_since(live_before)
     run._mokata_watchdog = True
     unittest.TestCase.run = run
 

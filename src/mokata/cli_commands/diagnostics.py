@@ -44,6 +44,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         if unresolved:
             print(unresolved)
         return 0 if (rep.ok and root) else 1
+    # 0.0.29 H4 — `--fix`: the plan, ONE human yes (or `--yes`), then rotate / re-bake / stop / reset,
+    # ledgered. Answered before a Surface loads: the files it repairs exist in an uninitialised repo too.
+    if getattr(args, "fix", False):
+        return cmd_fix(args)
     surface = _load_surface(args.path)
     report = diagnose(surface)
     # DB.S1 — the DSN DEEP-CHECK. For a TEAM-connected repo, classify the shared-DB connection into
@@ -81,9 +85,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     if trust_line:
         print(trust_line)
     # 0.0.28 C1 — the private set's verdicts (informational: never changes doctor's ok/exit). A file
-    # on a volume that cannot hold privacy is SAID, never claimed private; `--fix` re-protects OUR weak
-    # files with their exact bytes and never touches one someone else owns.
-    for line in privacy_lines(args.path, fix=getattr(args, "fix", False)):
+    # on a volume that cannot hold privacy is SAID, never claimed private. 0.0.29 H4: what `--fix` would
+    # change is shown as STAGED lines; plain `doctor` changes nothing.
+    for line in privacy_lines(args.path):
+        print(line)
+    import os
+    for line in plan_lines(fix_plan(os.path.realpath(args.path)), staged=True):
         print(line)
     # B-VER — the version-parity finding (parity + scope/plugin shadow), the SAME shared reporter
     # `mokata mcp status` uses. Informational: doctor's ok/exit stays derived from `report.ok`,
@@ -188,7 +195,7 @@ def _pin_does_not_resolve(root, rep) -> "str | None":
 def cmd_baseline(args: argparse.Namespace) -> int:
     # Stage 34B — report the test suite green/red at baseline; degrade-clean if no command
     # is known (mokata never guesses a test framework). Read-only diagnostic.
-    from ..baseline import baseline_command, baseline_status
+    from ..baseline import baseline_command, baseline_status, silence_seconds
     manifest = None
     if Surface.is_initialized(args.path):
         try:
@@ -197,7 +204,8 @@ def cmd_baseline(args: argparse.Namespace) -> int:
             manifest = None
     from ..project_env import settings_python
     cmd = baseline_command(manifest, override=args.cmd)
-    result = baseline_status(cmd, cwd=args.path, settings_python=settings_python(manifest))
+    result = baseline_status(cmd, cwd=args.path, silence=silence_seconds(manifest),
+                             settings_python=settings_python(manifest))
     print(result.render())
     # green and unknown exit 0 (unknown = no command, degrades clean); red AND not-run exit 1 —
     # a suite the door could not run (no job, no runner) proves nothing, so it is not a pass.
@@ -263,47 +271,443 @@ def private_set_files(root: str) -> "list":
     return out
 
 
-def privacy_lines(root: str, fix: bool = False) -> "list":
+def _examine(path: str):
+    """`(state, verdict, raw)` of one private-set file, from ONE handle (`winacl.read_record`, never
+    raises): `absent`, `odd` (not a regular file this user can open), `private`, `foreign`, `noacl` (ours,
+    on a volume that cannot hold privacy) or `weak` (ours, and others can get in)."""
+    import os
+    from .. import winacl
+    got = winacl.read_record(path, ask=True)
+    if got is None:
+        return ("odd" if os.path.lexists(path) else "absent"), None, None
+    v, raw = got
+    if v.private:
+        return "private", v, raw
+    if not v.owner_is_me:
+        return "foreign", v, raw
+    if not v.holds:
+        return "noacl", v, raw
+    return "weak", v, raw
+
+
+def privacy_lines(root: str) -> "list":
     """`mokata doctor`'s file-privacy section: one line per private-set file with its verdict, read by
-    `winacl.read_record` (never inferred): ONE open, no FIFO wait, and the verdict and the bytes `--fix`
-    rewrites come from the SAME handle, so a file swapped in after the verdict is never what gets
-    re-protected. `fix=True` rewrites each WEAK file that is OURS through the private door with its exact
-    bytes (token, port, trust decision kept: the baked gate still authenticates). A file owned by someone
-    else is named and never touched; there is no delete remedy."""
+    `winacl.read_record` (never inferred): ONE open, no FIFO wait. READ-ONLY (0.0.29 H4): what `--fix`
+    would do is the STAGED plan (`fix_plan` / `plan_lines`), applied only by `mokata doctor --fix` on a
+    human's yes. A file owned by someone else is named and never touched; there is no delete remedy."""
     import os
     from .. import fs_identity, winacl
-    from ..atomicfile import atomic_write_text
     files = private_set_files(root)
     lines = []
     if files:
         lines += ["", "File privacy (tokens and workspace trust):"]
     for p in files:
-        got = winacl.read_record(p, ask=True)
-        if got is None:
+        state, v, _raw = _examine(p)
+        if state in ("odd", "absent"):
             lines.append(f"  {p}: REFUSED — not a regular file this user can open; never trusted and "
                          f"never changed")
-            continue
-        v, raw = got
-        if v.private:
+        elif state == "private":
             lines.append(f"  {p}: private")
-        elif not v.owner_is_me:
+        elif state == "foreign":
             lines.append(f"  {p}: FOREIGN — not yours, never trusted and never changed ({v.reason})")
-        elif not v.holds:
+        elif state == "noacl":
             lines.append(f"  {p}: NOT private — {winacl.NO_ACCESS_CONTROL}")
-        elif fix:
-            try:
-                if raw is None:
-                    raise OSError("it is larger than a record can be")
-                atomic_write_text(p, raw.decode("utf-8"), newline="", private=True)
-                lines.append(f"  {p}: was WEAK ({v.reason}); re-protected, bytes unchanged")
-            except (OSError, UnicodeDecodeError) as exc:
-                lines.append(f"  {p}: WEAK ({v.reason}); could not re-protect: {exc}")
         else:
-            lines.append(f"  {p}: WEAK ({v.reason}) — `mokata doctor --fix` re-protects it")
+            lines.append(f"  {p}: WEAK ({v.reason}) — `mokata doctor --fix` shows what it would change")
     if not fs_identity.identity_known(root):
         lines.append(f"  {os.path.realpath(root)}: this volume gives the repository folder no file "
                      f"identity — whether a path is inside it is decided by its spelling alone")
     return lines
+
+
+# ------------------------------------------------------------------------- doctor --fix (0.0.29 H4)
+#
+# `DOCTOR-FIX-KEEPS-WEAK-TOKEN`. `--fix` used to rewrite a weak file with its EXACT bytes: a hook token
+# others could read stayed in force, and a "trusted" someone else could have written became a real one.
+# Now: a read-only PLAN first (`fix_plan`), shown before anything changes; applied only on a human's
+# yes at a terminal or `--yes` (never from MCP or `/mokata:doctor`, which only show it); one setup-ledger
+# record of what was done. A weak token is ROTATED and re-baked into every settings file that carries
+# it; an exposed IDE is stopped only after it proved over its own ping (and the OS's socket table)
+# which process it is; a weak trust record is reset to not trusted.
+
+FIX_QUESTION = "Apply these changes?"
+RESTART_LINE = ("running Claude Code sessions in this repo must be restarted to pick up the new hook "
+                "token; until then their gated calls are refused")
+
+
+class FixStep:
+    """One staged change. `kind`: `rotate` · `rebake` · `stop-ide` · `reset-trust` · `refuse`."""
+
+    def __init__(self, kind: str, path: str, why: str = "", **extra) -> None:
+        self.kind, self.path, self.why = kind, path, why
+        self.files = list(extra.pop("files", []))          # rotate / rebake: settings files rewritten
+        self.foreign = dict(extra.pop("foreign", {}))      # file -> its non-mokata hook entries
+        self.second_yes = list(extra.pop("second_yes", []))  # files others could WRITE, with foreign hooks
+        self.digests = dict(extra.pop("digests", {}))      # file -> sha256 the plan was built from
+        self.extra = extra                                  # stop-ide: port, token, pid, pages, terminal
+
+    def __repr__(self) -> str:          # never the token
+        return f"FixStep({self.kind!r}, {self.path!r})"
+
+
+def _others_may_write(path: str, v) -> bool:
+    """Could someone else have WRITTEN this weak file of ours? POSIX: a group/other write bit, another
+    hard link, or an ACL entry. Windows: assumed yes (the DACL is not parsed for which right)."""
+    import os
+    import stat as _stat
+    if os.name == "nt":
+        return True
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return True
+    return bool(_stat.S_IMODE(st.st_mode) & 0o022 or st.st_nlink > 1
+                or "ACL" in (v.reason if v is not None else ""))
+
+
+def _json(raw):
+    import json
+    try:
+        got = json.loads(raw.decode("utf-8")) if raw is not None else None
+    except (UnicodeDecodeError, ValueError):
+        return None
+    return got if isinstance(got, dict) else None
+
+
+UNSTABLE = "changed-while-the-plan-was-read"   # a digest no file can match: the apply refuses
+
+
+def _shown(path: str, read):
+    """`(read(path), digest)` — the digest is taken BEFORE what the plan shows is read from the file, so
+    any byte that arrives after it (during the read, or before the apply) makes the apply's check fail
+    (round 2, M3: consent is to the bytes that were shown, never to bytes that arrived after)."""
+    from ..harness_setup import file_digest
+    before = file_digest(path)
+    return read(path), before
+
+
+def _settings_files(root: str) -> "list":
+    from ..ide import bus, server, trust
+    records = {server.record_path(root), bus.bridge_path(root), trust.record_path(root)}
+    return [p for p in private_set_files(root) if p not in records]
+
+
+def ide_ping(port: int, token: str):
+    """The IDE's own `/api/ping` answer on 127.0.0.1:`port`, or None. Loopback only, never a redirect."""
+    from ..ide.launch import _call
+    try:
+        port = int(port)
+    except (TypeError, ValueError):
+        return None
+    if not 0 < port < 65536 or not token:
+        return None
+    pong = _call(port, str(token), "/api/ping")
+    return pong if isinstance(pong, dict) and pong.get("ok") else None
+
+
+def fix_plan(root: str) -> "list":
+    """What `mokata doctor --fix` WOULD do, as `FixStep`s. READ-ONLY: raw reads that never raise, one
+    ping of a weak server record's port; nothing is written, signalled or removed."""
+    import hashlib
+    from .. import harness_setup as HS
+    from ..ide import bus, server, trust
+    from pathlib import Path
+    steps = []
+    bridge_p = bus.bridge_path(root)
+    b_state, b_v, b_raw = _examine(bridge_p)
+    settings = []
+    for p in _settings_files(root):
+        s_state, s_v, _ = _examine(p)
+        if s_state in ("foreign", "odd"):
+            steps.append(FixStep("refuse", p, s_v.reason if s_v is not None else
+                                 "not a regular file this user can open"))
+        else:
+            settings.append((p, s_state, s_v))
+    if b_state in ("foreign", "odd"):
+        steps.append(FixStep("refuse", bridge_p, b_v.reason if b_v is not None else
+                             "not a regular file this user can open"))
+    else:
+        rec = _json(b_raw) if b_state in ("private", "noacl") else None
+        weak_settings = [p for p, st, _ in settings if st == "weak"]
+        if b_state == "weak" or weak_settings or (settings and not rec):
+            why = ([f"the bridge record is weak ({b_v.reason})"] if b_state == "weak" else []) + \
+                  [f"{p} is weak ({v.reason})" for p, st, v in settings if st == "weak"] + \
+                  (["the bridge record is missing or unreadable"] if b_state != "weak" and not rec
+                   else [])
+            files = [p for p, _st, _v in settings]
+            foreign, digests = {}, {}
+            for p in files:
+                foreign[p], digests[p] = _shown(p, lambda q: HS.foreign_hooks(Path(q)))
+            # A second yes for a file someone else could have WRITTEN that holds foreign hooks: weak
+            # with a write route, or on a volume that holds no access control at all (Low 6).
+            second = [p for p, st, v in settings if foreign.get(p) and (
+                st == "noacl" or (st == "weak" and _others_may_write(p, v)))]
+            old = _json(b_raw)
+            keep_port = 0
+            if old and b_state == "weak" and not _others_may_write(bridge_p, b_v):
+                keep_port = old.get("port") if isinstance(old.get("port"), int) else 0
+            elif rec:
+                keep_port = rec.get("port") if isinstance(rec.get("port"), int) else 0
+            steps.append(FixStep("rotate", bridge_p, "; ".join(why), files=files,
+                                 foreign={p: f for p, f in foreign.items() if f},
+                                 second_yes=second, port=keep_port, digests=digests))
+        elif rec:
+            stale = [p for p, _st, _v in settings
+                     if HS.baked_tokens(Path(p)) != [str(rec.get("token"))]]
+            if stale:
+                foreign, digests = {}, {}
+                for p in stale:
+                    foreign[p], digests[p] = _shown(p, lambda q: HS.foreign_hooks(Path(q)))
+                digests[bridge_p] = HS.file_digest(bridge_p) if HS.file_digest(bridge_p) == \
+                    hashlib.sha256(b_raw).hexdigest() else UNSTABLE
+                steps.append(FixStep("rebake", bridge_p, "a settings file carries another token "
+                                     "than the bridge record", files=stale,
+                                     foreign={p: f for p, f in foreign.items() if f},
+                                     digests=digests))
+    s_p = server.record_path(root)
+    s_state, s_v, s_raw = _examine(s_p)
+    if s_state == "weak":
+        rec = _json(s_raw) or {}
+        port, token = rec.get("port"), str(rec.get("token") or "")
+        pong = ide_ping(port, token)
+        steps.append(FixStep("stop-ide", s_p, s_v.reason, port=port, token=token,
+                             pid=int(pong.get("pid") or 0) if pong else 0,
+                             pages=pong.get("pages") if pong else None,
+                             terminal=bool(pong.get("terminal")) if pong else False,
+                             answered=bool(pong), same_root=bool(pong) and _same_root(pong, root)))
+    elif s_state in ("foreign", "odd"):
+        steps.append(FixStep("refuse", s_p, s_v.reason if s_v is not None else
+                             "not a regular file this user can open"))
+    t_p = trust.record_path(root)
+    t_state, t_v, _ = _examine(t_p)
+    if t_state == "weak":
+        steps.append(FixStep("reset-trust", t_p, t_v.reason,
+                             written=_others_may_write(t_p, t_v)))
+    elif t_state in ("foreign", "odd"):
+        steps.append(FixStep("refuse", t_p, t_v.reason if t_v is not None else
+                             "not a regular file this user can open"))
+    return steps
+
+
+def _same_root(pong, root: str) -> bool:
+    from .. import fs_identity
+    got = pong.get("root") if isinstance(pong, dict) else None
+    return isinstance(got, str) and bool(got) and fs_identity.same_entry(got, root)
+
+
+def _text(s: str) -> str:
+    """A path or hook command as printable text (never anything a terminal interprets)."""
+    return "".join(c if c.isprintable() else "?" for c in str(s))
+
+
+def plan_lines(steps: "list", staged: bool = False) -> "list":
+    """The plan, as the lines a human reads before saying yes (or, `staged`, as `mokata doctor` and the
+    read-only surfaces show it)."""
+    if not steps:
+        return []
+    head = ("Staged by `mokata doctor --fix` (nothing changed yet):" if staged
+            else "`mokata doctor --fix` will:")
+    out = ["", head]
+    for s in steps:
+        if s.kind == "rotate":
+            out.append(f"  ROTATE the hook token ({_text(s.why)}): write a new {_text(s.path)}, and "
+                       f"re-bake it into:")
+            out += [f"    {_text(p)}" for p in s.files] or ["    (no settings file carries it)"]
+            out.append(f"    {RESTART_LINE}")
+        elif s.kind == "rebake":
+            out.append(f"  RE-BAKE the bridge record's token ({_text(s.why)}) into:")
+            out += [f"    {_text(p)}" for p in s.files]
+        elif s.kind == "stop-ide":
+            if s.extra.get("answered") and s.extra.get("same_root"):
+                pages = s.extra.get("pages")
+                out.append(f"  STOP the IDE (pid {s.extra.get('pid')}, "
+                           f"{pages if pages is not None else '?'} pages open; its embedded terminal "
+                           f"sessions end) — only once the OS shows that pid is the process listening "
+                           f"on its port: its record {_text(s.path)} is weak ({_text(s.why)})")
+            elif s.extra.get("answered"):
+                out.append(f"  REMOVE {_text(s.path)} (weak: {_text(s.why)}); the IDE answering on its "
+                           f"port serves another repository: nothing is stopped")
+            else:
+                out.append(f"  REMOVE {_text(s.path)} (weak: {_text(s.why)}); no IDE answers on its "
+                           f"port: nothing is stopped")
+        elif s.kind == "reset-trust":
+            out.append(f"  RESET workspace trust to NOT trusted: {_text(s.path)} is "
+                       f"{'writable' if s.extra.get('written') else 'readable'} by others "
+                       f"({_text(s.why)})")
+        else:
+            out.append(f"  LEAVE {_text(s.path)} untouched: not yours or not a regular file "
+                       f"({_text(s.why)}); nothing is rotated or adopted from it")
+        for p, entries in sorted(s.foreign.items()):
+            hold = p in s.second_yes
+            out.append(f"    {_text(p)} holds hooks that are not mokata's"
+                       + (" — it may hold hooks someone else wrote; they are kept only on a second, "
+                          "separate yes at a terminal (`--yes` never answers it)" if hold else "") + ":")
+            out += [f"      {_text(e)}" for e in entries]
+    return out
+
+
+def _fix_ledger(root: str, paths, *, stopped, rotated, trust_reset, failed) -> None:
+    from ..harness_setup import _record_setup_ledger
+    _record_setup_ledger(root, "doctor-fix", paths, stopped=stopped or None, rotated=rotated,
+                         trust_reset=trust_reset, failed=sorted(failed) or None)
+
+
+def apply_fix(root: str, steps: "list", *, second_yes=None, out=print) -> int:
+    """Apply a plan the human approved. ORDER (fail closed): stop the exposed IDE (re-pinged: it must be
+    the IDE the plan showed) → mint the new record IN MEMORY → re-bake each settings file → write the
+    bridge record → reset trust → ONE ledger record. A file that fails is named and the rest go on;
+    rc 1 when anything failed. `second_yes(path) -> bool` answers the per-file question for a file others
+    could write that holds foreign hooks (None: nobody can answer it — the file is not rewritten)."""
+    import os
+    from pathlib import Path
+    from .. import harness_setup as HS
+    from ..ide import bus, launch, trust
+    touched, failed = [], []
+    stopped, rotated, trust_reset = 0, False, False
+    moved = sorted({p for s in steps for p, d in s.digests.items() if HS.file_digest(p) != d})
+    if moved:
+        # Round 2, M3: the yes was to the plan that was SHOWN. A file that differs now (a hook planted
+        # after the plan, say) is never acted on silently: nothing at all is changed.
+        for p in moved:
+            out(f"{p}: changed since the plan was shown")
+        out("nothing was changed — re-run `mokata doctor --fix` and read the new plan")
+        return 1
+    for s in [s for s in steps if s.kind == "stop-ide"]:
+        port, token = s.extra.get("port"), s.extra.get("token") or ""
+        pong = ide_ping(port, token)
+        if pong is None:
+            out(f"no IDE answered on the record's port: nothing was stopped; {s.path} removed")
+            _unlink(s.path, touched, failed, out)
+            continue
+        if not _same_root(pong, root):
+            out(f"the IDE on the record's port serves another repository: nothing was stopped; "
+                f"{s.path} removed")
+            _unlink(s.path, touched, failed, out)
+            continue
+        pid = int(pong.get("pid") or 0)
+        if pid != int(s.extra.get("pid") or 0):
+            out(f"the IDE changed since the plan (pid {pid}, not {s.extra.get('pid')}): nothing was "
+                f"stopped; re-run `mokata doctor --fix`")
+            failed.append(s.path)
+            continue
+        out(f"waiting for the IDE (pid {pid}) to stop")
+        got = launch._stop(pid, root, port=int(port),
+                           ping=lambda: ide_ping(port, token) is not None)
+        if got == "stopped":
+            stopped = pid
+            out(f"the IDE (pid {pid}) stopped")
+            _unlink(s.path, touched, failed, out)
+        elif got == "still-running":
+            out(f"the IDE (pid {pid}) did not stop; nothing else was changed for it")
+            failed.append(s.path)
+        else:
+            out(f"the IDE (pid {pid}) could not be proven to be the process on port {port}: nothing "
+                f"was signalled; nothing else was changed for it")
+            failed.append(s.path)
+    for s in [s for s in steps if s.kind in ("rotate", "rebake")]:
+        if s.kind == "rotate":
+            rec = bus.new_bridge_record(root, int(s.extra.get("port") or 0))
+        else:
+            from ..errors import RecordRefused
+            try:
+                rec = bus.read_bridge(root)
+            except RecordRefused:
+                rec = None
+            if not rec:
+                out(f"{s.path}: changed since the plan; nothing re-baked — re-run `mokata doctor --fix`")
+                failed.append(s.path)
+                continue
+        baked_ok = True
+        for p in s.files:
+            if p in s.second_yes and not (second_yes is not None and second_yes(p)):
+                out(f"{p}: NOT rewritten — it may hold hooks someone else wrote and they were not "
+                    f"approved; its gates refuse until you fix the file, then re-run `mokata doctor "
+                    f"--fix`")
+                failed.append(p)
+                baked_ok = False
+                continue
+            try:
+                HS.rebake_token(Path(p), rec, root, expect=s.digests.get(p))
+                touched.append(p)
+                out(f"{p}: re-baked")
+            except (HS.SetupError, OSError, ValueError) as exc:
+                out(f"{p}: could not be re-baked ({exc}); it keeps the old token and its gates "
+                    f"refuse — fix the file, then re-run `mokata doctor --fix`")
+                failed.append(p)
+                baked_ok = False
+        if s.kind == "rotate":
+            try:
+                bus.write_bridge(root, rec)
+                touched.append(s.path)
+                rotated = True if baked_ok else "partial"
+                out(f"{s.path}: new hook token written")
+                out(RESTART_LINE)
+            except OSError as exc:
+                rotated = "partial"
+                failed.append(s.path)
+                out(f"{s.path}: the new record could NOT be written ({exc}); the re-baked files carry "
+                    f"a token no record holds, so their gates refuse — re-run `mokata doctor --fix`")
+    for s in [s for s in steps if s.kind == "reset-trust"]:
+        res = trust.decide(root, False, "doctor-fix")
+        trust_reset = True
+        touched.append(s.path)
+        how = "writable" if s.extra.get("written") else "readable"
+        out(f"workspace trust was reset because the record was {how} by others: re-trust in the IDE"
+            + (f" (WARNING: {res['ledger_error']})" if res.get("ledger_error") else ""))
+    if touched or failed or stopped:
+        _fix_ledger(root, touched, stopped=stopped, rotated=rotated, trust_reset=trust_reset,
+                    failed=failed)
+    for s in [s for s in steps if s.kind == "refuse"]:
+        out(f"{s.path}: left untouched (not yours, or not a regular file)")
+    return 1 if failed else 0
+
+
+def _unlink(path: str, touched, failed, out) -> None:
+    import os
+    try:
+        os.unlink(path)
+        touched.append(path)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        out(f"{path}: could not be removed ({exc})")
+        failed.append(path)
+
+
+def cmd_fix(args: argparse.Namespace) -> int:
+    """`mokata doctor --fix`: the plan, then ONE y/N typed by a human at a real terminal, then apply.
+    THERE IS NO `--yes` (0.0.29 H-a round 3, coordinator ruling): an agent can strip any marker from its
+    environment, so the only consent this command takes is an answer read from an interactive TTY. No
+    TTY: the plan is shown and nothing changes. An agent's shell (`prompt.agent_shell`) is refused
+    earlier, with its own line — defense in depth, not the gate."""
+    import os
+    from .. import prompt
+    root = os.path.realpath(args.path)
+    for line in privacy_lines(root):
+        print(line)
+    steps = fix_plan(root)
+    if not [s for s in steps if s.kind != "refuse"]:
+        for line in plan_lines(steps):
+            print(line)
+        print("mokata doctor --fix: nothing to change")
+        return 0
+    print("\n".join(plan_lines(steps)))   # shown BEFORE the question, and when nobody can answer it
+    signal = prompt.agent_shell()
+    if signal:
+        print(f"nothing was changed — this is an agent's shell ({signal} is set): the answer must be "
+              f"yours, typed at your own terminal. Run `mokata doctor --fix` in your own terminal to "
+              f"apply the plan above.")
+        return 1
+    if not prompt._stdin_is_tty():
+        # THE GATE (P2): no terminal, no human answer — and no flag stands in for one.
+        print("nothing was changed — applying this plan needs your answer typed at a terminal, and "
+              "there is none here. Run `mokata doctor --fix` in your own terminal.")
+        return 1
+    if not prompt.read_yes_no("", FIX_QUESTION):
+        print("nothing was changed — no yes was read at the terminal.")
+        return 1
+    return apply_fix(root, steps, second_yes=lambda p: bool(prompt.read_yes_no(
+        f"{p} may hold hooks someone else wrote (listed above).", "Keep them and rewrite this file?")))
 
 
 def register(sub, common):
@@ -327,8 +731,10 @@ def register(sub, common):
                        help="also print the full capability coverage matrix "
                             "(pass/degraded/fail); read-only, does not change the exit code")
     p_doc.add_argument("--fix", action="store_true",
-                       help="re-protect mokata's own token and trust files that became readable by "
-                            "others (exact bytes kept); a file someone else owns is never touched")
+                       help="repair mokata's token and trust files others could read or write: show "
+                            "the plan (rotate the hook token and re-bake it, stop an exposed IDE, "
+                            "reset workspace trust), then apply it only on your answer typed at a "
+                            "terminal (there is no --yes); a file someone else owns is never touched")
     p_doc.set_defaults(func=cmd_doctor)
 
     p_base = sub.add_parser(

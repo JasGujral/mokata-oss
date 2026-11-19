@@ -17,6 +17,7 @@ import re
 import sys
 from typing import Any, Iterable, List, Optional, Sequence
 
+from .plugin_runtime import localize_commands, slash_command
 from .progress import STAGE_BADGE_STAGES
 
 # ================================================================= 0. shared presentation layer
@@ -175,9 +176,13 @@ GATE_UNBLOCK = {
 }
 
 
-def unblock_hint(gate_id: Optional[str]) -> Optional[str]:
-    """The single next action that clears `gate_id`, or None when there's no canonical one."""
-    return GATE_UNBLOCK.get(gate_id or "")
+def unblock_hint(gate_id: Optional[str], root: Optional[str] = None) -> Optional[str]:
+    """The single next action that clears `gate_id`, or None when there's no canonical one. Its
+    command is named the way THIS route installed it (`root` = the repo it is asked in)."""
+    try:
+        return localize_commands(GATE_UNBLOCK[gate_id or ""], root)
+    except KeyError:
+        return None
 
 
 # Map a result object to (gate_id, passed). Duck-typed so one renderer covers the completeness
@@ -237,7 +242,7 @@ def next_command(stage: str) -> Optional[str]:
     """The `/mokata:` command that follows `stage` on the user arc, or None at the end / for an
     unknown stage."""
     nxt = _NEXT.get(stage)
-    return f"/mokata:{nxt}" if nxt else None
+    return slash_command(nxt) if nxt else None
 
 
 def stage_recap(stage: str, recap: str, *, ascii_only: bool = False,

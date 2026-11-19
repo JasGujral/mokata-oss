@@ -24,6 +24,7 @@ from unittest import mock
 
 import _support  # noqa: F401  (puts src/ on the path)
 
+from mokata.init import DEFAULT_GITIGNORE, GITIGNORE_FILENAME
 from mokata.knowledge import crg_build as B
 
 CRG = shutil.which("code-review-graph")
@@ -103,6 +104,12 @@ class TheRealToolOnACopiedRepo(unittest.TestCase):
         self.addCleanup(shutil.rmtree, tmp, True)
         a = os.path.join(tmp, "a")
         os.makedirs(os.path.join(a, ".mokata"))
+        # The `.mokata/.gitignore` real `init` writes (its own text, never re-typed). Without it
+        # the real tool indexes mokata's run-state (`temp_local/crg-build/last.json` — CRG 2.4.0
+        # indexes JSON), and the copy's graph names a file no user's repo would hand it. No real
+        # `.mokata/` lacks it: only `init` creates the directory (0.0.29 wave 4).
+        with open(os.path.join(a, ".mokata", GITIGNORE_FILENAME), "w", encoding="utf-8") as fh:
+            fh.write(DEFAULT_GITIGNORE)
         with open(os.path.join(a, "m.py"), "w", encoding="utf-8") as fh:
             fh.write("def a():\n    return b()\n\n\ndef b():\n    return 1\n")
         subprocess.run(["git", "init", "-q"], cwd=a, check=True, stdin=subprocess.DEVNULL)

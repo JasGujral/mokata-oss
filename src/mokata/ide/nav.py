@@ -841,6 +841,55 @@ def symbol_index(root: str) -> List[Tuple[str, str, int, str]]:
     return list(rows or [])
 
 
+def graph_index(root: str, wait: bool) -> Dict[str, Any]:
+    """0.0.29 A `LSP-CALLS-GRAPH-FIRST-INDEX-COST` — is the code graph's index ready to answer
+    without a build inside the asker? `{"ready", "state", "job", "error"}`, `state` one of:
+
+      * `not-needed` — the layer holds no AST floor (grep), or an adopted graph answers (its own
+        build is the `index.crg` job), or the repo has no layer at all: nothing to wait for;
+      * `ready` — the floor's index is loaded;
+      * `building` — (wait=False) the build runs: the ⌘P `index.symbols` job, started or joined
+        here — ONE build per repo, shared by every asker;
+      * `failed` / `cancelled` — (wait=True) that build ended without an index: the caller says
+        so and does NOT build one of its own (a cancel is the human's; the next ask restarts it).
+
+    `wait=True` waits on that one build in `jobs.TICK_S` slices with the cancel checkpoint between
+    them: Cancel ends this wait, never the shared build. No deadline. The floor's own cancel
+    granularity is one FILE (one `ast.parse`), said in the asker's note."""
+    from ..knowledge.cancel import checkpoint, report
+    from .jobs import TICK_S, installed
+    try:
+        layer = _layer(root)
+    except MokataError:
+        return {"ready": True, "state": "not-needed", "job": None, "error": ""}
+    floor = _ast_floor(layer)
+    if floor is None or getattr(getattr(layer, "primary", None), "is_graph", False):
+        return {"ready": True, "state": "not-needed", "job": None, "error": ""}
+    if floor.index_generation is not None:
+        return {"ready": True, "state": "ready", "job": None, "error": ""}
+    sym = _per_root(root, "symbols", _Symbols)
+    sym.get(0)                                    # start the ⌘P build, or join the running one
+    with sym.lock:
+        done = sym.done
+    reg = installed()
+    job = reg.find("index.symbols", {"root": os.path.abspath(sym.root)}) if reg is not None else None
+    jid = getattr(job, "id", None)
+    if wait:
+        report(note=f"waiting for the code graph's index (job {jid or 'symbol index'}) — "
+                    "it stops between files")
+        while not done.wait(TICK_S):
+            checkpoint()
+    elif not done.is_set():
+        if floor.index_generation is not None:
+            return {"ready": True, "state": "ready", "job": None, "error": ""}
+        return {"ready": False, "state": "building", "job": jid, "error": ""}
+    if floor.index_generation is not None:
+        return {"ready": True, "state": "ready", "job": jid, "error": ""}
+    with sym.lock:
+        error = sym.error
+    return {"ready": False, "state": "failed" if error else "cancelled", "job": jid, "error": error}
+
+
 def quick_open(root: str, q: str, changed: Sequence[str] = (),
                files: Optional[Sequence[str]] = None) -> Dict[str, Any]:
     """⌘P. Sections in a FIXED order — changed files (always first), files, symbols. `@x` asks

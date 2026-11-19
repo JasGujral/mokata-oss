@@ -121,10 +121,14 @@ class ThemesSwitchLiveAndCostNothing(H.IdeFlow):
         toks = tokens()
         try:
             import pygments  # noqa: F401
+            highlighted = True
         except ImportError:
-            self.skipTest("the syntax-highlight check needs Pygments: pip install -e .[ide]")
+            # Only the syntax-highlight assertion needs Pygments (`pip install -e .[ide]`); the
+            # body, panel, diff, graph, focus ring and diagram checks below do not, and run anyway.
+            highlighted = False
         self.open_file("shop/text.py")
-        self.until("!!document.querySelector('#code .tk-kw')", "highlighted source")
+        if highlighted:
+            self.until("!!document.querySelector('#code .tk-kw')", "highlighted source")
         # the graph, drawn once (this repo's only change is a doc, so no diff names a symbol to
         # expand from: the graph is opened on the source file's symbol, as Code's Impact does)
         p.evaluate("MK.openGraph('ripple', 'slugify')")
@@ -148,10 +152,11 @@ class ThemesSwitchLiveAndCostNothing(H.IdeFlow):
             t = toks[theme]
             self.assertEqual(rgb(t["--bg"]), p.evaluate("getComputedStyle(document.body).backgroundColor"), theme)
             self.assertEqual(rgb(t["--panel"]), p.evaluate("getComputedStyle(document.querySelector('header.top')).backgroundColor"), theme)
-            # syntax highlight (Code view of an open file)
-            self.assertEqual(rgb(t["--tk-kw"]), p.evaluate(
-                "(() => { const n = document.createElement('span'); n.className = 'tk-kw'; document.body.append(n);"
-                " const c = getComputedStyle(n).color; n.remove(); return c; })()"), theme)
+            # syntax highlight (Code view of an open file): needs Pygments, so only this is skipped
+            if highlighted:
+                self.assertEqual(rgb(t["--tk-kw"]), p.evaluate(
+                    "(() => { const n = document.createElement('span'); n.className = 'tk-kw'; document.body.append(n);"
+                    " const c = getComputedStyle(n).color; n.remove(); return c; })()"), theme)
             # the diff's added line + intra-line mark (Review)
             self.assertEqual(rgb(t["--add"]), p.evaluate(
                 "(() => { const n = document.createElement('table'); n.className = 'd';"
@@ -254,92 +259,365 @@ class ThemesSwitchLiveAndCostNothing(H.IdeFlow):
                    " && document.documentElement.dataset.theme === 'hc-dark'", "the saved theme after a reload")
 
 
-# 0.0.27 PINS-UI (P6 round 2): what a keyboard user SEES on every focusable surface, read from the
-# browser's computed style (never a grep of the CSS text, which missed a ring taken away by an
-# `outline: none` in a BASE rule and a ring drawn in currentColor). For every visible element that
-# takes Tab focus: blur it, read its style, focus it as the keyboard does, read again. It passes
-# only if focusing it DRAWS something a person can see:
-#   - the browser's own two-tone ring (`outline-style: auto`, width >= 1px), or
-#   - an outline with a visible style and a width >= 1px, or
-#   - a box-shadow layer that focus added and that has EXTENT: blur or spread >= 1px, or an offset
-#     >= 1px (`inset 0 -2px 0` is a 2px underline). A `0 0 0 0px` layer draws nothing (round 2, M2), or
+PEOPLE_OLD = "id,name,score\n1,Ann,10\n2,Bob,20\n3,Cy,30\n"
+PEOPLE_NEW = "id,name,score\n1,Ann,10\n2,Bob,25\n4,Dee,7\n5,Eve,-3\n"
+SID, RUN = "e2e-focus-0001", "R-e2e-focus"
+TEST = "tests/test_text.py::test_shout"
+
+
+def build_audit(base):
+    """`build` plus a changed CSV (the table view and the table diff)."""
+    repo = build(base)
+    H._write(repo, "data/people.csv", PEOPLE_OLD)
+    H._git(repo, "add", "data/people.csv")
+    H._git(repo, "commit", "-q", "-m", "people")
+    H._write(repo, "data/people.csv", PEOPLE_NEW)
+    return repo
+
+
+def seed_session(repo):
+    """One live session bound to its run (an approved approach, a spec, one RED test run): the
+    Sessions card then has a next-step hint to put focus on."""
+    import sys
+    import time
+    if H.SRC not in sys.path:               # the seeding uses THIS checkout's writers
+        sys.path.insert(0, H.SRC)
+    from mokata import run_intent
+    from mokata import session_index as SI
+    from mokata.engine.spec import AcceptanceCriterion, Spec
+    from mokata.govern.resume import PipelineCheckpoint
+    from mokata.state import StateStore
+    from mokata.tdd_state import state_dir
+    from mokata.test_runs import record_test_run
+    store = StateStore(state_dir(repo))
+    PipelineCheckpoint(store, RUN).ensure_registered()
+    store.write("approved_approach__%s" % RUN, {"topic": "shout", "approach": {"name": "A"},
+                                                "approver": "e2e", "approved_at": "2026-10-31"})
+    store.write("emitted_spec__%s" % RUN, Spec(title="shout", criteria=[
+        AcceptanceCriterion("AC-1", "shout upper-cases")]).to_dict())
+    record_test_run(repo, RUN, passed=False, command="pytest", tests=[TEST],
+                    ac_map={"AC-1": [TEST]}, at=time.time() - 600)
+    SI.on_start(repo, SID, "startup", repo, t=time.time() - 30, proc=None)
+    run_intent.bind_registered(repo, SID, RUN)
+
+
+# 0.0.27 PINS-UI (P6 round 2) + 0.0.29 lane E (PINS-UI-FOCUS-AUDIT-EDGES): what a keyboard user SEES
+# on every focusable surface, read from the browser's computed style AND from its pixels (never a
+# grep of the CSS text, which missed a ring taken away by an `outline: none` in a BASE rule and a
+# ring drawn in currentColor). For every visible element a person can put keyboard focus on, blur
+# it, read its style, focus it as the keyboard does, read again. It passes only if focusing it DRAWS
+# something a person can see:
+#   - an outline with a visible style (the browser's own two-tone ring, `outline-style: auto`,
+#     included) and a width >= 1px, or
+#   - a box-shadow layer that focus added and that has EXTENT, where extent = blur + spread +
+#     |offset| (`inset 0 -2px 0` is a 2px underline; a `0 0 0 0px` layer draws nothing), or
 #   - a changed border >= 1px wide,
-# and that mark is painted in the theme's --focus colour, composited over what is behind the element
-# (so a transparent or half-alpha layer is graded as what reaches the screen), at 3:1 or more. A ring
-# in currentColor, a border that was already that colour, a zero-extent or transparent shadow, or
-# nothing at all, is a red naming the element. The rule is one predicate for every element found.
-FOCUS_AUDIT = r"""
+# and that mark is painted in the theme's --focus colour - the UA's `auto` ring is no exception: its
+# computed colour must EQUAL --focus, or it is a ring in whatever colour the browser picked - and,
+# composited over what is behind the element (so a transparent or half-alpha layer is graded as what
+# reaches the screen), at 3:1 or more. Then a PIXEL PROBE: the element's neighbourhood is
+# screenshotted before and after focus, and at least one pixel must differ (a computed ring that
+# paints nothing - clipped away, covered, extent zero after rounding - fails here).
+#
+# "Every focusable element" is two sets: the Tab stops (tabindex >= 0), and the roving items a Tab
+# never lands on (`[tabindex="-1"][role=option|treeitem|tab]`), which are reached the way a person
+# reaches them - focus the group's one Tab stop, then the arrow keys - never by a script `.focus()`.
+# A roving item no arrow key reaches is itself a red. The only element not graded is a column
+# resize handle, excluded by its ROLE (`separator`), not by a selector string; the audit lists what it
+# excluded so a test can see the exclusion is that and nothing wider.
+FA_LIB = r"""
 (() => {
   const vis = (e) => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden' && !e.closest('[hidden]');
   const rgba = (s) => { const m = /rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?\)/.exec(s || ''); return m ? [+m[1], +m[2], +m[3], m[4] === undefined ? 1 : +m[4]] : null; };
   const lum = (c) => { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]); };
   const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
-  const behind = (e) => { for (let n = e; n && n.nodeType === 1; n = n.parentElement) { const c = rgba(getComputedStyle(n).backgroundColor); if (c && c[3] >= 0.99) return c; } return rgba(getComputedStyle(document.body).backgroundColor); };
+  const behind = (e, outside) => { for (let n = outside ? e.parentElement : e; n && n.nodeType === 1; n = n.parentElement) { const c = rgba(getComputedStyle(n).backgroundColor); if (c && c[3] >= 0.99) return c; } return rgba(getComputedStyle(document.body).backgroundColor); };
   const probe = document.createElement('i'); probe.style.color = 'var(--focus)'; document.body.append(probe);
   const focus = getComputedStyle(probe).color; probe.remove();
-  const name = (e) => e.tagName.toLowerCase() + (e.id ? '#' + e.id : '') + (typeof e.className === 'string' && e.className.trim() ? '.' + e.className.trim().split(/\s+/).join('.') : '');
-  const snap = (e) => { const s = getComputedStyle(e); return { os: s.outlineStyle, ow: parseFloat(s.outlineWidth) || 0, oc: s.outlineColor, bs: s.boxShadow,
+  const name = (e) => e.tagName.toLowerCase() + (e.id ? '#' + e.id : '') + (typeof e.className === 'string' && e.className.trim() ? '.' + e.className.trim().split(/\s+/).join('.') : '')
+    + (e.getAttribute('role') ? '[role=' + e.getAttribute('role') + ']' : '');
+  const snap = (e) => { const s = getComputedStyle(e); return { os: s.outlineStyle, ow: parseFloat(s.outlineWidth) || 0, oc: s.outlineColor, oo: parseFloat(s.outlineOffset) || 0, bs: s.boxShadow,
     bc: [s.borderTopColor, s.borderRightColor, s.borderBottomColor, s.borderLeftColor].join('|'), bw: parseFloat(s.borderTopWidth) || 0 }; };
-  // computed box-shadow: "rgb(..) X Y BLUR SPREAD [inset], ..." -> [{c, extent}] (one per layer)
+  // computed box-shadow: "rgb(..) X Y BLUR SPREAD [inset], ..." -> [{c, key, extent}] (one per layer);
+  // extent = blur + spread + |offset| (the larger of |x| and |y|), never below zero
   const layers = (bs) => { const out = []; if (!bs || bs === 'none') return out;
     const re = /(rgba?\([^)]*\))\s+([^,]*?)(?=,\s*rgba?\(|$)/g; let m;
-    while ((m = re.exec(bs))) { const n = (m[2].match(/-?[\d.]+px/g) || []).map((v) => Math.abs(parseFloat(v)));
-      out.push({ c: m[1], key: m[0].trim(), extent: Math.max(0, ...n) }); }
+    while ((m = re.exec(bs))) { const n = (m[2].match(/-?[\d.]+px/g) || []).map(parseFloat);
+      const [ox = 0, oy = 0, blur = 0, spread = 0] = n;
+      out.push({ c: m[1], key: m[0].trim(), inset: /\binset\b/.test(m[0]), extent: Math.max(0, blur + spread + Math.max(Math.abs(ox), Math.abs(oy))) }); }
     return out; };
   // what reaches the screen: the colour composited over the background behind the element
   const over = (c, bg) => { const k = rgba(c); if (!k) return null; const a = k[3];
     return [0, 1, 2].map((i) => k[i] * a + bg[i] * (1 - a)).concat(1); };
-  const shows = (c, e) => { const k = rgba(c), bg = behind(e); return !!k && k[3] > 0 && c === focus && ratio(over(c, bg), bg) >= 3; };
-  const els = [...document.querySelectorAll('a[href],button,input,select,textarea,[tabindex]')].filter((e) => !e.disabled && e.tabIndex >= 0 && vis(e));
-  const bad = [], seen = [];
-  for (const e of els) {
-    if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
-    const a = snap(e);
-    e.focus({ focusVisible: true });
-    if (document.activeElement !== e) continue;
-    seen.push(name(e));
-    const b = snap(e);
-    const ways = [];
-    if (b.os === 'auto' && b.ow >= 1) ways.push('ua');
-    if (b.os !== 'none' && b.os !== 'hidden' && b.os !== 'auto' && b.ow >= 1) ways.push(['outline', b.oc]);
+  const shows = (c, e, outside) => { const k = rgba(c), bg = behind(e, outside); return !!k && k[3] > 0 && c === focus && ratio(over(c, bg), bg) >= 3; };
+  const blurActive = () => { if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur(); };
+  const lib = { focus, cands: [], before: [], stopEl: null, locs: [] };
+  const done = window.__faDone || (window.__faDone = new WeakSet());
+  // where to find an element again after the page re-draws it (live updates): its id, else the
+  // n-th element with its tag and classes
+  const sel = (e) => (e.id ? '#' + CSS.escape(e.id) : e.tagName.toLowerCase() + (typeof e.className === 'string' ? e.className.trim().split(/\s+/).filter(Boolean).map((c) => '.' + CSS.escape(c)).join('') : ''));
+  const loc = (e) => { const q = sel(e); return { q, n: [...document.querySelectorAll(q)].indexOf(e) }; };
+  const again = (l) => document.querySelectorAll(l.q)[l.n] || null;
+  const el = (i) => { let e = lib.cands[i]; if (!e.isConnected) { const f = again(lib.locs[i]); if (f) { lib.cands[i] = f; e = f; } } return e; };
+  lib.enumerate = (wanted) => {
+    // an open modal dialog is the whole keyboard world: nothing behind it is reachable, so nothing
+    // behind it is graded (a ring under an overlay is not a ring a person is meant to see)
+    const modals = [...document.querySelectorAll('[aria-modal=true]')].filter(vis);
+    const root = modals.length ? modals[modals.length - 1] : document;
+    const stops = [...root.querySelectorAll('a[href],button,input,select,textarea,[tabindex]')].filter((e) => !e.disabled && e.tabIndex >= 0 && vis(e));
+    const roving = [...root.querySelectorAll('[tabindex="-1"][role=option],[tabindex="-1"][role=treeitem],[tabindex="-1"][role=tab]')].filter((e) => !e.disabled && vis(e));
+    const excluded = stops.filter((e) => e.getAttribute('role') === 'separator');
+    const graded = stops.filter((e) => !excluded.includes(e));
+    lib.cands = graded.concat(roving);
+    lib.locs = lib.cands.map(loc);
+    lib.before = [];
+    return { stops: graded.length, roving: roving.length, excluded: excluded.map(name), modal: modals.length ? name(root) : '',
+             list: lib.cands.map((e, i) => ({ i, name: name(e), roving: i >= graded.length, tab: e.getAttribute('role') === 'tab',
+                                             hits: (wanted || []).filter((q) => e.matches(q)), done: done.has(e) })) };
+  };
+  lib.prep = (i) => { const e = el(i); if (!e.isConnected) return { stale: true }; blurActive(); e.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    lib.before[i] = snap(e); const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; };
+  lib.rect = (i) => { const r = el(i).getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; };
+  // the group's one Tab stop, focused as the keyboard does (never the roving item itself)
+  lib.stop = (i) => { const e = el(i);
+    const g = e.closest('[role=listbox],[role=tree],[role=tablist],[role=menu],[role=group],[role=toolbar]') || e.parentElement;
+    const s = [...g.querySelectorAll('[tabindex="0"]')].find((x) => vis(x)) || (g.tabIndex >= 0 ? g : null);
+    if (!s) return { found: false, group: name(g) };
+    if (!lib.stopEl) { lib.stopEl = s; lib.stopLoc = loc(s); }     // the FIRST stop: later calls land on a tab an arrow key activated
+    s.focus({ focusVisible: true, preventScroll: true });
+    return { found: document.activeElement === s, group: name(g), stop: name(s), axis: g.getAttribute('role') === 'tablist' || g.getAttribute('aria-orientation') === 'horizontal' ? 'x' : 'y',
+             size: g.querySelectorAll('[role=option],[role=treeitem],[role=tab]').length }; };
+  // arrow keys on a tablist ACTIVATE the tab they land on (the screen changes under the audit):
+  // go back to the tab the group started on, by a click, so the next item is graded on the same screen
+  lib.restore = () => { let s = lib.stopEl; const l = lib.stopLoc; lib.stopEl = null; if (s && !s.isConnected && l) s = again(l); if (s && s.isConnected) s.click(); return !!s; };
+  lib.active = (i) => document.activeElement === el(i);
+  // what is painted at the element's centre (a ring that paints nothing is usually under something)
+  lib.cover = (i) => { const e = el(i), r = e.getBoundingClientRect(), t = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    const anc = []; for (let n = e.parentElement; n && anc.length < 4; n = n.parentElement) { const o = getComputedStyle(n).overflow; anc.push(name(n) + (o !== 'visible' ? '{overflow:' + o + '}' : '')); }
+    return 'box ' + [r.x, r.y, r.width, r.height].map(Math.round).join(',') + '; at its centre: ' + (t ? (t === e || e.contains(t) ? 'itself' : name(t)) : 'nothing') + '; inside ' + anc.join(' < '); };
+  lib.focusIt = (i) => { const e = el(i); e.focus({ focusVisible: true, preventScroll: true }); return { focused: document.activeElement === e }; };
+  lib.verdict = (i) => { const e = el(i), a = lib.before[i], b = snap(e), ways = [];
+    if (b.os !== 'none' && b.os !== 'hidden' && b.ow >= 1) ways.push(['outline:' + b.os, b.oc, b.oo >= 0]);
     const was = new Set(layers(a.bs).map((l) => l.key));
-    for (const l of layers(b.bs)) if (!was.has(l.key) && l.extent >= 1) ways.push(['shadow', l.c]);
-    if (b.bc !== a.bc && b.bw >= 1) for (const c of b.bc.split('|')) ways.push(['border', c]);
-    const ok = ways.some((w) => w === 'ua' || shows(w[1], e));
-    if (!ok) bad.push(name(e) + ' ' + JSON.stringify(ways) + ' on ' + JSON.stringify(behind(e)));
-  }
-  if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
-  return { n: els.length, focus, bad, seen };
+    for (const l of layers(b.bs)) if (!was.has(l.key) && l.extent >= 1) ways.push(['shadow', l.c, !l.inset]);
+    if (b.bc !== a.bc && b.bw >= 1) for (const c of b.bc.split('|')) ways.push(['border', c, false]);
+    const ok = ways.some((w) => shows(w[1], e, w[2]));
+    return { ok, why: name(e) + ' ' + JSON.stringify(ways) + ' on ' + JSON.stringify(behind(e, true)) + '/' + JSON.stringify(behind(e, false)) + ' (outside/inside; --focus is ' + focus + ')' + (e.matches(':focus-visible') ? '' : ' [NOT :focus-visible]') }; };
+  lib.finish = () => { blurActive(); };
+  // 0.0.29 E2: an element is DONE once its ring was judged (green or red), in any pass of one
+  // screen-and-theme: a retry pass grades only what is not done (stale, unreached, not focusable
+  // then, or new), so a deterministic red is never paid for three times. The set holds the NODE, so a
+  // re-drawn element is a new node and is graded again.
+  lib.mark = (i) => { done.add(el(i)); };
+  // the graded count is what is graded AND still on the page now (never a node graded and then
+  // removed, never one node counted twice)
+  lib.graded = () => lib.cands.filter((e) => e.isConnected && done.has(e)).length;
+  // the probe's "before": focus taken away, nothing else touched (never prep: lib.before[i] is the
+  // verdict's unfocused style and is read before this)
+  lib.blur = () => { blurActive(); };
+  window.__fa = lib;
+  return focus;
 })()
 """
 
+#: the arrow keys that walk a roving group, by its axis; the other axis is tried when the first fails
+ARROWS = {"y": ("ArrowDown", "ArrowRight"), "x": ("ArrowRight", "ArrowDown")}
+#: the neighbourhood of an element the pixel probe compares, in CSS px around its box
+PROBE_PAD = 6
+VIEW_W, VIEW_H = 1400, 900
 
+
+#: 0.0.29 E: the stronger audit (§3d) is RED on the real tree in Chromium and Firefox — ~51 controls
+#: draw the browser's own `outline: auto` ring, not `--focus`; the editor tabs (role=tab, roving
+#: tabindex) have no arrow-key handler; `button.ref-head` sits in `overflow:hidden` and its outset ring
+#: is clipped. The fix is product CSS/JS outside lane E's files, so the failing screens are pinned
+#: `expectedFailure` (filed `IDE-FOCUS-RING-UA-AUTO`, doc 84): when the product is fixed they pass,
+#: unittest counts the unexpected success as a failure, and the marker must come off.
 class EveryFocusableSurfaceShowsAFocusRing(H.IdeFlow):
-    FIXTURE = staticmethod(build)
+    FIXTURE = staticmethod(build_audit)
 
-    def audit(self, where, must_see=()):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        if cls.no_browser:
+            return
+        seed_session(cls.repo)
+
+    def clip(self, r):
+        """`r` (a CSS-px box in the viewport) padded by PROBE_PAD and clamped to the viewport, or None
+        when none of it is on screen."""
+        x0, y0 = max(0, r["x"] - PROBE_PAD), max(0, r["y"] - PROBE_PAD)
+        x1, y1 = min(VIEW_W, r["x"] + r["w"] + PROBE_PAD), min(VIEW_H, r["y"] + r["h"] + PROBE_PAD)
+        if x1 - x0 < 1 or y1 - y0 < 1:
+            return None
+        return {"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0}
+
+    def shot(self, r):
+        c = self.clip(r)
+        if c is None:
+            return None
+        # two animation frames first: the style change of a focus or a blur is PAINTED by the next
+        # frame, and a shot taken before it reads as "nothing changed" (an event, not a clock)
+        self.page.evaluate("() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))")
+        return self.page.screenshot(clip=c, animations="disabled", caret="hide")
+
+    def reach_by_arrows(self, i):
+        """Put keyboard focus on roving item `i` the way a person does. Returns "" or why not."""
         p = self.page
-        self.press("Shift")                      # keyboard modality, as a Tab user has it
-        seen = set()
+        st = p.evaluate("(i) => window.__fa.stop(i)", i)
+        if not st["found"]:
+            return "no Tab stop in its group (%s) to start from" % st["group"]
+        for key in ARROWS[st["axis"]]:
+            if p.evaluate("(i) => window.__fa.stop(i).found && window.__fa.active(i)", i):
+                return ""
+            for _ in range(st["size"] + 1):
+                self.press(key)
+                if p.evaluate("(i) => window.__fa.active(i)", i):
+                    return ""
+            p.evaluate("(i) => window.__fa.stop(i)", i)       # back to the stop for the other axis
+        return "no arrow key reaches it from %s in its group %s" % (st["stop"], st["group"])
+
+    def grade_current(self, where, theme, wanted=()):
+        """Audit every focusable element on the current screen, in the current theme; the reds. The
+        page re-draws parts of itself on live events: an item that was drawn again with no id to find
+        it by, or a group still filling in when it was reached, is graded again on a fresh pass (up to
+        three), and what is still missing or unreachable on the last pass is a red.
+
+        0.0.29 E2: a retry pass grades only what no earlier pass judged (`lib.mark`: stale,
+        unreached, not focusable then, or a node that is new or re-drawn). Re-grading the whole
+        screen paid three times for every deterministic red - the editor tabs no arrow key reaches
+        (IDE-FOCUS-RING-UA-AUTO) are unreached on every pass - and pushed both ide-e2e jobs past
+        their CI ceilings (mirror runs 43869782006, 43883056679, 43896526038)."""
+        p = self.page
+        p.evaluate("window.__faDone = new WeakSet()")          # one screen in one theme
+        judged, seen, probed, hits = [], [], 0, set()
+        for attempt in range(3):
+            r = self.grade_pass(p, wanted)
+            judged.extend(r["bad"])                             # reds of items judged in THIS pass
+            probed += r["probed"]
+            seen.extend(r["seen"])
+            hits.update(r["hits"])
+            if not r["stale"] and not r["unreached"]:
+                break
+        # what is still unreached / stale is a red from the LAST pass only (an earlier pass's
+        # "not reachable" for an item a later pass reached is not a red)
+        bad = judged + r["unreached_bad"]
+        bad.extend("%s: left the page before it could be graded (re-drawn with no id), three passes running" % n
+                   for n in r["stale"])
+        return {"bad": bad, "graded": r["graded"], "stops": r["stops"], "roving": r["roving"],
+                "excluded": r["excluded"], "probed": probed, "stale": r["stale"],
+                "unreached": r["unreached"], "hits": hits, "modal": r["modal"], "seen": seen}
+
+    def grade_pass(self, p, wanted):
+        """One pass over the screen: every element no earlier pass of this screen-and-theme judged.
+        The computed-style verdict comes first; only an item whose verdict is green pays for the
+        pixel probe (a red verdict's shots were thrown away)."""
+        p.evaluate(FA_LIB)
+        info = p.evaluate("(w) => window.__fa.enumerate(w)", list(wanted))
+        bad, seen, probed, stale, unreached, unreached_bad, hits = [], [], 0, [], [], [], set()
+        for item in info["list"]:
+            if item["done"]:
+                continue                          # judged by an earlier pass: never paid for twice
+            i, label = item["i"], item["name"]
+            r0 = p.evaluate("(i) => window.__fa.prep(i)", i)
+            if r0.get("stale"):
+                stale.append(label)
+                continue
+            try:
+                if item["roving"]:
+                    why = self.reach_by_arrows(i)
+                    if why:
+                        unreached.append(label)
+                        unreached_bad.append("%s: roving item not reachable by keyboard: %s" % (label, why))
+                        continue
+                elif not p.evaluate("(i) => window.__fa.focusIt(i).focused", i):
+                    continue                      # not focusable right now (covered, inert): not a Tab stop
+                v = p.evaluate("(i) => window.__fa.verdict(i)", i)
+                p.evaluate("(i) => window.__fa.mark(i)", i)
+                seen.append(label)
+                hits.update(item["hits"])
+                if not v["ok"]:
+                    bad.append(v["why"])
+                    continue
+                # the PIXEL PROBE, for a green verdict: focus away (nothing else touched), shoot,
+                # focus again the same way, shoot. A tab's arrow keys already activated it on the
+                # first reach, so both shots are of the same screen and differ only by the ring.
+                p.evaluate("window.__fa.blur()")
+                before = self.shot(p.evaluate("(i) => window.__fa.rect(i)", i))
+                if before is None:
+                    continue                      # nothing of it is on screen: no neighbourhood to compare
+                if item["roving"]:
+                    why = self.reach_by_arrows(i)
+                    if why:
+                        bad.append("%s: graded green, then not reachable again for the pixel probe: %s" % (label, why))
+                        continue
+                elif not p.evaluate("(i) => window.__fa.focusIt(i).focused", i):
+                    bad.append("%s: graded green, then could not be focused again for the pixel probe" % label)
+                    continue
+                after = self.shot(p.evaluate("(i) => window.__fa.rect(i)", i))
+                if after is None:
+                    bad.append("%s: graded green, then left the screen before the pixel probe's second shot" % label)
+                    continue
+                probed += 1
+                if before == after:
+                    bad.append("%s: the computed ring paints no pixel (the neighbourhood is identical before and after focus): %s"
+                               % (label, p.evaluate("(i) => window.__fa.cover(i)", i)))
+            finally:
+                if item["tab"]:
+                    p.evaluate("window.__fa.restore()")
+        graded = p.evaluate("window.__fa.graded()")
+        p.evaluate("window.__fa.finish()")
+        return {"bad": bad, "seen": seen, "graded": graded, "stops": info["stops"], "roving": info["roving"],
+                "excluded": info["excluded"], "probed": probed, "stale": stale, "unreached": unreached,
+                "unreached_bad": unreached_bad, "hits": hits, "modal": info["modal"]}
+
+    def audit(self, where, must_see=(), roving=0, minimum=6):
+        """Grade every focusable element of the screen in all four themes. `must_see` are CSS
+        selectors: each must match at least one element that was reached and graded (so a screen
+        that failed to draw cannot pass by auditing something else)."""
+        p = self.page
+        # keyboard modality, as a Tab user has it: a real Tab and Shift+Tab (a lone Shift is not
+        # keyboard use to Firefox, and after the click that opened a dialog a script focus() would
+        # not match :focus-visible there, so the audit would grade a ring the person never gets)
+        p.evaluate("document.activeElement && document.activeElement.blur()")
+        self.press("Tab")
+        self.press("Shift+Tab")
+        seen, roving_seen, excluded, reds, hit, probed, fewest = set(), 0, set(), [], set(), 0, None
         for theme in ("dark", "light", "hc-dark", "hc-light"):
             p.evaluate("MK.theme.set(%r)" % theme)
             self.until("document.documentElement.dataset.theme === %r" % theme, theme)
-            r = p.evaluate(FOCUS_AUDIT)
-            self.assertGreater(len(r["seen"]), 5, "%s: the audit found the focusable surfaces" % where)
-            self.assertEqual([], r["bad"], "%s in %s: focus draws no visible ring on these" % (where, theme))
+            r = self.grade_current(where, theme, must_see)
+            probed += r["probed"]
+            fewest = r["graded"] if fewest is None else min(fewest, r["graded"])
+            reds.extend("%s in %s: %s" % (where, theme, b) for b in r["bad"])
             seen.update(r["seen"])
+            hit.update(r["hits"])
+            roving_seen = max(roving_seen, r["roving"])
+            excluded.update(r["excluded"])
+        self.maxDiff = None
+        self.assertEqual([], reds, "%s: focus draws no visible ring on these" % where)
+        # a pass that graded nothing proves nothing: these guards come AFTER the reds (a screen whose
+        # every element is red never reaches the pixel probe, and that is a red, not a vacuous pass)
+        self.assertGreaterEqual(fewest, minimum, "%s: the audit found the focusable surfaces" % where)
+        self.assertGreater(probed, 0, "%s: the pixel probe ran" % where)
         for want in must_see:
-            self.assertTrue(any(want in s for s in seen), "%s: %s was audited (%s)" % (where, want, sorted(seen)))
+            self.assertIn(want, hit, "%s: nothing matching %s was graded (graded: %s)" % (where, want, sorted(seen)))
+        self.assertGreaterEqual(roving_seen, roving, "%s: the roving items were found and graded" % where)
+        for e in excluded:
+            self.assertIn("[role=separator]", e, "%s: only a resize handle (role=separator) is excluded, not %s" % (where, e))
 
+    @unittest.expectedFailure      # IDE-FOCUS-RING-UA-AUTO (doc 84): a product finding
     def test_1_review(self):
         self.go("review")
         self.page.wait_for_selector("#nav-list li", state="attached")
-        self.audit("Review", ("#tab-review", "#subtab-review"))
+        self.audit("Review", ("#tab-review", "#subtab-review", "#nav-list button"), roving=3)
 
+    @unittest.expectedFailure      # IDE-FOCUS-RING-UA-AUTO (doc 84): a product finding
     def test_2_sessions(self):
         self.go("activity")
         self.audit("Sessions", ("#tab-sessions", "#s1-q"))
 
+    @unittest.expectedFailure      # IDE-FOCUS-RING-UA-AUTO (doc 84): a product finding
     def test_3_code_with_the_find_bar_and_the_terminal(self):
         p = self.page
         self.open_file("shop/text.py")
@@ -349,16 +627,66 @@ class EveryFocusableSurfaceShowsAFocusRing(H.IdeFlow):
         p.evaluate("document.getElementById('term-drawer').hidden = false")
         self.press("Control+F")
         p.wait_for_selector("#find-bar:not([hidden])")
-        self.audit("Code", ("#find-input", "#term-screen", "tree-row"))
+        self.audit("Code", ("#find-input", "#term-screen", ".tree-row"))
 
     def test_4_the_palette(self):
         p = self.page
         self.press("Control+K")
         p.wait_for_selector("#qo:not([hidden])")
-        self.audit("the palette", ("#qo-input",))
-        p.focus("#qo-input")                     # the audit blurred it; Escape is the input's key
-        self.press("Escape")
-        p.wait_for_selector("#qo", state="hidden")
+        try:
+            self.audit("the palette", ("#qo-input",), minimum=1)   # a modal: its one Tab stop is the whole keyboard world
+        finally:                                 # a red here must not leave the palette over the next screen
+            p.focus("#qo-input")                 # the audit blurred it; Escape is the input's key
+            self.press("Escape")
+            p.wait_for_selector("#qo", state="hidden")
+
+    @unittest.expectedFailure      # IDE-FOCUS-RING-UA-AUTO (doc 84): a product finding
+    def test_5_the_table_view(self):
+        self.open_file("data/people.csv")
+        self.page.wait_for_selector("#tb-code .tb-row .tb-td")
+        self.audit("the table view", (".tb-sort",))
+
+    @unittest.expectedFailure      # IDE-FOCUS-RING-UA-AUTO (doc 84): a product finding
+    def test_6_the_table_diff(self):
+        p = self.page
+        self.go("review")
+        p.wait_for_selector("#nav-list li", state="attached")
+        p.locator("#nav-list li", has_text="people.csv").first.click()
+        p.wait_for_selector("#diff .tb-dbtn:not([disabled])")
+        p.click("#diff .tb-dbtn")
+        p.wait_for_selector("#diff .tb-dsum")
+        p.select_option("#diff .tb-key", "id")
+        self.until("document.querySelector('#diff .tb-dsum') && document.querySelector('#diff .tb-dsum').textContent.includes('+2 added')",
+                   "the keyed table diff")
+        self.audit("the table diff", (".tb-key", ".tb-dbtn"))
+
+    @unittest.expectedFailure      # IDE-FOCUS-RING-UA-AUTO (doc 84): a product finding
+    def test_7_the_hint_card(self):
+        p = self.page
+        p.evaluate("document.activeElement && document.activeElement.blur()")
+        self.go("activity")
+        p.locator("#s1-rows button.s1-row", has_text=SID[:8]).first.click()
+        self.text_until("#s1-card", "Next:", "the card's next step")
+        self.until("MK.activityPanel.hintSettled()", "the hints to answer")
+        self.audit("the hint card", ("#s1-card button",))
+
+    @unittest.expectedFailure      # IDE-FOCUS-RING-UA-AUTO (doc 84): a product finding
+    def test_8_the_approval_card(self):
+        from mokata import approval
+        p = self.page
+        pr = approval.propose(self.repo, tool="remember", args={"n": 1}, run_id="R-focus-1",
+                              target="memory:focus1", summary="remember focus 1", preview="a line")
+        p.evaluate("MK.reloadApprovals()")
+        p.wait_for_selector("#waiting:not([hidden])")
+        if p.get_attribute("#wait-toggle", "aria-expanded") != "true":
+            p.click("#wait-toggle")
+        p.wait_for_selector("#approvals-bar .ap-card[data-pid='%s']" % pr.proposal_id)
+        self.audit("the approval card", ("#approvals-bar .ap-card button", "#wait-toggle"))
+
+    @unittest.expectedFailure      # IDE-FOCUS-RING-UA-AUTO (doc 84): a product finding
+    def test_9_welcome(self):
+        self.go("welcome")
+        self.audit("welcome", ("#hp-welcome button, #hp-welcome a, #hp-welcome [tabindex]",))
 
 
 def build_unknown(base):

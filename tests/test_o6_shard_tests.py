@@ -268,6 +268,76 @@ class AbsorbRebasesOnARealCiLeg(unittest.TestCase):
         with open(self.rec, encoding="utf-8") as fh:
             self.assertEqual(before, fh.read())
 
+    # ---- 0.0.29 D3 `W5-CI-CEILING-SCALE-FACTORS-TYPED` ----------------------------------------
+
+    def test_a_full_absorb_marks_its_own_os_measured(self):
+        self._shard("windows-latest-present", 1, 1, {"test_a": 3.0, "test_b": 1.0})
+        code, _o, err = self._absorb()
+        self.assertEqual(ST.GREEN, code, err)
+        measured = ST.load_record(self.rec)["ci_scale"]["measured"]
+        self.assertEqual(["Windows"], sorted(measured))
+        self.assertTrue(measured["Windows"].startswith("windows-latest-present "))
+
+    def test_scale_only_learns_one_factor_from_the_ratio_and_leaves_modules_alone(self):
+        self._shard("ubuntu-latest-present", 1, 2, {"test_a": 1.5})
+        self._shard("ubuntu-latest-present", 2, 2, {"test_b": 0.5, "test_new": 9.0})
+        with open(self.rec, encoding="utf-8") as fh:
+            before = json.load(fh)
+        code, out, err = _quiet(ST.main, ["absorb", self.clock, "--group", "ubuntu-latest-present",
+                                          "--os", "Linux", "--scale-only", "--out", self.rec])
+        self.assertEqual(ST.GREEN, code, err)
+        rec = ST.load_record(self.rec)
+        # (1.5 + 0.5) / (1.0 + 1.0): the modules BOTH name; `test_new` is not in the record.
+        self.assertEqual(1.0, rec["ci_scale"]["per_os"]["Linux"])
+        self.assertEqual(4.0, rec["ci_scale"]["per_os"]["Windows"], "another OS's factor moved")
+        self.assertEqual(before["modules"], rec["modules"])
+        self.assertEqual(before["fixed"], rec["fixed"])
+        self.assertEqual(["Linux"], sorted(rec["ci_scale"]["measured"]))
+        self.assertIn("ubuntu-latest-present", rec["ci_scale"]["measured"]["Linux"])
+        self.assertIn("1.000", out)
+
+    def test_scale_only_with_no_module_in_common_is_refused_and_the_record_untouched(self):
+        self._shard("ubuntu-latest-present", 1, 1, {"test_zzz": 1.0})
+        with open(self.rec, encoding="utf-8") as fh:
+            before = fh.read()
+        code, _o, err = _quiet(ST.main, ["absorb", self.clock, "--group", "ubuntu-latest-present",
+                                         "--os", "Linux", "--scale-only", "--out", self.rec])
+        self.assertEqual(ST.CANNOT, code)
+        self.assertIn("names no module the record has", err)
+        with open(self.rec, encoding="utf-8") as fh:
+            self.assertEqual(before, fh.read())
+
+
+def typed_factors(scale):
+    """The `ci_scale.per_os` keys with no `measured` run behind them. Pure (§7i: graded on a
+    supplied record, so a weakened check cannot hide behind a healthy shipped one)."""
+    measured = scale.get("measured") or {}
+    return sorted(o for o in scale["per_os"] if not measured.get(o))
+
+
+class EveryScaleFactorIsMeasured(unittest.TestCase):
+    """The shipped record: every `ci_scale.per_os` factor names the CI run it was absorbed from. A
+    typed factor ("half of Windows") is a red, not a quiet default — and it feeds every leg's
+    `timeout-minutes`. FIRING CONTROL: delete one `measured` entry from the record."""
+
+    def test_every_per_os_key_names_the_run_it_came_from(self):
+        scale = ST.load_record(ST.DURATIONS)["ci_scale"]
+        measured = scale.get("measured") or {}
+        typed = typed_factors(scale)
+        self.assertEqual([], typed, "ci_scale.per_os factors with no measured run (typed): %s — "
+                         "absorb a leg: shard_tests.py absorb DIR --group <leg> --os <OS> "
+                         "--scale-only" % typed)
+        self.assertEqual(sorted(scale["per_os"]), sorted(measured),
+                         "a measured entry for an OS the record does not cost")
+
+    def test_the_check_convicts_a_planted_typed_factor(self):
+        """FIRING CONTROL on a supplied record (local mutant D3-b survived on the shipped one)."""
+        self.assertEqual(["Windows"], typed_factors(
+            {"per_os": {"Linux": 0.4, "Windows": 1.0}, "measured": {"Linux": "run 1"}}))
+        self.assertEqual(["Linux"], typed_factors(
+            {"per_os": {"Linux": 0.4}, "measured": {"Linux": ""}}))
+        self.assertEqual([], typed_factors({"per_os": {"Linux": 0.4}, "measured": {"Linux": "r"}}))
+
 
 def _ci():
     return safe_load(_read(CI_YML), "grade the sharded test job")

@@ -297,13 +297,17 @@ class TestRecordIntegrity(unittest.TestCase):
             cmd = os.path.join(d, ".claude", "commands", "brainstorm.md")
             with open(cmd, encoding="utf-8") as fh:
                 got = fh.read()
-            expected = expand_grounding((tdir / "brainstorm.md").read_text(encoding="utf-8"))
+            # 0.0.29 C1: the generator now ends in `_localized` — `/mokata:<name>` becomes the
+            # command THIS install writes (`/brainstorm`), so the user is never told the plugin form.
+            from mokata.harness_setup import _localized
+            expected = _localized("claude", expand_grounding(
+                (tdir / "brainstorm.md").read_text(encoding="utf-8")))
             self.assertEqual(got, expected, "command file byte-identical to the expanded template")
 
             skill = os.path.join(d, ".claude", "skills", "brainstorm", "SKILL.md")
             with open(skill, encoding="utf-8") as fh:
                 got_skill = fh.read()
-            self.assertEqual(got_skill, skill_markdown("brainstorm", tdir),
+            self.assertEqual(got_skill, _localized("claude", skill_markdown("brainstorm", tdir)),
                              "SKILL.md byte-identical to the rendered skill")
 
 

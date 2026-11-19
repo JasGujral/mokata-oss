@@ -592,6 +592,26 @@ class TheRoutes(Repo):
         self.assertEqual(404, g(path="img/none.png", rev="HEAD").status_code)
         self.assertEqual(404, g(path="img/a.png", rev="no-such-branch").status_code)
 
+    def test_a_newline_or_return_in_a_path_is_refused_by_both_routes_though_the_file_exists(self):
+        """`git cat-file --batch-check` reads `rev:path` as ONE line of stdin: a newline in the path
+        would end that line early and start a second request. The names exist on disk and in the
+        revision (so only the name rule can be what refuses them): both routes say 400, never a
+        read, and the answer is JSON."""
+        names = ("img/a\nb.png", "img/a\rb.png")
+        for name in names:
+            try:
+                write(self.d, name, png(2, 2))
+            except (OSError, ValueError):
+                self.skipTest("this file system cannot hold a newline or return in a name")
+        self.commit()
+        for name in names:
+            for route, extra in (("/api/image/info", {"base": "HEAD"}), ("/api/image/raw", {"rev": "HEAD"}),
+                                 ("/api/image/raw", {})):
+                with self.subTest(name=name, route=route, extra=extra):
+                    r = self.c.get(route, params=dict({"path": name}, **extra))
+                    self.assertEqual(400, r.status_code, r.text[:200])
+                    self.assertEqual("PathRefused", r.json()["error"])
+
     def test_a_too_large_image_is_413_with_the_label_and_is_never_streamed(self):
         write(self.d, "wall.png", png(20000, 20000, fill=False))
         r = self.c.get("/api/image/raw", params={"path": "wall.png"})
